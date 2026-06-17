@@ -104,23 +104,26 @@ test "cross-process: producer writes, consumer reads via fork" {
     const allocator = std.heap.page_allocator;
 
     // Fork — child writes, parent reads
-    const pid = try std.posix.fork();
+    const pid = c.fork();
     if (pid == 0) {
         // Child: producer
-        const chan = try Channel.open(allocator, topic);
+        var chan = try Channel.open(allocator, topic);
         defer chan.close();
         write(&chan, TestMsg, &TestMsg{ .x = 42, .y = 99 });
-        std.posix.exit(0);
+        c.exit(0);
     }
 
     // Parent: consumer (wait a tiny bit for child to write)
-    std.time.sleep(100 * std.time.ns_per_ms);
-    const chan = try Channel.open(allocator, topic);
+    {
+        var ts = std.c.timespec{ .sec = 0, .nsec = 100_000_000 };
+        _ = c.nanosleep(&ts, null);
+    }
+    var chan = try Channel.open(allocator, topic);
     defer chan.close();
     const msg = read(&chan, TestMsg);
     try std.testing.expect(msg.x == 42);
     try std.testing.expect(msg.y == 99);
 
     // Wait for child, clean up
-    _ = std.posix.waitpid(pid, 0);
+    _ = c.waitpid(pid, null, 0);
 }

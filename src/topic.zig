@@ -16,7 +16,7 @@ pub const Topic = struct {
     /// offset has a pointer for the next free slot for messages in the channel buffer
     offset: u32 = 0,
 
-    pub fn init(comptime name: []const u8, comptime msg_size: u32, comptime capacity: u32) Topic {
+    pub fn init(name: []const u8, msg_size: u32, capacity: u32) Topic {
         return Topic{ .name = name, .msg_size = msg_size, .capacity = capacity };
     }
 
