@@ -1,7 +1,8 @@
 const std = @import("std");
 
-const Topic = struct {
+pub const Topic = struct {
     /// name is a string identifier for the topic
+    /// it would be used as a key for the shared memory object
     name: []const u8,
 
     /// msg_size is the size of individual messages passing through the channel
@@ -30,6 +31,11 @@ const Topic = struct {
     pub fn commit(this: *@This()) void {
         this.offset = (this.offset + 1) % this.capacity;
     }
+
+    pub fn size(this: @This()) u32 {
+        return this.capacity * this.msg_size;
+    }
+
 };
 
 test "init topic" {
