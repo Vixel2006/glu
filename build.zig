@@ -9,7 +9,6 @@ pub fn build(b: *std.Build) void {
     const mod = b.addModule("glu", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
-        .link_libc = true,
     });
     mod.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{cuda_path}) });
 
