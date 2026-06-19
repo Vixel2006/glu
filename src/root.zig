@@ -17,4 +17,6 @@ comptime {
     _ = @import("api/publisher.zig");
     _ = @import("api/subscriber.zig");
     _ = @import("api/node.zig");
+    _ = @import("launch/toml.zig");
+    _ = @import("launch/launcher.zig");
 }

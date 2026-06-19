@@ -20,22 +20,21 @@ pub const Topic = struct {
         return Topic{ .name = name, .msg_size = msg_size, .capacity = capacity };
     }
 
-    pub fn curr(this: @This()) u32 {
-        return this.offset * this.msg_size;
+    pub fn curr(self: Topic) u32 {
+        return self.offset * self.msg_size;
     }
 
-    pub fn next(this: @This()) u32 {
-        return ((this.offset + 1) % this.capacity) * this.msg_size;
+    pub fn next(self: Topic) u32 {
+        return ((self.offset + 1) % self.capacity) * self.msg_size;
     }
 
-    pub fn commit(this: *@This()) void {
-        this.offset = (this.offset + 1) % this.capacity;
+    pub fn commit(self: *Topic) void {
+        self.offset = (self.offset + 1) % self.capacity;
     }
 
-    pub fn size(this: @This()) u32 {
-        return this.capacity * this.msg_size;
+    pub fn size(self: Topic) u32 {
+        return self.capacity * self.msg_size;
     }
-
 };
 
 test "init topic" {

@@ -12,12 +12,12 @@ pub const Publisher = struct {
         return .{ .channel = try Channel.open(allocator, topic) };
     }
 
-    pub fn deinit(this: *Publisher) void {
-        this.channel.close();
+    pub fn deinit(self: *Publisher) void {
+        self.channel.close();
     }
 
-    pub fn publish(this: *Publisher, comptime T: type, msg: *const T) void {
-        write(&this.channel, T, msg);
+    pub fn publish(self: *Publisher, comptime T: type, msg: *const T) void {
+        write(&self.channel, T, msg);
     }
 };
 

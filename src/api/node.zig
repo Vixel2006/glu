@@ -11,18 +11,18 @@ pub const Node = struct {
         return .{ .allocator = allocator, .name = name };
     }
 
-    pub fn deinit(this: *Node) void {
-        _ = this;
+    pub fn deinit(self: *Node) void {
+        _ = self;
     }
 
-    pub fn createPublisher(this: *Node, comptime T: type, topic_name: []const u8, capacity: u32) !Publisher {
+    pub fn createPublisher(self: *Node, comptime T: type, topic_name: []const u8, capacity: u32) !Publisher {
         const topic = Topic.init(topic_name, @sizeOf(T), capacity);
-        return Publisher.init(this.allocator, topic);
+        return Publisher.init(self.allocator, topic);
     }
 
-    pub fn createSubscriber(this: *Node, comptime T: type, topic_name: []const u8) !Subscriber {
+    pub fn createSubscriber(self: *Node, comptime T: type, topic_name: []const u8) !Subscriber {
         const topic = Topic.init(topic_name, @sizeOf(T), 0);
-        return Subscriber.init(this.allocator, topic);
+        return Subscriber.init(self.allocator, topic);
     }
 };
 
