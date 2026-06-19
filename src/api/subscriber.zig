@@ -12,13 +12,13 @@ pub const Subscriber = struct {
         return .{ .channel = try Channel.open(allocator, topic) };
     }
 
-    pub fn deinit(this: *Subscriber) void {
-        this.channel.close();
+    pub fn deinit(self: *Subscriber) void {
+        self.channel.close();
     }
 
-    pub fn receive(this: *Subscriber, comptime T: type) ?*T {
-        if (this.channel.header.read < this.channel.header.write) {
-            return read(&this.channel, T);
+    pub fn receive(self: *Subscriber, comptime T: type) ?*T {
+        if (self.channel.header.read < self.channel.header.write) {
+            return read(&self.channel, T);
         }
         return null;
     }

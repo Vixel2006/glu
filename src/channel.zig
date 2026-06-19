@@ -71,12 +71,12 @@ pub const Channel = struct {
         return Channel{ .topic = topic, .fd = fd, .ptr = ptr, .header = hdr };
     }
 
-    pub fn close(this: @This()) void {
-        _ = os.munmap(this.ptr, this.topic.size() + @sizeOf(Header));
-        _ = os.close(this.fd);
+    pub fn close(self: *Channel) void {
+        _ = os.munmap(self.ptr, self.topic.size() + @sizeOf(Header));
+        _ = os.close(self.fd);
 
         var buf: [256]u8 = undefined;
-        const name = std.fmt.bufPrintZ(&buf, "{s}", .{this.topic.name}) catch return;
+        const name = std.fmt.bufPrintZ(&buf, "{s}", .{self.topic.name}) catch return;
         _ = c.shm_unlink(name.ptr);
     }
 };

@@ -4,22 +4,20 @@ pub const NodeConfig = struct {
     name: []const u8,
     path: []const u8,
     extra_cfg: []const []const u8 = &.{},
-};
 
-fn freeNodes(nodes: []const NodeConfig, allocator: std.mem.Allocator) void {
-    for (nodes) |n| {
-        if (n.name.len > 0) allocator.free(n.name);
-        if (n.path.len > 0) allocator.free(n.path);
-        for (n.extra_cfg) |arg| allocator.free(arg);
-        if (n.extra_cfg.len > 0) allocator.free(n.extra_cfg);
+    fn free(self: NodeConfig, allocator: std.mem.Allocator) void {
+        if (self.name.len > 0) allocator.free(self.name);
+        if (self.path.len > 0) allocator.free(self.path);
+        for (self.extra_cfg) |arg| allocator.free(arg);
+        if (self.extra_cfg.len > 0) allocator.free(self.extra_cfg);
     }
-}
+};
 
 pub const LaunchConfig = struct {
     nodes: []const NodeConfig,
 
     pub fn deinit(self: *LaunchConfig, allocator: std.mem.Allocator) void {
-        freeNodes(self.nodes, allocator);
+        for (self.nodes) |n| n.free(allocator);
         allocator.free(self.nodes);
         self.* = undefined;
     }
@@ -99,10 +97,8 @@ const Parser = struct {
         }
         if (self.done()) return null;
         const name = std.mem.trim(u8, self.buf[name_start..self.pos], " \t");
-        self.pos += 1;
-        if (is_array) {
-            if (!self.expect(']')) return null;
-        }
+        if (!self.expect(']')) return null;
+        if (is_array and !self.expect(']')) return null;
         return .{ .is_array = is_array, .name = name };
     }
 
@@ -130,7 +126,7 @@ pub fn parse(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) !L
     var p = Parser.init(content);
     var nodes: std.ArrayListAligned(NodeConfig, null) = .empty;
     errdefer {
-        freeNodes(nodes.items, allocator);
+        for (nodes.items) |n| n.free(allocator);
         nodes.deinit(allocator);
     }
 
