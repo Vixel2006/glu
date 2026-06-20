@@ -43,7 +43,7 @@ fn cmdLaunch(init: std.process.Init, args: *std.process.Args.Iterator) !void {
 
 fn cmdCodegen(init: std.process.Init, args: *std.process.Args.Iterator) !void {
     const file = parseFlag(args, "-f") orelse {
-        std.debug.print("usage: glu codegen -f <file.glu>\n", .{});
+        std.debug.print("usage: glu codegen -f <file.glu> -o </path/to/gen>\n", .{});
         return error.MissingArgument;
     };
 
@@ -63,9 +63,14 @@ fn cmdCodegen(init: std.process.Init, args: *std.process.Args.Iterator) !void {
         init.gpa.free(msgs);
     }
 
+    const out_dir = parseFlag(args, "-o") orelse {
+        std.debug.print("usage: glu codegen -f <file.glu> </path/to/gen\n", .{});
+        return error.MissingArgument;
+    };
+
     var buf: [4096]u8 = undefined;
     var out = std.Io.File.stdout().writer(init.io, &buf);
-    try generate(init.gpa, init, msgs);
+    try generate(init.gpa, init, msgs, out_dir);
     try out.flush();
 }
 
@@ -78,7 +83,7 @@ fn printUsage() void {
         \\           glu launch -f <file.toml>
         \\
         \\  codegen  Generate Zig structs from a .glu message definition
-        \\           glu codegen -f <file.glu>
+        \\           glu codegen -f <file.glu> -o <path/to/gen>
         \\
     , .{});
 }

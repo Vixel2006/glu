@@ -206,6 +206,8 @@ test "parse inline stub" {
     const cwd = std.Io.Dir.cwd();
     const filename = "src/codegen/_test_stub.glu";
 
+    try cwd.createDirPath(init.io, "src/codegen");
+
     {
         var file = try cwd.createFile(init.io, filename, .{});
         defer file.close(init.io);
