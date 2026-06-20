@@ -26,11 +26,16 @@ test "Publisher: publish a message, read it via raw Channel" {
     const topic = Topic.init("/glu_test_publisher", @sizeOf(TestMsg), 5);
     const allocator = std.heap.page_allocator;
 
+    // Parent creates the shm first
+    var chan = try Channel.open(allocator, topic);
+    defer chan.close();
+
     const pid = c.fork();
     if (pid == 0) {
-        var publisher = try Publisher.init(allocator, topic);
-        defer publisher.deinit();
+        var child_chan = Channel.open(allocator, topic) catch c.exit(1);
+        var publisher = Publisher{ .channel = child_chan };
         publisher.publish(TestMsg, &.{ .x = 7, .y = 13 });
+        child_chan.close();
         c.exit(0);
     }
 
@@ -38,8 +43,6 @@ test "Publisher: publish a message, read it via raw Channel" {
         var ts = std.c.timespec{ .sec = 0, .nsec = 100_000_000 };
         _ = c.nanosleep(&ts, null);
     }
-    var chan = try Channel.open(allocator, topic);
-    defer chan.close();
     const msg = read(&chan, TestMsg);
     try std.testing.expect(msg.x == 7);
     try std.testing.expect(msg.y == 13);
