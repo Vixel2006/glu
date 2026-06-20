@@ -1,0 +1,43 @@
+const std = @import("std");
+const utils = @import("utils.zig");
+
+pub fn cmdInfo(init: std.process.Init, args: *std.process.Args.Iterator) !void {
+    var fw = utils.writer(init);
+    const w = &fw.interface;
+
+    const topic_name = args.next() orelse {
+        try w.writeAll("usage: glu info <topic>\n");
+        return;
+    };
+
+    var topic = utils.Topic.open(init.gpa, topic_name) catch |err| {
+        const msg = switch (err) {
+            error.TopicNotFound => "not found",
+            error.InvalidTopic => "is not a valid glu topic",
+            error.MmapFailed => "mmap failed",
+            error.BadMagic => "is not a glu topic (bad magic)",
+            error.OutOfMemory => "out of memory",
+        };
+        try w.print("error: topic '{s}' {s}\n", .{ topic_name, msg });
+        return;
+    };
+    defer topic.close();
+
+    const hdr = topic.header;
+
+    const name_slice = hdr.name[0..hdr.name_len];
+    const data_size = hdr.msg_size * hdr.capacity;
+    const depth = hdr.write - hdr.read;
+    const pct = if (hdr.capacity > 0) @as(f64, @floatFromInt(depth)) / @as(f64, @floatFromInt(hdr.capacity)) * 100.0 else 0.0;
+
+    try w.print("Topic:       {s}\n", .{name_slice});
+    try w.print("Msg Size:    {d} bytes\n", .{hdr.msg_size});
+    try w.print("Capacity:    {d} messages\n", .{hdr.capacity});
+    try w.print("Data Size:   {d} bytes\n", .{data_size});
+    try w.print("Header:      {d} bytes (v1)\n", .{@sizeOf(utils.Header)});
+    try w.print("Total Size:  {d} bytes\n", .{topic.file_size});
+    try w.print("Connections: {d}\n", .{hdr.conns});
+    try w.print("Write Pos:   {d}\n", .{hdr.write});
+    try w.print("Read Pos:    {d}\n", .{hdr.read});
+    try w.print("Queue Depth: {d} ({d:.1}% full)\n", .{ depth, pct });
+}

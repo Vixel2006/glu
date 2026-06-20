@@ -3,7 +3,6 @@ const zbench = @import("zbench");
 const Publisher = @import("glu").Publisher;
 const Subscriber = @import("glu").Subscriber;
 const Node = @import("glu").Node;
-const Topic = @import("glu").Topic;
 
 const TestMsg = packed struct { x: u32, y: u32 };
 
@@ -13,8 +12,7 @@ var sub_channel: Subscriber = undefined;
 var sub_pub: Publisher = undefined;
 
 fn beforePublisher() void {
-    const topic = Topic.init("/glu_bench_pub", @sizeOf(TestMsg), 4096);
-    pub_channel = Publisher.init(std.heap.page_allocator, topic) catch unreachable;
+    pub_channel = Publisher.init(std.heap.page_allocator, "/glu_bench_pub", @sizeOf(TestMsg), 4096) catch unreachable;
 }
 
 fn afterPublisher() void {
@@ -26,9 +24,8 @@ fn resetPublisher() void {
 }
 
 fn beforeSubscriber() void {
-    const topic = Topic.init("/glu_bench_sub", @sizeOf(TestMsg), 16384);
-    sub_channel = Subscriber.init(std.heap.page_allocator, topic) catch unreachable;
-    sub_pub = Publisher.init(std.heap.page_allocator, topic) catch unreachable;
+    sub_pub = Publisher.init(std.heap.page_allocator, "/glu_bench_sub", @sizeOf(TestMsg), 16384) catch unreachable;
+    sub_channel = Subscriber.init(std.heap.page_allocator, "/glu_bench_sub", @sizeOf(TestMsg)) catch unreachable;
     var i: u32 = 0;
     while (i < 16384) : (i += 1) {
         sub_pub.publish(TestMsg, &.{ .x = i, .y = i + 1 });

@@ -1,61 +1,67 @@
 const std = @import("std");
 const c = @import("std").c;
 const os = @import("std").os.linux;
-const Topic = @import("topic.zig").Topic;
+const SEEK_END = 2;
 
-const Header = extern struct {
+pub const GLU_MAGIC = 0x474C5500;
+
+pub const Header = extern struct {
+    magic: u32 = GLU_MAGIC,
     write: u32,
     read: u32,
     conns: u32,
-    _pad: u32 = 0,
+    msg_size: u32,
+    capacity: u32,
+    name_len: u32,
+    name: [64]u8,
+    _reserved: [4]u8 = .{0} ** 4,
 };
 
-/// Channel is the shared memory between different nodes that will hold the topics data
-/// nodes can consume messages from channels, or produce messages to it
+comptime {
+    std.debug.assert(@sizeOf(Header) == 96);
+}
+
 pub const Channel = struct {
-    /// topic variable will save the topic metadata needed to find correct shared memory objects, calculate offsets, alignments in the shared memory
-    topic: Topic,
-
-    /// fd will save the file discriptor for the shared memory object holding the channel
-    /// on initializing we will create a new shm object or open the existing one and return the fd
-    /// this will help us accuractly modify the correct channel independetly
     fd: i32,
-
-    /// ptr is the pointer for the start of our shared memory object
     ptr: [*]u8,
-
-    /// header points into shared memory — both processes see the same write/read indices
     header: *Header,
+    size: usize,
 
-    pub fn open(allocator: std.mem.Allocator, topic: Topic) !Channel {
-        const name = try allocator.dupeZ(u8, topic.name);
-        defer allocator.free(name);
+    pub fn open(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32) !Channel {
+        const name_z = try allocator.dupeZ(u8, name);
+        defer allocator.free(name_z);
 
         const o_flags: c_int = @as(c_int, @bitCast(os.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true }));
 
-        var fd: i32 = c.shm_open(name.ptr, o_flags, 0o644);
+        var fd: i32 = c.shm_open(name_z.ptr, o_flags, 0o644);
         var created = true;
 
         if (fd == -1) {
-            // Already exists — open without EXCL|CREAT
             const open_flags: c_int = @as(c_int, @bitCast(os.O{
                 .ACCMODE = .RDWR,
             }));
-            fd = c.shm_open(name.ptr, open_flags, 0);
+            fd = c.shm_open(name_z.ptr, open_flags, 0);
             created = false;
         }
 
         if (fd == -1) return error.ShmOpenFailed;
 
-        if (created) {
-            _ = c.ftruncate(fd, @intCast(topic.size() + @sizeOf(Header)));
-        }
+        const data_size = msg_size * capacity;
+        const total_size: usize = data_size + @sizeOf(Header);
+        const map_size: usize = total_size;
 
-        const size: usize = @as(usize, topic.size()) + @sizeOf(Header);
+        if (created) {
+            _ = c.ftruncate(fd, @intCast(total_size));
+        } else {
+            const current_size = @as(usize, @intCast(c.lseek(fd, 0, SEEK_END)));
+            if (current_size < total_size) {
+                _ = c.ftruncate(fd, @intCast(total_size));
+            }
+        }
 
         const mapped = os.mmap(
             null,
-            size,
+            map_size,
             os.PROT{ .READ = true, .WRITE = true },
             os.MAP{ .TYPE = .SHARED },
             fd,
@@ -71,63 +77,65 @@ pub const Channel = struct {
             hdr.write = 0;
             hdr.read = 0;
             hdr.conns = 1;
+            hdr.msg_size = msg_size;
+            hdr.capacity = capacity;
+            const name_len = @min(@as(u32, @intCast(name.len)), 63);
+            hdr.name_len = name_len;
+            @memcpy(hdr.name[0..name_len], name[0..name_len]);
+            hdr.name[name_len] = 0;
         } else {
             _ = @atomicRmw(u32, &hdr.conns, .Add, 1, .monotonic);
         }
 
-        return .{ .topic = topic, .fd = fd, .ptr = ptr, .header = hdr };
+        return .{ .fd = fd, .ptr = ptr, .header = hdr, .size = map_size };
     }
 
     pub fn close(self: *Channel) void {
         const prev = @atomicRmw(u32, &self.header.conns, .Sub, 1, .monotonic);
 
-        _ = os.munmap(self.ptr, self.topic.size() + @sizeOf(Header));
+        const needs_unlink = prev == 1;
+        var name_buf: [256]u8 = undefined;
+        const name_z: ?[:0]u8 = if (needs_unlink) blk: {
+            const name_slice = self.header.name[0..self.header.name_len];
+            break :blk std.fmt.bufPrintZ(&name_buf, "{s}", .{name_slice}) catch null;
+        } else null;
+
+        _ = os.munmap(self.ptr, self.size);
         _ = os.close(self.fd);
 
-        if (prev == 1) {
-            var buf: [256]u8 = undefined;
-            const name = std.fmt.bufPrintZ(&buf, "{s}", .{self.topic.name}) catch return;
-            _ = c.shm_unlink(name.ptr);
-        }
+        if (name_z) |nz| _ = c.shm_unlink(nz.ptr);
     }
 };
 
 pub fn write(chan: *Channel, comptime T: type, msg: *const T) void {
-    std.debug.assert(@sizeOf(T) == chan.topic.msg_size);
-
-    const slot = chan.ptr + @sizeOf(Header) + chan.header.write * chan.topic.msg_size;
+    const msg_size = chan.header.msg_size;
+    const slot = chan.ptr + @sizeOf(Header) + chan.header.write * msg_size;
     @memcpy(slot, @as(*const [@sizeOf(T)]u8, @ptrCast(msg)));
     chan.header.write += 1;
 }
 
 pub fn read(chan: *Channel, comptime T: type) *T {
-    std.debug.assert(@sizeOf(T) == chan.topic.msg_size);
-
-    const slot = chan.ptr + @sizeOf(Header) + chan.header.read * chan.topic.msg_size;
+    const msg_size = chan.header.msg_size;
+    const slot = chan.ptr + @sizeOf(Header) + chan.header.read * msg_size;
     chan.header.read += 1;
-
     return @ptrCast(@alignCast(slot));
 }
 
 test "cross-process: producer writes, consumer reads via fork" {
     const TestMsg = packed struct { x: u32, y: u32 };
-    const topic = Topic.init("/glu_test_fork", @sizeOf(TestMsg), 5);
     const allocator = std.heap.page_allocator;
 
-    // Parent creates the shm first, so the child can open/close in balanced pairs
-    var chan = try Channel.open(allocator, topic);
+    var chan = try Channel.open(allocator, "/glu_test_fork", @sizeOf(TestMsg), 5);
     defer chan.close();
 
     const pid = c.fork();
     if (pid == 0) {
-        // Child: producer — opens existing shm, writes, closes
-        var child_chan = Channel.open(allocator, topic) catch c.exit(1);
+        var child_chan = Channel.open(allocator, "/glu_test_fork", @sizeOf(TestMsg), 5) catch c.exit(1);
         write(&child_chan, TestMsg, &TestMsg{ .x = 42, .y = 99 });
         child_chan.close();
         c.exit(0);
     }
 
-    // Parent: consumer (wait a tiny bit for child to write)
     {
         var ts = std.c.timespec{ .sec = 0, .nsec = 100_000_000 };
         _ = c.nanosleep(&ts, null);
@@ -136,6 +144,5 @@ test "cross-process: producer writes, consumer reads via fork" {
     try std.testing.expect(msg.x == 42);
     try std.testing.expect(msg.y == 99);
 
-    // Wait for child, clean up
     _ = c.waitpid(pid, null, 0);
 }

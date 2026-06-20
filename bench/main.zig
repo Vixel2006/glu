@@ -1,7 +1,6 @@
 const std = @import("std");
 const zbench = @import("zbench");
 
-const topic = @import("topic.zig");
 const channel = @import("channel.zig");
 const api = @import("api.zig");
 const codegen = @import("codegen.zig");
@@ -65,10 +64,6 @@ pub fn main(init: std.process.Init) !void {
     var bench = zbench.Benchmark.init(allocator, .{});
     defer bench.deinit();
 
-    try bench.add("topic init", topic.benchTopicInit, .{});
-    try bench.add("topic commit", topic.benchTopicCommit, .{});
-    try bench.add("topic curr", topic.benchTopicCurr, .{});
-    try bench.add("topic size", topic.benchTopicSize, .{});
     try bench.add("channel write 32B", channel.benchChannelWrite32, .{ .hooks = channel.write32_hooks });
     try bench.add("channel write 256B", channel.benchChannelWrite256, .{ .hooks = channel.write256_hooks });
     try bench.add("channel write 1024B", channel.benchChannelWrite1024, .{ .hooks = channel.write1024_hooks });
