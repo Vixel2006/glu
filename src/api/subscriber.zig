@@ -29,11 +29,15 @@ test "Subscriber: publish via raw Channel, receive via Subscriber" {
     const topic = Topic.init("/glu_test_subscriber", @sizeOf(TestMsg), 5);
     const allocator = std.heap.page_allocator;
 
+    // Parent creates the shm first
+    var sub = try Subscriber.init(allocator, topic);
+    defer sub.deinit();
+
     const pid = c.fork();
     if (pid == 0) {
-        var chan = try Channel.open(allocator, topic);
-        defer chan.close();
-        write(&chan, TestMsg, &.{ .x = 99, .y = 42 });
+        var child_chan = Channel.open(allocator, topic) catch c.exit(1);
+        write(&child_chan, TestMsg, &.{ .x = 99, .y = 42 });
+        child_chan.close();
         c.exit(0);
     }
 
@@ -41,8 +45,6 @@ test "Subscriber: publish via raw Channel, receive via Subscriber" {
         var ts = std.c.timespec{ .sec = 0, .nsec = 100_000_000 };
         _ = c.nanosleep(&ts, null);
     }
-    var sub = try Subscriber.init(allocator, topic);
-    defer sub.deinit();
     const msg = sub.receive(TestMsg) orelse return error.TestFailed;
     try std.testing.expect(msg.x == 99);
     try std.testing.expect(msg.y == 42);
