@@ -134,6 +134,7 @@ pub fn parse(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) !L
 
     while (!p.done()) {
         p.skipWhitespaceAndNewlines();
+        if (p.done()) break;
 
         if (p.peek() == '#') {
             p.skipComment();
