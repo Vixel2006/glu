@@ -14,11 +14,12 @@ pub fn launch(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig
     }
 
     for (cfgs) |cfg| {
-        const argv = try allocator.alloc([]const u8, 3 + cfg.extra_cfg.len);
+        const argv = try allocator.alloc([]const u8, 4 + cfg.extra_cfg.len);
         argv[0] = "zig";
         argv[1] = "run";
         argv[2] = cfg.path;
-        for (cfg.extra_cfg, 0..) |arg, i| argv[3 + i] = arg;
+        argv[3] = "--";
+        for (cfg.extra_cfg, 0..) |arg, i| argv[4 + i] = arg;
 
         const child = std.process.spawn(io, .{
             .argv = argv,
@@ -147,7 +148,7 @@ test "launch node with extra_cfg passes arguments" {
     const path = try testNodePath(allocator, dir, "args.zig");
     defer allocator.free(path);
 
-    const extra = &[_][]const u8{ "--", "--fps", "30" };
+    const extra = &[_][]const u8{ "--fps", "30" };
     const cfgs = &[_]NodeConfig{.{ .name = "args_test", .path = path, .extra_cfg = extra }};
     const launched = try launch(io, allocator, cfgs);
     defer {
