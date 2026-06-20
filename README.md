@@ -1,24 +1,20 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/zig-%23F7A41D.svg?style=for-the-badge&logo=zig&logoColor=white" alt="Zig" />
-  <img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge" alt="MIT" />
-  <img src="https://img.shields.io/badge/status-alpha-red?style=for-the-badge" alt="Alpha" />
-  <img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=for-the-badge" alt="PRs Welcome" />
-</p>
-
-<p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/glu.png">
-    <img src="assets/glu.png" alt="glu" width="80">
+    <img src="assets/glu.png" alt="glu" width="96">
   </picture>
 </p>
 
-<h1 align="center">
-  <code>glu</code>
-</h1>
+<p align="center">
+  <b>glu</b> — blazingly fast robot middleware.<br>
+  <i>no bloat. no ROS taxes. just clean, real-time comms.</i>
+</p>
 
 <p align="center">
-  <b>blazingly fast robot middleware.</b><br>
-  <i>no bloat. no ROS taxes. just clean, real-time comms.</i>
+  <img src="https://img.shields.io/badge/zig-%23F7A41D.svg?style=flat-square&logo=zig&logoColor=white" alt="Zig" />
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT" />
+  <img src="https://img.shields.io/badge/status-alpha-orange?style=flat-square" alt="Alpha" />
+  <img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square" alt="PRs Welcome" />
 </p>
 
 <p align="center">
