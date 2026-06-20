@@ -65,7 +65,7 @@ fn cmdCodegen(init: std.process.Init, args: *std.process.Args.Iterator) !void {
 
     var buf: [4096]u8 = undefined;
     var out = std.Io.File.stdout().writer(init.io, &buf);
-    try generate(&out.interface, msgs);
+    try generate(init.gpa, init, msgs);
     try out.flush();
 }
 
@@ -93,9 +93,9 @@ pub fn main(init: std.process.Init) !void {
     };
 
     if (std.mem.eql(u8, cmd, "launch")) {
-        try cmdLaunch(init, &args_iter);
+        cmdLaunch(init, &args_iter) catch {};
     } else if (std.mem.eql(u8, cmd, "codegen")) {
-        try cmdCodegen(init, &args_iter);
+        cmdCodegen(init, &args_iter) catch {};
     } else {
         printUsage();
     }
