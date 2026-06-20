@@ -2,7 +2,6 @@ const std = @import("std");
 const c = std.c;
 const zbench = @import("zbench");
 const Channel = @import("glu").Channel;
-const Topic = @import("glu").Topic;
 const write = @import("glu").write;
 const read = @import("glu").read;
 
@@ -26,8 +25,7 @@ var chan_read: Channel = undefined;
 const CAP = 16384;
 
 fn beforeWrite(chan: *Channel, comptime T: type, name: []const u8) void {
-    const topic = Topic.init(name, @sizeOf(T), CAP);
-    chan.* = Channel.open(std.heap.page_allocator, topic) catch unreachable;
+    chan.* = Channel.open(std.heap.page_allocator, name, @sizeOf(T), CAP) catch unreachable;
 }
 
 fn afterWrite(chan: *Channel) void {

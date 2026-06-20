@@ -1,15 +1,14 @@
 const std = @import("std");
 const c = std.c;
 const Channel = @import("../channel.zig").Channel;
-const Topic = @import("../topic.zig").Topic;
 const write = @import("../channel.zig").write;
 const read = @import("../channel.zig").read;
 
 pub const Publisher = struct {
     channel: Channel,
 
-    pub fn init(allocator: std.mem.Allocator, topic: Topic) !Publisher {
-        return .{ .channel = try Channel.open(allocator, topic) };
+    pub fn init(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32) !Publisher {
+        return .{ .channel = try Channel.open(allocator, name, msg_size, capacity) };
     }
 
     pub fn deinit(self: *Publisher) void {
@@ -23,16 +22,14 @@ pub const Publisher = struct {
 
 test "Publisher: publish a message, read it via raw Channel" {
     const TestMsg = packed struct { x: u32, y: u32 };
-    const topic = Topic.init("/glu_test_publisher", @sizeOf(TestMsg), 5);
     const allocator = std.heap.page_allocator;
 
-    // Parent creates the shm first
-    var chan = try Channel.open(allocator, topic);
+    var chan = try Channel.open(allocator, "/glu_test_publisher", @sizeOf(TestMsg), 5);
     defer chan.close();
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open(allocator, topic) catch c.exit(1);
+        var child_chan = Channel.open(allocator, "/glu_test_publisher", @sizeOf(TestMsg), 5) catch c.exit(1);
         var publisher = Publisher{ .channel = child_chan };
         publisher.publish(TestMsg, &.{ .x = 7, .y = 13 });
         child_chan.close();
