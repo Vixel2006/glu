@@ -60,4 +60,29 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_lib_tests.step);
+
+    // Benchmark targets
+    const bench_opts = .{ .target = target, .optimize = .ReleaseFast };
+    const zbench_module = b.dependency("zbench", bench_opts).module("zbench");
+
+    const bench_exe = b.addExecutable(.{
+        .name = "glu-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/main.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "glu", .module = mod },
+                .{ .name = "zbench", .module = zbench_module },
+            },
+        }),
+    });
+
+    const bench_exe_mod = bench_exe.root_module;
+    bench_exe_mod.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{cuda_path}) });
+
+    const run_bench = b.addRunArtifact(bench_exe);
+    const bench_step = b.step("bench", "Run benchmarks");
+    bench_step.dependOn(&run_bench.step);
 }

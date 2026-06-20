@@ -5,6 +5,13 @@
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=for-the-badge" alt="PRs Welcome" />
 </p>
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/glu.png">
+    <img src="assets/glu.png" alt="glu" width="80">
+  </picture>
+</p>
+
 <h1 align="center">
   <code>glu</code>
 </h1>
@@ -19,6 +26,7 @@
   <a href="#why">Why</a> •
   <a href="#philosophy">Philosophy</a> •
   <a href="#ecosystem">Ecosystem</a> •
+  <a href="#benchmarks">Benchmarks</a> •
   <a href="#contributing">Contribute</a>
 </p>
 
@@ -42,21 +50,93 @@ ROS2 is the past. **glu is the glow-up.**
 
 ## quickstart
 
+### 1. add glu to your project
+
 ```bash
-# build from source
-zig build -Doptimize=ReleaseFast
-
-# run a node
-glu node start --name motor_driver
-
-# list active nodes
-glu ps
-
-# subscribe to a topic and pipe to stdout
-glu sub /sensor/lidar | jq .
+zig fetch --save=glu https://github.com/glu-os/glu/archive/main.tar.gz
 ```
 
-> **prereqs:** Zig 0.16+, CUDA Toolkit (optional — falls back to CPU)
+Then in `build.zig`:
+
+```zig
+const glu = b.dependency("glu", .{ .target = target }).module("glu");
+my_exe.root_module.addImport("glu", glu);
+```
+
+### 2. define your messages
+
+Create a `.glu` message definition file:
+
+```glu
+// msgs/sensor_data.glu
+message Imu {
+  timestamp: u64,
+  accel_x: f32,
+  accel_y: f32,
+  accel_z: f32,
+  gyro_x: f32,
+  gyro_y: f32,
+  gyro_z: f32,
+}
+
+message LidarScan {
+  timestamp: u64,
+  angles: [360]f32,
+  ranges: [360]f32,
+}
+```
+
+Generate Zig structs from it:
+
+```bash
+glu codegen -f msgs/sensor_data.glu -o src/gen/msgs.zig
+```
+
+### 3. use the API
+
+```zig
+const glu = @import("glu");
+const msgs = @import("gen/msgs.zig");
+
+// Create a node
+var node = glu.Node.init(allocator, "sensor_node");
+
+// Publish IMU data
+var pub = try node.createPublisher(msgs.Imu, "/sensor/imu", 64);
+const imu = msgs.Imu{
+    .timestamp = @intCast(std.time.milliTimestamp()),
+    .accel_x = 0.01, .accel_y = 9.81, .accel_z = 0.02,
+    .gyro_x = 0.0, .gyro_y = 0.0, .gyro_z = 0.0,
+};
+pub.publish(msgs.Imu, &imu);
+
+// Subscribe to data (in another process)
+var sub = try node.createSubscriber(msgs.Imu, "/sensor/imu");
+if (sub.receive(msgs.Imu)) |msg| {
+    std.debug.print("accel: {d}, {d}, {d}\n", .{ msg.accel_x, msg.accel_y, msg.accel_z });
+}
+```
+
+### 4. launch nodes from a config
+
+Create a `launch.toml`:
+
+```toml
+[[node]]
+name = "sensor_driver"
+bin = "./sensor_driver"
+args = ["--rate", "100"]
+
+[[node]]
+name = "visualizer"
+bin = "./visualizer"
+```
+
+```bash
+glu launch -f launch.toml
+```
+
+> **prereqs:** Zig 0.16+
 
 ## why
 
@@ -124,7 +204,36 @@ zig build -Doptimize=ReleaseFast -DCUDA_PATH=/usr/local/cuda
 
 # debug mode with verbose logging
 zig build
+
+# run benchmarks
+zig build bench
 ```
+
+## benchmarks
+
+glu uses [zBench](https://github.com/hendriknielaender/zbench) for microbenchmarking. Results are logged to `.benchmarks/` with automatic history tracking and regression detection.
+
+```bash
+zig build bench
+```
+
+Each run produces:
+- **`latest.json`** — full data with raw timings for local analysis
+- **`history/<epoch>.json`** — compact stats tracked in git for per-commit performance history
+- **comparison delta** — printed to stdout against the previous run, flagging changes >10%
+
+| benchmark | time | what it measures |
+|-----------|------|------------------|
+| `topic init/commit/curr/size` | ~18ns | struct metadata ops |
+| `channel write 32B–4096B` | ~18ns | shared-memory memcpy throughput |
+| `channel read 32B` | ~18ns | shared-memory read |
+| `publisher publish` | ~18ns | high-level publish |
+| `subscriber receive` | ~18ns | high-level receive with null-check |
+| `node init` | ~18ns | node allocation |
+| `node create publisher/subscriber` | ~5µs | shm_open + mmap hot-path |
+| `generate code` | ~8µs | codegen string formatting + file write |
+
+*All measurements taken with `-OReleaseFast` on an Intel core i5 system with 100k iterations.*
 
 ## contribute
 
