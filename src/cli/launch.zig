@@ -3,7 +3,11 @@ const utils = @import("utils.zig");
 const launch = @import("../launch/launcher.zig").launch;
 const toml = @import("../launch/toml.zig");
 
-pub fn cmdLaunch(init: std.process.Init, args: *std.process.Args.Iterator) !void {
+pub fn cmdLaunch(init: std.process.Init, args: *std.process.Args.Iterator) void {
+    cmdLaunch_(init, args) catch |err| utils.logErr("launch", err);
+}
+
+fn cmdLaunch_(init: std.process.Init, args: *std.process.Args.Iterator) !void {
     const file = utils.parseFlag(args, "-f") orelse {
         std.debug.print("usage: glu launch -f <file.toml>\n", .{});
         return error.MissingArgument;

@@ -3,7 +3,11 @@ const utils = @import("utils.zig");
 const parser = @import("../codegen/parser.zig");
 const generate = @import("../codegen/generator.zig").generate;
 
-pub fn cmdCodegen(init: std.process.Init, args: *std.process.Args.Iterator) !void {
+pub fn cmdCodegen(init: std.process.Init, args: *std.process.Args.Iterator) void {
+    cmdCodegen_(init, args) catch |err| utils.logErr("codegen", err);
+}
+
+fn cmdCodegen_(init: std.process.Init, args: *std.process.Args.Iterator) !void {
     const file = utils.parseFlag(args, "-f") orelse {
         std.debug.print("usage: glu codegen -f <file.glu> -o </path/to/gen>\n", .{});
         return error.MissingArgument;

@@ -1,7 +1,11 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 
-pub fn cmdInfo(init: std.process.Init, args: *std.process.Args.Iterator) !void {
+pub fn cmdInfo(init: std.process.Init, args: *std.process.Args.Iterator) void {
+    cmdInfo_(init, args) catch |err| utils.logErr("info", err);
+}
+
+fn cmdInfo_(init: std.process.Init, args: *std.process.Args.Iterator) !void {
     var fw = utils.writer(init);
     const w = &fw.interface;
 

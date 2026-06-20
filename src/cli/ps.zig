@@ -2,7 +2,11 @@ const std = @import("std");
 const utils = @import("utils.zig");
 const Registry = @import("../registry.zig");
 
-pub fn cmdPs(init: std.process.Init) !void {
+pub fn cmdPs(init: std.process.Init) void {
+    cmdPs_(init) catch |err| utils.logErr("ps", err);
+}
+
+fn cmdPs_(init: std.process.Init) !void {
     var fw = utils.writer(init);
     const w = &fw.interface;
 

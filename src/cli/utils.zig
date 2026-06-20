@@ -6,6 +6,14 @@ pub const SEEK_END = 2;
 pub const GLU_MAGIC = @import("../channel.zig").GLU_MAGIC;
 pub const Header = @import("../channel.zig").Header;
 
+pub fn logErr(comptime ctx: []const u8, err: anyerror) void {
+    std.debug.print("error: {s}: {s}\n", .{ ctx, @errorName(err) });
+    if (@errorReturnTrace()) |trace| {
+        const cast: *const std.debug.StackTrace = @ptrCast(trace);
+        std.debug.dumpStackTrace(cast);
+    }
+}
+
 pub fn writer(init: std.process.Init) std.Io.File.Writer {
     return std.Io.File.stdout().writerStreaming(init.io, &.{});
 }

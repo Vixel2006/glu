@@ -1,9 +1,9 @@
 const std = @import("std");
-const list_ = @import("cli/list.zig");
-const info_ = @import("cli/info.zig");
-const ps_ = @import("cli/ps.zig");
-const launch_ = @import("cli/launch.zig");
-const codegen_ = @import("cli/codegen.zig");
+const list = @import("cli/list.zig");
+const info = @import("cli/info.zig");
+const ps = @import("cli/ps.zig");
+const launch = @import("cli/launch.zig");
+const codegen = @import("cli/codegen.zig");
 
 fn printUsage() void {
     std.debug.print(
@@ -38,15 +38,15 @@ pub fn main(init: std.process.Init) !void {
     };
 
     if (std.mem.eql(u8, cmd, "launch")) {
-        launch_.cmdLaunch(init, &args_iter) catch {};
+        launch.cmdLaunch(init, &args_iter);
     } else if (std.mem.eql(u8, cmd, "codegen")) {
-        codegen_.cmdCodegen(init, &args_iter) catch {};
+        codegen.cmdCodegen(init, &args_iter);
     } else if (std.mem.eql(u8, cmd, "list") or std.mem.eql(u8, cmd, "ls")) {
-        list_.cmdList(init) catch {};
+        list.cmdList(init);
     } else if (std.mem.eql(u8, cmd, "info")) {
-        info_.cmdInfo(init, &args_iter) catch {};
+        info.cmdInfo(init, &args_iter);
     } else if (std.mem.eql(u8, cmd, "ps")) {
-        ps_.cmdPs(init) catch {};
+        ps.cmdPs(init);
     } else {
         printUsage();
     }

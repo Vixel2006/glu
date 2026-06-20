@@ -1,0 +1,16 @@
+{
+  "timestamp": 1781968146,
+  "results": [
+    { "name": "channel write 32B", "iterations": 100000, "mean_ns": 19, "stddev_ns": 63, "min_ns": 17, "max_ns": 18968, "p75_ns": 19, "p99_ns": 25, "p995_ns": 27 },
+    { "name": "channel write 256B", "iterations": 100000, "mean_ns": 18, "stddev_ns": 22, "min_ns": 17, "max_ns": 5187, "p75_ns": 19, "p99_ns": 20, "p995_ns": 20 },
+    { "name": "channel write 1024B", "iterations": 100000, "mean_ns": 19, "stddev_ns": 21, "min_ns": 15, "max_ns": 5481, "p75_ns": 20, "p99_ns": 27, "p995_ns": 31 },
+    { "name": "channel write 4096B", "iterations": 100000, "mean_ns": 18, "stddev_ns": 15, "min_ns": 15, "max_ns": 2919, "p75_ns": 19, "p99_ns": 25, "p995_ns": 29 },
+    { "name": "channel read 32B", "iterations": 100000, "mean_ns": 19, "stddev_ns": 56, "min_ns": 17, "max_ns": 16957, "p75_ns": 19, "p99_ns": 26, "p995_ns": 28 },
+    { "name": "publisher publish", "iterations": 100000, "mean_ns": 18, "stddev_ns": 25, "min_ns": 15, "max_ns": 5937, "p75_ns": 18, "p99_ns": 24, "p995_ns": 27 },
+    { "name": "subscriber receive", "iterations": 100000, "mean_ns": 18, "stddev_ns": 16, "min_ns": 15, "max_ns": 4406, "p75_ns": 18, "p99_ns": 25, "p995_ns": 27 },
+    { "name": "node init", "iterations": 100000, "mean_ns": 2344, "stddev_ns": 338, "min_ns": 2190, "max_ns": 30551, "p75_ns": 2397, "p99_ns": 3730, "p995_ns": 3965 },
+    { "name": "node create publisher", "iterations": 100000, "mean_ns": 7183, "stddev_ns": 10830, "min_ns": 6230, "max_ns": 1001069, "p75_ns": 6838, "p99_ns": 11849, "p995_ns": 14211 },
+    { "name": "node create subscriber", "iterations": 100000, "mean_ns": 7297, "stddev_ns": 10951, "min_ns": 6254, "max_ns": 1253399, "p75_ns": 6922, "p99_ns": 12526, "p995_ns": 15422 },
+    { "name": "generate code", "iterations": 100000, "mean_ns": 7562, "stddev_ns": 14791, "min_ns": 6290, "max_ns": 1022960, "p75_ns": 7093, "p99_ns": 12280, "p995_ns": 14438 }
+  ]
+}

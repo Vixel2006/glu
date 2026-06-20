@@ -11,7 +11,11 @@ const Entry = struct {
     read_pos: u32,
 };
 
-pub fn cmdList(init: std.process.Init) !void {
+pub fn cmdList(init: std.process.Init) void {
+    cmdList_(init) catch |err| utils.logErr("list", err);
+}
+
+fn cmdList_(init: std.process.Init) !void {
     const allocator = init.gpa;
     var fw = utils.writer(init);
     const w = &fw.interface;
