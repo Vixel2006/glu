@@ -4,13 +4,10 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const cuda_path = b.option([]const u8, "CUDA_PATH", "CUDA installation path") orelse "/opt/cuda";
-
     const mod = b.addModule("glu", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
     });
-    mod.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{cuda_path}) });
 
     const exe = b.addExecutable(.{
         .name = "glu",
@@ -24,13 +21,6 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-
-    const exe_mod = exe.root_module;
-    exe_mod.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{cuda_path}) });
-    exe_mod.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib64", .{cuda_path}) });
-    exe_mod.linkSystemLibrary("cuda", .{});
-    exe_mod.linkSystemLibrary("cudart", .{});
-    exe_mod.linkSystemLibrary("nvrtc", .{});
 
     b.installArtifact(exe);
 
@@ -50,7 +40,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .link_libc = true,
     });
-    test_mod.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{cuda_path}) });
 
     const lib_tests = b.addTest(.{
         .root_module = test_mod,
@@ -79,10 +68,18 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    const bench_exe_mod = bench_exe.root_module;
-    bench_exe_mod.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{cuda_path}) });
-
     const run_bench = b.addRunArtifact(bench_exe);
     const bench_step = b.step("bench", "Run benchmarks");
     bench_step.dependOn(&run_bench.step);
+
+    // Adding LLDB for debugging
+    const lldb = b.addSystemCommand(&.{
+        "lldb",
+        "--",
+    });
+
+    lldb.addArtifactArg(lib_tests);
+
+    const lldb_step = b.step("debug", "Run the tests under lldb debugger");
+    lldb_step.dependOn(&lldb.step);
 }

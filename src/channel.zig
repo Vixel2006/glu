@@ -111,19 +111,21 @@ pub fn write(chan: *Channel, comptime T: type, msg: *const T) void {
     const msg_size = chan.header.msg_size;
     const slot = chan.ptr + @sizeOf(Header) + chan.header.write * msg_size;
     @memcpy(slot, @as(*const [@sizeOf(T)]u8, @ptrCast(msg)));
-    chan.header.write += 1;
+    chan.header.write = (chan.header.write + 1) % chan.header.capacity;
 }
 
 pub fn read(chan: *Channel, comptime T: type) *T {
     const msg_size = chan.header.msg_size;
     const slot = chan.ptr + @sizeOf(Header) + chan.header.read * msg_size;
-    chan.header.read += 1;
+    chan.header.read = (chan.header.read + 1) % chan.header.capacity;
     return @ptrCast(@alignCast(slot));
 }
 
 test "cross-process: producer writes, consumer reads via fork" {
     const TestMsg = packed struct { x: u32, y: u32 };
     const allocator = std.heap.page_allocator;
+
+    _ = c.shm_unlink("/glu_test_fork");
 
     var chan = try Channel.open(allocator, "/glu_test_fork", @sizeOf(TestMsg), 5);
     defer chan.close();

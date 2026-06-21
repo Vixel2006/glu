@@ -7,8 +7,8 @@ const write = @import("../channel.zig").write;
 pub const Subscriber = struct {
     channel: Channel,
 
-    pub fn init(allocator: std.mem.Allocator, name: []const u8, msg_size: u32) !Subscriber {
-        return .{ .channel = try Channel.open(allocator, name, msg_size, 0) };
+    pub fn init(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32) !Subscriber {
+        return .{ .channel = try Channel.open(allocator, name, msg_size, capacity) };
     }
 
     pub fn deinit(self: *Subscriber) void {
@@ -27,12 +27,15 @@ test "Subscriber: publish via raw Channel, receive via Subscriber" {
     const TestMsg = packed struct { x: u32, y: u32 };
     const allocator = std.heap.page_allocator;
 
-    var sub = try Subscriber.init(allocator, "/glu_test_subscriber", @sizeOf(TestMsg));
+    // we do unlink to close the stale POSIX shared memory from prior failed tests if any
+    _ = c.shm_unlink("/glu_test_subscriber");
+
+    var sub = try Subscriber.init(allocator, "/glu_test_subscriber", @sizeOf(TestMsg), 2);
     defer sub.deinit();
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open(allocator, "/glu_test_subscriber", @sizeOf(TestMsg), 0) catch c.exit(1);
+        var child_chan = Channel.open(allocator, "/glu_test_subscriber", @sizeOf(TestMsg), 2) catch c.exit(1);
         write(&child_chan, TestMsg, &.{ .x = 99, .y = 42 });
         child_chan.close();
         c.exit(0);
