@@ -8,12 +8,12 @@ pub const GLU_MAGIC = 0x474C5500;
 pub const Header = extern struct {
     magic: u32 = GLU_MAGIC,
     write: u32,
-    read: u32,
     conns: u32,
     msg_size: u32,
     capacity: u32,
     name_len: u32,
-    name: [64]u8,
+    name: [64]u8,         // pushes read past cache line boundary
+    read: u32,
     _reserved: [4]u8 = .{0} ** 4,
 };
 
