@@ -111,13 +111,13 @@ pub fn write(chan: *Channel, comptime T: type, msg: *const T) void {
     const msg_size = chan.header.msg_size;
     const slot = chan.ptr + @sizeOf(Header) + chan.header.write * msg_size;
     @memcpy(slot, @as(*const [@sizeOf(T)]u8, @ptrCast(msg)));
-    chan.header.write = (chan.header.write + 1) % chan.header.capacity;
+    _ = @atomicRmw(u32, &chan.header.write, .Add, 1, .monotonic) % chan.header.capacity;
 }
 
 pub fn read(chan: *Channel, comptime T: type) *T {
     const msg_size = chan.header.msg_size;
     const slot = chan.ptr + @sizeOf(Header) + chan.header.read * msg_size;
-    chan.header.read = (chan.header.read + 1) % chan.header.capacity;
+    _ = @atomicRmw(u32, &chan.header.read, .Add, 1, .monotonic) % chan.header.capacity;
     return @ptrCast(@alignCast(slot));
 }
 
