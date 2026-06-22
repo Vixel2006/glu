@@ -16,9 +16,9 @@ pub const Subscriber = struct {
     }
 
     pub fn receive(self: *Subscriber, comptime T: type) ?*T {
-        if (self.channel.header.read < self.channel.header.write) {
-            return read(&self.channel, T);
-        }
+        const r = @atomicLoad(u32, &self.channel.header.read, .monotonic);
+        const w = @atomicLoad(u32, &self.channel.header.write, .acquire);
+        if (r < w) return read(&self.channel, T);
         return null;
     }
 };
