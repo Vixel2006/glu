@@ -25,7 +25,7 @@ fn resetPublisher() void {
 
 fn beforeSubscriber() void {
     sub_pub = Publisher.init(std.heap.page_allocator, "/glu_bench_sub", @sizeOf(TestMsg), 16384) catch unreachable;
-    sub_channel = Subscriber.init(std.heap.page_allocator, "/glu_bench_sub", @sizeOf(TestMsg)) catch unreachable;
+    sub_channel = Subscriber.init(std.heap.page_allocator, "/glu_bench_sub", @sizeOf(TestMsg), 16384) catch unreachable;
     var i: u32 = 0;
     while (i < 16384) : (i += 1) {
         sub_pub.publish(TestMsg, &.{ .x = i, .y = i + 1 });
@@ -66,7 +66,7 @@ pub fn benchNodeCreatePublisher(allocator: std.mem.Allocator) void {
 
 pub fn benchNodeCreateSubscriber(allocator: std.mem.Allocator) void {
     var n = Node.init(allocator, "bench_csub");
-    var s = n.createSubscriber(TestMsg, "/glu_bench_node_sub") catch unreachable;
+    var s = n.createSubscriber(TestMsg, "/glu_bench_node_sub", 64) catch unreachable;
     s.deinit();
     std.mem.doNotOptimizeAway(&s);
 }

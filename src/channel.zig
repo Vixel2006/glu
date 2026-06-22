@@ -8,12 +8,12 @@ pub const GLU_MAGIC = 0x474C5500;
 pub const Header = extern struct {
     magic: u32 = GLU_MAGIC,
     write: u32,
-    read: u32,
     conns: u32,
     msg_size: u32,
     capacity: u32,
     name_len: u32,
-    name: [64]u8,
+    name: [64]u8, // pushes read past cache line boundary
+    read: u32,
     _reserved: [4]u8 = .{0} ** 4,
 };
 
@@ -107,17 +107,35 @@ pub const Channel = struct {
     }
 };
 
+pub fn reserve(chan: *Channel, comptime T: type) *T {
+    while (chan.header.write -% @atomicLoad(u32, &chan.header.read, .acquire) >= chan.header.capacity) std.atomic.spinLoopHint();
+    const slot = chan.ptr + @sizeOf(Header) + (chan.header.write % chan.header.capacity) * chan.header.msg_size;
+    return @ptrCast(@alignCast(slot));
+}
+
+pub fn commit(chan: *Channel) void {
+    @atomicStore(u32, &chan.header.write, chan.header.write + 1, .release);
+}
+
+/// We are sure to have only one publisher for the channel so we can use the write chan without atomic
+/// this can make the write faster
 pub fn write(chan: *Channel, comptime T: type, msg: *const T) void {
+    defer @atomicStore(u32, &chan.header.write, chan.header.write + 1, .release);
+
+    const cap = chan.header.capacity;
+
+    // Check if the write trying to write on an un-read slot and stop it until the reader catch up
+    while (chan.header.write -% @atomicLoad(u32, &chan.header.read, .acquire) >= cap) std.atomic.spinLoopHint();
+
     const msg_size = chan.header.msg_size;
-    const slot = chan.ptr + @sizeOf(Header) + chan.header.write * msg_size;
+    const slot = chan.ptr + @sizeOf(Header) + (chan.header.write % cap) * msg_size;
     @memcpy(slot, @as(*const [@sizeOf(T)]u8, @ptrCast(msg)));
-    chan.header.write = (chan.header.write + 1) % chan.header.capacity;
 }
 
 pub fn read(chan: *Channel, comptime T: type) *T {
     const msg_size = chan.header.msg_size;
-    const slot = chan.ptr + @sizeOf(Header) + chan.header.read * msg_size;
-    chan.header.read = (chan.header.read + 1) % chan.header.capacity;
+    const idx = @atomicRmw(u32, &chan.header.read, .Add, 1, .acquire) % chan.header.capacity;
+    const slot = chan.ptr + @sizeOf(Header) + idx * msg_size;
     return @ptrCast(@alignCast(slot));
 }
 
