@@ -10,6 +10,21 @@ pub const NodeEntry = struct {
     alive: bool,
 };
 
+pub fn registerPid(name: []const u8, pid: u32) !void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+    cwd.createDirPath(io, REGISTRY_DIR) catch {};
+
+    var path_buf: [256]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, "{s}/{s}.pid", .{ REGISTRY_DIR, name });
+    var file = try cwd.createFile(io, path, .{});
+    defer file.close(io);
+
+    var fw: std.Io.File.Writer = file.writerStreaming(io, &.{});
+    const w: *std.Io.Writer = &fw.interface;
+    try w.print("{d}", .{pid});
+}
+
 pub fn register(name: []const u8) !void {
     const io = std.Io.Threaded.global_single_threaded.io();
     const cwd = std.Io.Dir.cwd();

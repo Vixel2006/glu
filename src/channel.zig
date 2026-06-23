@@ -118,16 +118,6 @@ pub fn slowestReader(readers: []const u32, write_cursor: u32) u32 {
     return min;
 }
 
-pub fn reserve(chan: *Channel, comptime T: type) *T {
-    while (chan.header.write -% slowestReader(&chan.header.read, chan.header.write) >= chan.header.capacity) std.atomic.spinLoopHint();
-    const slot = chan.ptr + @sizeOf(Header) + (chan.header.write % chan.header.capacity) * chan.header.msg_size;
-    return @ptrCast(@alignCast(slot));
-}
-
-pub fn commit(chan: *Channel) void {
-    @atomicStore(u32, &chan.header.write, chan.header.write + 1, .release);
-}
-
 /// We are sure to have only one publisher for the channel so we can use the write chan without atomic
 /// this can make the write faster
 pub fn write(chan: *Channel, comptime T: type, msg: *const T) void {
