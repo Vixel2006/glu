@@ -37,7 +37,7 @@ fn resetWrite(chan: *Channel) void {
 }
 
 fn resetRead(chan: *Channel) void {
-    chan.header.read = 0;
+    for (&chan.header.read) |*r| r.* = 0;
 }
 
 fn beforeWrite32() void {
@@ -131,7 +131,7 @@ pub fn benchChannelWrite4096(allocator: std.mem.Allocator) void {
 
 pub fn benchChannelRead32(allocator: std.mem.Allocator) void {
     _ = allocator;
-    const msg = read(&chan_read, Msg32);
+    const msg = read(&chan_read, Msg32, 0);
     std.mem.doNotOptimizeAway(msg);
 }
 

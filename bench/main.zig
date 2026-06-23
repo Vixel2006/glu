@@ -71,9 +71,6 @@ pub fn main(init: std.process.Init) !void {
     try bench.add("channel read 32B", channel.benchChannelRead32, .{ .hooks = channel.read32_hooks });
     try bench.add("publisher publish", api.benchPublisherPublish, .{ .hooks = api.publish_hooks });
     try bench.add("subscriber receive", api.benchSubscriberReceive, .{ .hooks = api.receive_hooks });
-    try bench.add("node init", api.benchNodeInit, .{});
-    try bench.add("node create publisher", api.benchNodeCreatePublisher, .{});
-    try bench.add("node create subscriber", api.benchNodeCreateSubscriber, .{});
     try bench.add("generate code", codegen.benchGenerateCode, .{});
 
     try zbench.prettyPrintHeader(io, stdout, bench.max_name_len);
