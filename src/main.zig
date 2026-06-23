@@ -4,6 +4,7 @@ const info = @import("cli/info.zig");
 const ps = @import("cli/ps.zig");
 const launch = @import("cli/launch.zig");
 const codegen = @import("cli/codegen.zig");
+const down = @import("cli/down.zig");
 
 fn printUsage() void {
     std.debug.print(
@@ -11,7 +12,7 @@ fn printUsage() void {
         \\
         \\commands:
         \\  launch   Launch nodes from a TOML config file
-        \\           glu launch -f <file.toml>
+        \\           glu launch -f <file.toml> [-d]
         \\
         \\  codegen  Generate Zig structs from a .glu message definition
         \\           glu codegen -f <file.glu> -o <path/to/gen>
@@ -24,6 +25,9 @@ fn printUsage() void {
         \\
         \\  ps       List registered nodes
         \\           glu ps
+        \\
+        \\  down     Stop all running nodes
+        \\           glu down
         \\
     , .{});
 }
@@ -47,6 +51,8 @@ pub fn main(init: std.process.Init) !void {
         info.cmdInfo(init, &args_iter);
     } else if (std.mem.eql(u8, cmd, "ps")) {
         ps.cmdPs(init);
+    } else if (std.mem.eql(u8, cmd, "down")) {
+        down.cmdDown(init);
     } else {
         printUsage();
     }

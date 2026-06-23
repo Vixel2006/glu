@@ -2,7 +2,6 @@ const std = @import("std");
 const c = @import("std").c;
 const os = @import("std").os.linux;
 
-pub const SEEK_END = 2;
 pub const GLU_MAGIC = @import("../channel.zig").GLU_MAGIC;
 pub const Header = @import("../channel.zig").Header;
 
@@ -16,12 +15,6 @@ pub fn logErr(comptime ctx: []const u8, err: anyerror) void {
 
 pub fn writer(init: std.process.Init) std.Io.File.Writer {
     return std.Io.File.stdout().writerStreaming(init.io, &.{});
-}
-
-pub fn parseFlag(args: *std.process.Args.Iterator, flag: []const u8) ?[]const u8 {
-    const f = args.next() orelse return null;
-    if (std.mem.eql(u8, f, flag)) return args.next();
-    return null;
 }
 
 pub const Topic = struct {
@@ -38,7 +31,7 @@ pub const Topic = struct {
         if (fd == -1) return error.TopicNotFound;
         errdefer _ = os.close(fd);
 
-        const file_size = @as(usize, @intCast(c.lseek(fd, 0, SEEK_END)));
+        const file_size = @as(usize, @intCast(c.lseek(fd, 0, 2)));
         if (file_size < @sizeOf(Header)) return error.InvalidTopic;
 
         const mapped = os.mmap(null, file_size, os.PROT{ .READ = true }, os.MAP{ .TYPE = .SHARED }, fd, 0);

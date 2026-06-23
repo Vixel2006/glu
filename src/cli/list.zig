@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @import("std").c;
 const utils = @import("utils.zig");
 const slowestReader = @import("../channel.zig").slowestReader;
+const MAX_READERS = @import("../channel.zig").MAX_READERS;
 
 const Entry = struct {
     name: []const u8,
@@ -48,7 +49,7 @@ fn cmdList_(init: std.process.Init) !void {
         const hdr = topic.header;
 
         const name_copy = try allocator.dupe(u8, hdr.name[0..hdr.name_len]);
-        var read_vals: [8]u32 = undefined;
+        var read_vals: [MAX_READERS]u32 = undefined;
         @memcpy(&read_vals, &hdr.read);
         try entries.append(allocator, .{
             .name = name_copy,
