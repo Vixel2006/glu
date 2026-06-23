@@ -74,6 +74,7 @@ pub const Channel = struct {
         const hdr: *Header = @ptrCast(@alignCast(ptr));
 
         if (created) {
+            hdr.magic = GLU_MAGIC;
             hdr.write = 0;
             for (&hdr.read) |*r| r.* = std.math.maxInt(u32);
             hdr.conns = 1;

@@ -2,12 +2,14 @@ const std = @import("std");
 
 pub const NodeConfig = struct {
     name: []const u8,
-    path: []const u8,
+    path: []const u8 = "",
+    bin: []const u8 = "",
     extra_cfg: []const []const u8 = &.{},
 
     fn free(self: NodeConfig, allocator: std.mem.Allocator) void {
         if (self.name.len > 0) allocator.free(self.name);
         if (self.path.len > 0) allocator.free(self.path);
+        if (self.bin.len > 0) allocator.free(self.bin);
         for (self.extra_cfg) |arg| allocator.free(arg);
         if (self.extra_cfg.len > 0) allocator.free(self.extra_cfg);
     }
@@ -166,6 +168,8 @@ pub fn parse(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) !L
                     node.name = val;
                 } else if (std.mem.eql(u8, kv.key, "path")) {
                     node.path = val;
+                } else if (std.mem.eql(u8, kv.key, "bin")) {
+                    node.bin = val;
                 }
             } else if (ch == '[') {
                 node.extra_cfg = try p.parseInlineArray(allocator);

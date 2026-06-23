@@ -33,6 +33,26 @@ pub fn unregister(name: []const u8) void {
     cwd.deleteFile(io, path) catch {};
 }
 
+pub fn registerOwnExe() void {
+    var exe_buf: [1024]u8 = undefined;
+    const len = std.os.linux.readlink("/proc/self/exe", &exe_buf, exe_buf.len);
+    if (len > 0 and len <= exe_buf.len) {
+        const path = exe_buf[0..len];
+        const exe_name = std.fs.path.basename(path);
+        register(exe_name) catch {};
+    }
+}
+
+pub fn unregisterOwnExe() void {
+    var exe_buf: [1024]u8 = undefined;
+    const len = std.os.linux.readlink("/proc/self/exe", &exe_buf, exe_buf.len);
+    if (len > 0 and len <= exe_buf.len) {
+        const path = exe_buf[0..len];
+        const exe_name = std.fs.path.basename(path);
+        unregister(exe_name);
+    }
+}
+
 pub fn listAlive(allocator: std.mem.Allocator) ![]NodeEntry {
     var entries = std.ArrayList(NodeEntry).empty;
 
