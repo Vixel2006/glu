@@ -2,21 +2,26 @@ const std = @import("std");
 const c = std.c;
 const Channel = @import("../channel.zig").Channel;
 const Header = @import("../channel.zig").Header;
+const slowestReader = @import("../channel.zig").slowestReader;
 const write = @import("../channel.zig").write;
 const read = @import("../channel.zig").read;
+const Registry = @import("../registry.zig");
 
 pub const Publisher = struct {
     channel: Channel,
 
     pub fn init(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32) !Publisher {
-        return .{ .channel = try Channel.open(allocator, name, msg_size, capacity) };
+        const p = Publisher{ .channel = try Channel.open(allocator, name, msg_size, capacity) };
+        Registry.register(name) catch {};
+        return p;
     }
 
     pub fn deinit(self: *Publisher) void {
+        Registry.unregister(self.channel.header.name[0..self.channel.header.name_len]);
         self.channel.close();
     }
     pub fn reserve(self: *Publisher, comptime T: type) *T {
-        while (self.channel.header.write -% @atomicLoad(u32, &self.channel.header.read, .acquire) >= self.channel.header.capacity)
+        while (self.channel.header.write -% slowestReader(&self.channel.header.read, self.channel.header.write) >= self.channel.header.capacity)
             std.atomic.spinLoopHint();
         const slot = self.channel.ptr + @sizeOf(Header) + (self.channel.header.write % self.channel.header.capacity) * self.channel.header.msg_size;
         return @ptrCast(@alignCast(slot));
@@ -55,7 +60,7 @@ test "Publisher: reserve and commit directly" {
         var ts = std.c.timespec{ .sec = 0, .nsec = 100_000_000 };
         _ = c.nanosleep(&ts, null);
     }
-    const msg = read(&chan, TestMsg);
+    const msg = read(&chan, TestMsg, 0);
     try std.testing.expect(msg.x == 42);
     try std.testing.expect(msg.y == 99);
     _ = c.waitpid(pid, null, 0);
@@ -81,7 +86,7 @@ test "Publisher: publish a message, read it via raw Channel" {
         var ts = std.c.timespec{ .sec = 0, .nsec = 100_000_000 };
         _ = c.nanosleep(&ts, null);
     }
-    const msg = read(&chan, TestMsg);
+    const msg = read(&chan, TestMsg, 0);
     try std.testing.expect(msg.x == 7);
     try std.testing.expect(msg.y == 13);
     _ = c.waitpid(pid, null, 0);
