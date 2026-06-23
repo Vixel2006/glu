@@ -14,12 +14,20 @@ pub fn launch(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig
     }
 
     for (cfgs) |cfg| {
-        const argv = try allocator.alloc([]const u8, 4 + cfg.extra_cfg.len);
-        argv[0] = "zig";
-        argv[1] = "run";
-        argv[2] = cfg.path;
-        argv[3] = "--";
-        for (cfg.extra_cfg, 0..) |arg, i| argv[4 + i] = arg;
+        const argv = if (cfg.bin.len > 0) blk: {
+            const args = try allocator.alloc([]const u8, 1 + cfg.extra_cfg.len);
+            args[0] = cfg.bin;
+            for (cfg.extra_cfg, 0..) |arg, i| args[1 + i] = arg;
+            break :blk args;
+        } else blk: {
+            const args = try allocator.alloc([]const u8, 4 + cfg.extra_cfg.len);
+            args[0] = "zig";
+            args[1] = "run";
+            args[2] = cfg.path;
+            args[3] = "--";
+            for (cfg.extra_cfg, 0..) |arg, i| args[4 + i] = arg;
+            break :blk args;
+        };
 
         const child = std.process.spawn(io, .{
             .argv = argv,

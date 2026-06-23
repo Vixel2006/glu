@@ -2,8 +2,8 @@ const std = @import("std");
 const c = std.c;
 const Channel = @import("../channel.zig").Channel;
 const read = @import("../channel.zig").read;
-const write = @import("../channel.zig").write;
 const Registry = @import("../registry.zig");
+const write = @import("../channel.zig").write;
 
 pub const Subscriber = struct {
     channel: Channel,
@@ -14,7 +14,7 @@ pub const Subscriber = struct {
 
         // initialize an active subscriber in the channel
         sub.channel.header.read[sub.id] = 0;
-        Registry.register(name) catch {};
+        Registry.registerOwnExe();
 
         return sub;
     }
@@ -22,7 +22,7 @@ pub const Subscriber = struct {
     pub fn deinit(self: *Subscriber) void {
         // Assign inactive subscriber read index to max u32 so it doesn't affect the slowest reader calculation
         self.channel.header.read[self.id] = std.math.maxInt(u32);
-        Registry.unregister(self.channel.header.name[0..self.channel.header.name_len]);
+        Registry.unregisterOwnExe();
         self.channel.close();
     }
 

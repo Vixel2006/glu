@@ -1,5 +1,6 @@
 const std = @import("std");
 const utils = @import("utils.zig");
+const slowestReader = @import("../channel.zig").slowestReader;
 
 pub fn cmdInfo(init: std.process.Init, args: *std.process.Args.Iterator) void {
     cmdInfo_(init, args) catch |err| utils.logErr("info", err);
@@ -31,7 +32,10 @@ fn cmdInfo_(init: std.process.Init, args: *std.process.Args.Iterator) !void {
 
     const name_slice = hdr.name[0..hdr.name_len];
     const data_size = hdr.msg_size * hdr.capacity;
-    const depth = hdr.write - hdr.read;
+    var read_vals: [8]u32 = undefined;
+    @memcpy(&read_vals, &hdr.read);
+    const slowest = slowestReader(&read_vals, hdr.write);
+    const depth = hdr.write -% slowest;
     const pct = if (hdr.capacity > 0) @as(f64, @floatFromInt(depth)) / @as(f64, @floatFromInt(hdr.capacity)) * 100.0 else 0.0;
 
     try w.print("Topic:       {s}\n", .{name_slice});
@@ -42,6 +46,6 @@ fn cmdInfo_(init: std.process.Init, args: *std.process.Args.Iterator) !void {
     try w.print("Total Size:  {d} bytes\n", .{topic.file_size});
     try w.print("Connections: {d}\n", .{hdr.conns});
     try w.print("Write Pos:   {d}\n", .{hdr.write});
-    try w.print("Read Pos:    {d}\n", .{hdr.read});
+    try w.print("Read Pos:    {d}\n", .{slowest});
     try w.print("Queue Depth: {d} ({d:.1}% full)\n", .{ depth, pct });
 }

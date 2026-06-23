@@ -4,20 +4,23 @@ const Channel = @import("../channel.zig").Channel;
 const Header = @import("../channel.zig").Header;
 const slowestReader = @import("../channel.zig").slowestReader;
 const write = @import("../channel.zig").write;
-const read = @import("../channel.zig").read;
 const Registry = @import("../registry.zig");
+const read = @import("../channel.zig").read;
 
 pub const Publisher = struct {
     channel: Channel,
 
     pub fn init(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32) !Publisher {
+        const name_z = try allocator.dupeZ(u8, name);
+        defer allocator.free(name_z);
+        _ = c.shm_unlink(name_z.ptr);
         const p = Publisher{ .channel = try Channel.open(allocator, name, msg_size, capacity) };
-        Registry.register(name) catch {};
+        Registry.registerOwnExe();
         return p;
     }
 
     pub fn deinit(self: *Publisher) void {
-        Registry.unregister(self.channel.header.name[0..self.channel.header.name_len]);
+        Registry.unregisterOwnExe();
         self.channel.close();
     }
     pub fn reserve(self: *Publisher, comptime T: type) *T {
