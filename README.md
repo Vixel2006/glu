@@ -6,8 +6,9 @@
 </p>
 
 <p align="center">
-  <b>glu</b> — blazingly fast robot middleware.<br>
-  <i>no bloat. no ROS taxes. just clean, real-time comms.</i>
+  <b>glu</b> — a blazingly fast, zero-dependency robot middleware.
+  <br>
+  <i>No bloat. No DDS taxes. Just clean, lock-free, real-time communication.</i>
 </p>
 
 <p align="center">
@@ -18,238 +19,355 @@
 </p>
 
 <p align="center">
+  <a href="#the-vision">The Vision</a> •
+  <a href="#key-features">Key Features</a> •
+  <a href="#how-it-works">How It Works</a> •
   <a href="#quickstart">Quickstart</a> •
-  <a href="#why">Why</a> •
-  <a href="#philosophy">Philosophy</a> •
+  <a href="#cli-reference">CLI Reference</a> •
+  <a href="#performance--benchmarks">Benchmarks</a> •
   <a href="#ecosystem">Ecosystem</a> •
-  <a href="#benchmarks">Benchmarks</a> •
   <a href="#contributing">Contribute</a>
 </p>
 
 ---
 
-**glu** is a next-gen communication protocol for robotics, built from scratch in Zig and CUDA. It's what happens when you ditch the corporate bloat and build exactly what a robot actually needs: fast, deterministic, peer-to-peer message passing between nodes — nothing more, nothing less.
+**glu** is a next-generation communication protocol and middleware for robotics, written from scratch in [Zig](https://ziglang.org/). It is designed to replace the corporate bloat of ROS2 with what a real-time robot actually needs: deterministic, ultra-low-latency, zero-copy message passing between local processes—nothing more, nothing less.
 
 ROS2 is the past. **glu is the glow-up.**
 
 ---
 
-## the vibe
+## The Vision
 
-| ROS2 | glu |
-|------|-----|
-| 500+ dependencies | zero runtime deps |
-| Python + C++ + launch files | one binary |
-| DDS discovery taking seconds | sub-ms discovery |
-| "just works" (it doesn't) | actually just works |
-| coorp | indie |
+The robotics community has struggled with ROS2 for years. Between massive Docker images, sluggish DDS discovery, flaky Wi-Fi multicast, and compile times that drag on forever, building robotic systems has become an exercise in managing toolchain pain.
 
-## quickstart
+`glu` is built on a simple premise: **Robotics middleware should be a protocol, not an operating system.**
 
-### 1. add glu to your project
+| Feature / Pain Point | ROS2 | glu |
+| :--- | :--- | :--- |
+| **Dependencies** | Gigabytes of runtime and build-time packages | **Zero** runtime dependencies |
+| **Binary Size** | Monolithic installation (>2GB) | Single standalone binary (~2MB) |
+| **Discovery Latency** | DDS discovery taking seconds (or failing) | **Sub-millisecond** file-based discovery |
+| **Latency / Overhead** | Heavy serialization, copy-on-write, context-switches | **Zero-copy** lock-free POSIX Shared Memory |
+| **Build System** | `colcon` + `ament` + `cmake` (sequential and slow) | Native `zig build` (fast, parallel, caching) |
+| **Version Lock-in** | ROS version strict-bound to Ubuntu versions | OS-agnostic (runs anywhere with POSIX & libc) |
+| **Embedded Support** | Hostile to microcontrollers and RTOS | Lightweight & friendly for ARM/POSIX targets |
+
+---
+
+## Key Features
+
+- **Lockless Zero-Copy IPC**: Shared memory rings using `shm_open` and `mmap` let publishers write directly to memory slots, and subscribers read directly from them—no serialization, no syscall context switches, and no copies.
+- **Slowest-Reader Protection**: Up to 8 concurrent subscribers per topic can read independently. If a subscriber runs slow, the publisher spins rather than overwriting unread slots, guaranteeing zero data loss.
+- **Sub-ms Registry & Discovery**: No heavy discovery daemon or network multicasting. Active nodes are registered deterministically under `/tmp/glu/nodes` using their PID.
+- **Custom Message DSL & Codegen**: Describe your structures in clean `.glu` files and compile them straight into native, packed Zig structs with `glu codegen`.
+- **Integrated Process Orchestrator**: Run and manage your robot nodes gracefully via `glu launch` using simple TOML configuration files.
+
+---
+
+## How It Works
+
+`glu` models communication using POSIX shared memory segments. Each topic corresponds to a unique file under `/dev/shm` acting as a ring buffer of capacity $N$.
+
+```
+                 +------------------------------------------------------+
+                 |               POSIX Shared Memory Segment            |
+                 |                     (/dev/shm/topic)                 |
+                 |                                                      |
+                 |  +--------------------+---------------------------+  |
+                 |  |       Header       |       Ring Buffer         |  |
+                 |  |                    |                           |  |
+                 |  |  Write Cursor (W)  |  +------+------+------+   |  |
++-----------+    |  |  Read Cursors:     |  |Slot 0|Slot 1|Slot 2|   |  |  +------------+
+| Publisher |--->|  |    Sub 0: R0       |  +------+------+------+   |  |->| Sub 0 (R0) |
++-----------+    |  |    Sub 1: R1       |  |  T   |  T   |  T   |   |  |  +------------+
+  [Zero-Copy]    |  |                    |  +------+------+------+   |  |    [Zero-Copy]
+  Writes via     +------------------------------------------------------+    Reads via
+  .publish() or  |  * Write blocks if (W - slowest(R0, R1) >= Capacity) |    .receive()
+  .reserve()     +------------------------------------------------------+
+```
+
+### Multi-Subscriber Ring Buffer
+The channel's memory begins with a `Header` containing metadata, the current `write` cursor, and an array of `read` cursors for up to 8 subscribers:
+- When a publisher publishes, it copies the message into `Slot = write % capacity` and increments the write cursor.
+- Subscribing processes register a subscriber ID ($0$ to $7$). When reading, they retrieve the slot matching their individual `read` index.
+- If the publisher tries to write to a slot that has not yet been processed by the slowest reader, it will perform a spin loop (`std.atomic.spinLoopHint()`) until the slot becomes free.
+
+---
+
+## Quickstart
+
+### 1. Add glu to your project
+Initialize your Zig project and add `glu` to your dependencies:
 
 ```bash
-zig fetch --save=glu https://github.com/glu-os/glu/archive/main.tar.gz
+zig fetch --save https://github.com/Vixel2006/glu/archive/main.tar.gz
 ```
 
-Then in `build.zig`:
+In your `build.zig` file, link the module to your executable:
 
 ```zig
-const glu = b.dependency("glu", .{ .target = target }).module("glu");
-my_exe.root_module.addImport("glu", glu);
+const glu = b.dependency("glu", .{
+    .target = target,
+    .optimize = optimize,
+}).module("glu");
+
+exe.root_module.addImport("glu", glu);
 ```
 
-### 2. define your messages
+### 2. Define your messages
+Write your message structures in a `.glu` file. These definitions represent packed data structures suited for direct zero-copy transmission:
 
-Create a `.glu` message definition file:
-
-```glu
-// msgs/sensor_data.glu
-message Imu {
-  timestamp: u64,
-  accel_x: f32,
-  accel_y: f32,
-  accel_z: f32,
-  gyro_x: f32,
-  gyro_y: f32,
-  gyro_z: f32,
-}
-
-message LidarScan {
-  timestamp: u64,
-  angles: [360]f32,
-  ranges: [360]f32,
+```protobuf
+// msgs/sensor.glu
+message Telemetry {
+    seq:         u32,
+    timestamp:   i64,
+    temperature: f32,
+    pressure:    f32,
+    humidity:    f32,
+    altitude:    f32,
 }
 ```
 
-Generate Zig structs from it:
+Compile the DSL representation into native Zig structs:
 
 ```bash
-glu codegen -f msgs/sensor_data.glu -o src/gen/msgs.zig
+glu codegen -f msgs/sensor.glu -o src/msgs.zig
 ```
 
-### 3. use the API
-
+This generates `src/msgs.zig`:
 ```zig
-const glu = @import("glu");
-const msgs = @import("gen/msgs.zig");
-
-// Create a node
-var node = glu.Node.init(allocator, "sensor_node");
-
-// Publish IMU data
-var pub = try node.createPublisher(msgs.Imu, "/sensor/imu", 64);
-const imu = msgs.Imu{
-    .timestamp = @intCast(std.time.milliTimestamp()),
-    .accel_x = 0.01, .accel_y = 9.81, .accel_z = 0.02,
-    .gyro_x = 0.0, .gyro_y = 0.0, .gyro_z = 0.0,
+// Auto-generated by glu codegen. Do not edit.
+pub const Telemetry = struct {
+    seq: u32,
+    timestamp: i64,
+    temperature: f32,
+    pressure: f32,
+    humidity: f32,
+    altitude: f32,
 };
-pub.publish(msgs.Imu, &imu);
+```
 
-// Subscribe to data (in another process)
-var sub = try node.createSubscriber(msgs.Imu, "/sensor/imu");
-if (sub.receive(msgs.Imu)) |msg| {
-    std.debug.print("accel: {d}, {d}, {d}\n", .{ msg.accel_x, msg.accel_y, msg.accel_z });
+### 3. Implement a Publisher
+Publishers write to a topic. You can write messages copying existing structs, or write directly into reserved shared memory slots for optimal zero-copy:
+
+```zig
+const std = @import("std");
+const glu = @import("glu");
+const msgs = @import("msgs.zig");
+
+pub fn main() !void {
+    const allocator = std.heap.page_allocator;
+    const topic = "/telemetry";
+    const capacity = 4096;
+
+    // Initialize the publisher
+    var publisher = try glu.Publisher.init(allocator, topic, @sizeOf(msgs.Telemetry), capacity);
+    defer publisher.deinit();
+
+    // Option A: Publish by copy
+    const msg = msgs.Telemetry{
+        .seq = 0,
+        .timestamp = std.time.milliTimestamp(),
+        .temperature = 24.5,
+        .pressure = 1013.25,
+        .humidity = 45.0,
+        .altitude = 120.0,
+    };
+    publisher.publish(msgs.Telemetry, &msg);
+
+    // Option B: Zero-copy direct write in shared memory (Highly Recommended!)
+    const slot = publisher.reserve(msgs.Telemetry);
+    slot.* = msgs.Telemetry{
+        .seq = 1,
+        .timestamp = std.time.milliTimestamp(),
+        .temperature = 24.6,
+        .pressure = 1013.24,
+        .humidity = 45.2,
+        .altitude = 120.1,
+    };
+    publisher.commit(); // Notify subscribers
 }
 ```
 
-### 4. launch nodes from a config
+### 4. Implement a Subscriber
+Subscribers listen to a topic. Each subscriber in a channel requires a unique ID ($0$ to $7$) so its individual read cursor can be tracked:
 
-Create a `launch.toml`:
+```zig
+const std = @import("std");
+const glu = @import("glu");
+const msgs = @import("msgs.zig");
+
+pub fn main() !void {
+    const allocator = std.heap.page_allocator;
+    const topic = "/telemetry";
+    const capacity = 4096;
+    const subscriber_id = 0; // Distinct slot (0-7) for this subscriber
+
+    var subscriber = try glu.Subscriber.init(allocator, subscriber_id, topic, @sizeOf(msgs.Telemetry), capacity);
+    defer subscriber.deinit();
+
+    std.debug.print("Subscribed to telemetry topic...\n", .{});
+
+    while (true) {
+        // Non-blocking poll for incoming data
+        if (subscriber.receive(msgs.Telemetry)) |msg| {
+            std.debug.print("Received: seq={d}, temp={d:.2}°C, alt={d:.1}m\n", .{
+                msg.seq,
+                msg.temperature,
+                msg.altitude,
+            });
+        }
+        std.time.sleep(std.time.ns_per_ms); // Poll rate control
+    }
+}
+```
+
+### 5. Launch multiple nodes
+To orchestrate your system, define a `launch.toml` configuration:
 
 ```toml
 [[node]]
-name = "sensor_driver"
-bin = "./sensor_driver"
-args = ["--rate", "100"]
+name = "sensor"
+bin  = "zig-out/bin/sensor_node"
 
 [[node]]
-name = "visualizer"
-bin = "./visualizer"
+name = "controller"
+bin  = "zig-out/bin/controller_node"
 ```
 
+Start the system with the launch tool:
 ```bash
 glu launch -f launch.toml
 ```
 
-> **prereqs:** Zig 0.16+
+---
 
-## why
+## CLI Reference
 
-The robotics community has been screaming into the void about ROS2 for years. Here's what they actually say:
-
-> *"I tried to use ROS2 twice in my professional career. Both times ended up with massively bloated build pipelines, significantly longer build times, and massively bloated Docker images."* — [HN]  
-> *"ROS2 is always one hack away from working as it should."* — [r/robotics]  
-> *"DDS discovery takes seconds. Python nodes eat your CPU above 100Hz. The build system destroys parallelism. It's a framework that thinks it's an OS."* — [Discourse]  
-> *"colcon builds packages in topological order. This is an insane way to structure a C++ build."* — [HN]  
-> *"Each ROS2 version only works with one Ubuntu version. Upgrade your Pi? All your packages break."* — [Medium]
-
-**The pattern is loud and clear:**
-
-| pain point | reality |
-|---|---|
-| **dependency hell** | `apt install` gigabytes before you spin a motor |
-| **build system** | colcon → ament → cmake → you want to die |
-| **DDS complexity** | discovery takes seconds, multicast breaks on WiFi, 200 nodes = pray |
-| **version lock-in** | Ubuntu version dictates ROS2 version dictates which packages you're allowed to use |
-| **serialization tax** | 4 CPU cores burning just to move a camera stream locally |
-| **embedded-hostile** | Raspberry Pi cries. Real-time OS? Lol. |
-| **CLI that fights you** | `source` this, `source` that, `ros2 run` can't even run a binary directly |
-
-**glu fixes all of this. With one binary. Zero deps. Sub-ms messaging.**
-
-This isn't a framework. It's a **protocol**. You get:
-- **one binary** (~2MB stripped)
-- **sub-millisecond** discovery and message passing
-- **GPU-accelerated** transforms (CUDA)
-- **a CLI** that's actually good (`glu --help` and you're already productive)
-- **zero surprises**
-
-Everything else — SLAM, planning, viz, drivers — lives in separate repos. Each does one thing well. Unix style. If it's not strictly about moving data between nodes, it doesn't belong here.
-
-## philosophy
-
-1. **do one thing.** glu moves data between processes. That's it.
-2. **no surprises.** deterministic. predictable. real-time.
-3. **eat the bloat.** every feature must prove it earns its place. default answer is "no."
-4. **CLI-first.** you should never need a GUI to understand your robot.
-5. **embedded-native.** built for ARM, runs on anything with a POSIX socket.
-
-## ecosystem
-
-glu is the core of a larger vision. Each piece will its own repo under an open-source org:
-
-| repo | what it does |
-|------|-------------|
-| **glu** (this) | the protocol + CLI |
-| glu-viz | real-time web dashboard |
-| glu-nav | path planning & SLAM |
-| glu-drivers | sensor driver toolkit |
-| glu-linux | minimal embedded Linux distro with glu baked in |
-
-*most of these don't exist yet. they will when they earn it.*
-
-## build options
+`glu` ships with a complete toolkit inside a single, fast binary.
 
 ```bash
-# minimum viable build (CPU only)
-zig build -Doptimize=ReleaseFast
+usage: glu <command> [args]
 
-# with GPU acceleration
-zig build -Doptimize=ReleaseFast -DCUDA_PATH=/usr/local/cuda
+commands:
+  launch   Launch nodes from a TOML config file
+           glu launch -f <file.toml> [-d]
 
-# debug mode with verbose logging
-zig build
+  codegen  Generate Zig structs from a .glu message definition
+           glu codegen -f <file.glu> -o <path/to/gen>
 
-# run benchmarks
-zig build bench
+  list     List active topics in shared memory
+           glu list
+
+  info     Show detailed info about a topic
+           glu info <topic>
+
+  ps       List registered nodes
+           glu ps
+
+  down     Stop all running nodes
+           glu down
 ```
 
-## benchmarks
+### Launch nodes
+```bash
+glu launch -f launch.toml
+```
+Spawns all defined nodes as child processes. Set `-d` to run them as detached background daemons.
 
-glu uses [zBench](https://github.com/hendriknielaender/zbench) for microbenchmarking. Results are logged to `.benchmarks/` with automatic history tracking and regression detection.
+### List active topics
+```bash
+glu list
+# OR
+glu ls
+```
+Discovers and lists all current active topics in shared memory.
 
+### Inspect a topic
+```bash
+glu info /telemetry
+```
+Displays detailed topic diagnostics: size, current write cursor position, connection count, message capacities, and read cursors for registered subscribers.
+
+### Show running nodes
+```bash
+glu ps
+```
+Queries the registry under `/tmp/glu/nodes` to list nodes, their system PID, and verification of their current active/alive state.
+
+### Graceful teardown
+```bash
+glu down
+```
+Sends termination signals to shut down all nodes registered in the local environment.
+
+---
+
+## Performance & Benchmarks
+
+`glu` compiles with aggressive compiler optimization and features micro-benchmarking using [zBench](https://github.com/hendriknielaender/zbench). Results are stored in `.benchmarks/` with automatic performance history.
+
+To run the suite on your machine:
 ```bash
 zig build bench
 ```
 
-Each run produces:
-- **`latest.json`** — full data with raw timings for local analysis
-- **`history/<epoch>.json`** — compact stats tracked in git for per-commit performance history
-- **comparison delta** — printed to stdout against the previous run, flagging changes >10%
+### Benchmark Results (ReleaseFast)
 
-| benchmark | time | what it measures |
-|-----------|------|------------------|
-| `topic init/commit/curr/size` | ~18ns | struct metadata ops |
-| `channel write 32B–4096B` | ~18ns | shared-memory memcpy throughput |
-| `channel read 32B` | ~18ns | shared-memory read |
-| `publisher publish` | ~18ns | high-level publish |
-| `subscriber receive` | ~18ns | high-level receive with null-check |
-| `node init` | ~18ns | node allocation |
-| `node create publisher/subscriber` | ~5µs | shm_open + mmap hot-path |
-| `generate code` | ~8µs | codegen string formatting + file write |
+Measurements are taken on an Intel Core i5 system over 100,000 iterations:
 
-*All measurements taken with `-OReleaseFast` on an Intel core i5 system with 100k iterations.*
+| Operation | Time | Target Overhead Description |
+| :--- | :--- | :--- |
+| `channel write 32B–4096B` | **~18 ns** | Zero-copy write directly to POSIX shared memory |
+| `channel read 32B` | **~18 ns** | Reading matching memory slot (Zero-copy pointer dereference) |
+| `publisher publish` | **~18 ns** | High-level publisher wrapping write action |
+| `subscriber receive` | **~18 ns** | Subscriber index alignment, check, and read |
+| `node creation` | **~5 µs** | Operating system `shm_open` and `mmap` initialization |
+| `codegen parsing` | **~8 µs** | Complete message DSL lexing, parsing, and file output |
 
-## contribute
+---
 
-This project lives on vibes and good code. If you:
-- have a robotics background and hate ROS2
-- write Zig and want to make something real
-- just want to be part of the rebellion
+## Ecosystem
 
-...open an issue, PR, or discussion. No CLA. No drama. Just code.
+The vision of `glu` is a modular, Unix-like ecosystem. Rather than a monolith, each module lives in its own repository:
+
+| Repository | Scope / Purpose | Status |
+| :--- | :--- | :--- |
+| **glu** (this) | The core protocol library, message codegen, and CLI tools | **Active (Alpha)** |
+| **glu-viz** | Web-based real-time 3D dashboard & diagnostics tool | *Planned* |
+| **glu-nav** | Real-time path planning, navigation, and SLAM module | *Planned* |
+| **glu-drivers** | Low-latency sensor drivers toolkit (Lidar, IMU, cameras) | *Planned* |
+| **glu-linux** | Minimal embedded Linux distribution with `glu` pre-configured | *Planned* |
+| **glu-cuda** | Optional CUDA plugin for in-shared-memory GPU transformations | *Planned* |
+
+---
+
+## Contributing
+
+We welcome contributions of all skill levels! The `glu` project values clean code, performance, and simplicity.
+
+### Local Development Setup
+Clone the repository and run the test suite to ensure everything builds correctly:
 
 ```bash
-git clone https://github.com/glu-os/glu
+git clone https://github.com/Vixel2006/glu
 cd glu
 zig build test
 ```
 
+### Standards
+- **Keep it Simple**: We only add features that belong in the core communication layer. If it can be a separate node, it doesn't belong in the core middleware.
+- **Run benchmarks**: Ensure your changes don't introduce performance regressions by comparing before-and-after runs using `zig build bench`.
+- **No CLA**: We keep open-source open. No complex licensing agreements, just code under the MIT license.
+
+---
+
 <p align="center">
   <sub>
-    built with ❤️ and <a href="https://ziglang.org">Zig</a> because robots deserve better.
+    Built with ❤️ and <a href="https://ziglang.org">Zig</a> because robots deserve better.
     <br>
-    <b>star the repo if you want fast robots to win.</b>
+    <b>Star the repository to help fast robots win!</b>
   </sub>
 </p>
