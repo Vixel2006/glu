@@ -9,9 +9,9 @@ here's how we're doing things:
 ## documentation map
 
 - [quickstart](../README.md#quickstart) — from zero to running your first node in 60 seconds. compiling faster than you can check twitter.
-- [api reference](file:///home/vixel/code/glu/docs/api.md) — how to use `glu.Publisher` and `glu.Subscriber` without reading a 500-page manual.
-- [architecture](file:///home/vixel/code/glu/docs/architecture.md) — under the hood. lock-free ring buffers, POSIX shared memory (`/dev/shm`), and how we keep it zero-copy.
-- [orchestration & cli](file:///home/vixel/code/glu/docs/launch.md) — orchestrating your nodes using `launch.toml` and managing them via CLI. 
+- [api reference](./api.md) — how to use `glu.Publisher` and `glu.Subscriber` without reading a 500-page manual.
+- [architecture](./architecture.md) — under the hood. lock-free ring buffers, POSIX shared memory (`/dev/shm`), and how we keep it zero-copy.
+- [orchestration & cli](./launch.md) — orchestrating your nodes using `launch.toml` and managing them via CLI. 
 
 ---
 
