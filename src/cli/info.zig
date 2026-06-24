@@ -46,7 +46,7 @@ fn cmdInfo_(init: std.process.Init, args: *std.process.Args.Iterator) !void {
     try w.print("Header:      {d} bytes (v1)\n", .{@sizeOf(utils.Header)});
     try w.print("Total Size:  {d} bytes\n", .{topic.file_size});
     try w.print("Connections: {d}\n", .{hdr.conns});
-    try w.print("Write Pos:   {d}\n", .{hdr.write});
+    try w.print("Write Pos:   {d}\n", .{hdr.write % hdr.capacity});
     try w.print("Queued:      {d} ({d:.1}% full)\n", .{ depth, pct });
     try w.print("Readers:\n", .{});
     for (&read_vals, 0..) |r, i| {
@@ -54,7 +54,7 @@ fn cmdInfo_(init: std.process.Init, args: *std.process.Args.Iterator) !void {
             try w.print("  [{d}] inactive\n", .{i});
         } else {
             const behind = hdr.write -% r;
-            try w.print("  [{d}] {d} ({d} behind)\n", .{ i, r, behind });
+            try w.print("  [{d}] {d} ({d} behind)\n", .{ i, r % hdr.capacity, behind });
         }
     }
 }

@@ -19,6 +19,7 @@
 </p>
 
 <p align="center">
+  <a href="docs/INDEX.md"><b>Documentation</b></a> •
   <a href="#the-vision">The Vision</a> •
   <a href="#key-features">Key Features</a> •
   <a href="#how-it-works">How It Works</a> •
@@ -95,13 +96,36 @@ The channel's memory begins with a `Header` containing metadata, the current `wr
 
 ---
 
+## Install the CLI
+
+To use `glu` as a global command (just type `glu` in your terminal), build it and add it to your `$PATH`:
+
+```bash
+# Build the glu binary
+zig build
+
+# Symlink into ~/.local/bin (most distros include this in $PATH by default)
+ln -sf "$(pwd)/zig-out/bin/glu" ~/.local/bin/glu
+
+# Verify it works
+glu --help
+```
+
+If `~/.local/bin` isn't on your `$PATH`, add this line to your `~/.bashrc` or `~/.zshrc` instead:
+```bash
+export PATH="$PATH:/home/vixel/code/glu/zig-out/bin"
+```
+Then run `source ~/.zshrc` (or open a new terminal).
+
+---
+
 ## Quickstart
 
 ### 1. Add glu to your project
 Initialize your Zig project and add `glu` to your dependencies:
 
 ```bash
-zig fetch --save https://github.com/Vixel2006/glu/archive/main.tar.gz
+zig fetch --save https://github.com/Vixel2006/glu/archive/refs/<enter-glu-version>.tar.gz
 ```
 
 In your `build.zig` file, link the module to your executable:
