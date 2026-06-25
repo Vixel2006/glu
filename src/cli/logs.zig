@@ -8,6 +8,35 @@ pub fn cleanupLogs(io: std.Io) void {
     cwd.deleteTree(io, LOGS_DIR) catch {};
 }
 
+fn countHeadLines(buf: []const u8, n: u64) usize {
+    var end: usize = 0;
+    var line_count: u64 = 0;
+    while (end < buf.len) : (end += 1) {
+        if (buf[end] == '\n') {
+            line_count += 1;
+            if (line_count == n) return end + 1;
+        }
+    }
+    return buf.len;
+}
+
+fn countTailLines(buf: []const u8, n: u64) usize {
+    var start: usize = 0;
+    var line_count: u64 = 0;
+    var i = buf.len;
+    if (i > 0 and buf[i - 1] == '\n') i -= 1;
+    while (i > 0) : (i -= 1) {
+        if (buf[i] == '\n') {
+            line_count += 1;
+            if (line_count == n) {
+                start = i + 1;
+                break;
+            }
+        }
+    }
+    return start;
+}
+
 pub fn cmdLogs(init: std.process.Init, args: *std.process.Args.Iterator) void {
     cmdLogs_(init, args, LOGS_DIR) catch |err| utils.logErr("info", err);
 }
@@ -19,16 +48,16 @@ pub fn cmdLogs_(init: std.process.Init, args: *std.process.Args.Iterator, logs_d
 
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--tail")) {
-            tail = 4096;
+            tail = 10;
             head = null;
             if (args.next()) |n_str| {
-                tail = std.fmt.parseInt(u64, n_str, 10) catch 4096;
+                tail = std.fmt.parseInt(u64, n_str, 10) catch 10;
             }
         } else if (std.mem.eql(u8, arg, "--head")) {
-            head = 4096;
+            head = 10;
             tail = null;
             if (args.next()) |n_str| {
-                head = std.fmt.parseInt(u64, n_str, 10) catch 4096;
+                head = std.fmt.parseInt(u64, n_str, 10) catch 10;
             }
         } else {
             node = arg;
@@ -40,7 +69,7 @@ pub fn cmdLogs_(init: std.process.Init, args: *std.process.Args.Iterator, logs_d
         return error.MissingArgument;
     };
 
-    if (tail == null and head == null) tail = 4096;
+    if (tail == null and head == null) tail = 10;
 
     const cwd = std.Io.Dir.cwd();
 
@@ -56,21 +85,23 @@ pub fn cmdLogs_(init: std.process.Init, args: *std.process.Args.Iterator, logs_d
 
             const file_len = try file.length(init.io);
 
+            const MAX_BUF: u64 = 4096;
+
             if (head) |n| {
-                const to_read = @min(n, file_len);
+                const to_read = @min(file_len, MAX_BUF);
                 if (to_read == 0) return;
-                var buf: [4096]u8 = undefined;
-                const buf_len = @min(to_read, @as(u64, buf.len));
-                _ = try file.readPositionalAll(init.io, buf[0..buf_len], 0);
-                std.debug.print("{s}\n", .{buf[0..buf_len]});
+                var buf: [MAX_BUF]u8 = undefined;
+                _ = try file.readPositionalAll(init.io, buf[0..to_read], 0);
+                const end = countHeadLines(buf[0..to_read], n);
+                if (end > 0) std.debug.print("{s}\n", .{buf[0..end]});
             } else if (tail) |n| {
-                const to_read = @min(n, file_len);
+                const to_read = @min(file_len, MAX_BUF);
                 if (to_read == 0) return;
                 const offset = file_len - to_read;
-                var buf: [4096]u8 = undefined;
-                const buf_len = @min(to_read, @as(u64, buf.len));
-                _ = try file.readPositionalAll(init.io, buf[0..buf_len], offset);
-                std.debug.print("{s}\n", .{buf[0..buf_len]});
+                var buf: [MAX_BUF]u8 = undefined;
+                _ = try file.readPositionalAll(init.io, buf[0..to_read], offset);
+                const start = countTailLines(buf[0..to_read], n);
+                if (start < to_read) std.debug.print("{s}\n", .{buf[start..to_read]});
             }
 
             return;
