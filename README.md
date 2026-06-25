@@ -291,6 +291,9 @@ commands:
   ps       List registered nodes
            glu ps
 
+  logs     View a node's log output
+           glu logs [--tail <n>] [--head <n>] <node>
+
   down     Stop all running nodes
            glu down
 ```
@@ -320,6 +323,14 @@ Displays detailed topic diagnostics: size, current write cursor position, connec
 glu ps
 ```
 Queries the registry under `/tmp/glu/nodes` to list nodes, their system PID, and verification of their current active/alive state.
+
+### View node logs
+```bash
+glu logs <node>
+glu logs --tail 50 <node>
+glu logs --head 20 <node>
+```
+Prints the last 10 lines of a node's log by default. Use `--tail <n>` to see the last N lines, or `--head <n>` to see the first N lines. Output is capped at 4096 bytes.
 
 ### Graceful teardown
 ```bash

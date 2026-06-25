@@ -17,4 +17,5 @@ comptime {
     _ = @import("registry.zig");
     _ = @import("launch/toml.zig");
     _ = @import("launch/launcher.zig");
+    _ = @import("cli/logs.zig");
 }

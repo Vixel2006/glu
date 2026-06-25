@@ -1,6 +1,7 @@
 const std = @import("std");
 const c = std.c;
 const utils = @import("utils.zig");
+const logs = @import("logs.zig");
 const Registry = @import("../registry.zig");
 
 pub fn cmdDown(init: std.process.Init) void {
@@ -35,4 +36,6 @@ fn cmdDown_(init: std.process.Init) !void {
     }
 
     try w.print("stopped {d} node(s)\n", .{stopped});
+
+    logs.cleanupLogs(init.io);
 }

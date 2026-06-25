@@ -105,7 +105,29 @@ this prints the actual structure of the POSIX shared memory header so you know e
 
 ---
 
-### 5. teardown (`glu down`)
+### 5. view node logs (`glu logs`)
+when running in detached mode (`-d`), each node's stdout and stderr are saved to `/tmp/glu/logs/<node>.log`. use `glu logs` to inspect them:
+
+```bash
+glu logs <node>
+```
+prints the last 10 lines of the node's log file (default).
+
+```bash
+glu logs --tail 50 <node>
+```
+prints the last 50 lines.
+
+```bash
+glu logs --head 20 <node>
+```
+prints the first 20 lines.
+
+output is capped at 4096 bytes per read.
+
+---
+
+### 6. teardown (`glu down`)
 if you launched nodes with `-d` (detached mode) and want to shut down your robot system, run:
 
 ```bash

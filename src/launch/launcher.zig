@@ -46,14 +46,24 @@ pub fn launch(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig
     return launched.toOwnedSlice(allocator);
 }
 
-pub fn launchDetached(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig) void {
+pub fn launchDetached(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig, logs_dir: []const u8) !void {
+    const cwd = std.Io.Dir.cwd();
+    try cwd.createDirPath(io, logs_dir);
+
     for (cfgs) |cfg| {
         const argv = buildArgv(allocator, &cfg) catch continue;
+
+        var path_buf: [256]u8 = undefined;
+        const path = try std.fmt.bufPrint(&path_buf, "{s}/{s}.log", .{ logs_dir, cfg.name });
+
+        const file = try cwd.createFile(io, path, .{ .read = true });
+        defer file.close(io);
+
         const child = std.process.spawn(io, .{
             .argv = argv,
-            .stdout = .ignore,
+            .stdout = .{ .file = file },
             .stdin = .ignore,
-            .stderr = .ignore,
+            .stderr = .{ .file = file },
         }) catch |err| {
             allocator.free(argv);
             std.debug.print("error spawning '{s}': {s}\n", .{ cfg.name, @errorName(err) });
@@ -126,4 +136,56 @@ test "launch with extra arguments" {
 
     const term = try launched[0].child.wait(io);
     try std.testing.expectEqual(term, std.process.Child.Term{ .exited = 0 });
+}
+
+test "launchDetached: creates log directory" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var dir = std.testing.tmpDir(.{});
+    defer dir.cleanup();
+
+    const logs_dir = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/logs_test", .{&dir.sub_path});
+    defer allocator.free(logs_dir);
+
+    try launchDetached(io, allocator, &.{}, logs_dir);
+
+    const cwd = std.Io.Dir.cwd();
+    var opened = try cwd.openDir(io, logs_dir, .{ .iterate = true });
+    opened.close(io);
+}
+
+test "launchDetached: creates log file with process output" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var dir = std.testing.tmpDir(.{});
+    defer dir.cleanup();
+
+    const logs_dir = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/logs_output", .{&dir.sub_path});
+    defer allocator.free(logs_dir);
+
+    const cfgs = &[_]NodeConfig{
+        .{ .name = "echo_node", .bin = "/bin/echo", .extra_cfg = &.{"hello from detached"} },
+    };
+
+    try launchDetached(io, allocator, cfgs, logs_dir);
+
+    try std.Io.sleep(io, std.Io.Duration.fromMilliseconds(50), .awake);
+
+    const cwd = std.Io.Dir.cwd();
+    var path_buf: [256]u8 = undefined;
+    const log_path = try std.fmt.bufPrint(&path_buf, "{s}/{s}.log", .{ logs_dir, "echo_node" });
+
+    var file = try cwd.openFile(io, log_path, .{});
+    defer file.close(io);
+
+    var buf: [4096]u8 = undefined;
+    var reader = file.reader(io, &buf);
+    var ri = &reader.interface;
+    var read_buf: [4096]u8 = undefined;
+    const n = try ri.readSliceShort(&read_buf);
+
+    try std.testing.expect(n > 0);
+    try std.testing.expect(std.mem.indexOf(u8, read_buf[0..n], "hello from detached") != null);
 }
