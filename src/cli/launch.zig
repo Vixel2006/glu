@@ -2,6 +2,7 @@ const std = @import("std");
 const c = std.c;
 const os = std.os.linux;
 const utils = @import("utils.zig");
+const logs = @import("logs.zig");
 const launch_mod = @import("../launch/launcher.zig");
 const toml = @import("../launch/toml.zig");
 const Registry = @import("../registry.zig");
@@ -48,6 +49,7 @@ fn handleSigint(_: os.SIG) callconv(.c) void {
         Registry.unregister(n.name);
     }
     cleanupShm();
+    logs.cleanupLogs(launch_io);
     std.process.exit(1);
 }
 
@@ -79,7 +81,7 @@ fn cmdLaunch_(init: std.process.Init, args: *std.process.Args.Iterator) !void {
     defer config.deinit(init.gpa);
 
     if (detach) {
-        launch_mod.launchDetached(init.io, init.gpa, config.nodes);
+        try launch_mod.launchDetached(init.io, init.gpa, config.nodes, "/tmp/glu/logs");
         std.debug.print("launched {d} node(s) in background\n", .{config.nodes.len});
         return;
     }
@@ -104,9 +106,11 @@ fn cmdLaunch_(init: std.process.Init, args: *std.process.Args.Iterator) !void {
         switch (term) {
             .exited => |code| std.debug.print("node '{s}' exited with code {d}\n", .{ n.name, code }),
             .signal => |sig| std.debug.print("node '{s}' killed by signal {}\n", .{ n.name, sig }),
-            else => std.debug.print("node '{s}' terminated unexpectedly\n", .{ n.name }),
+            else => std.debug.print("node '{s}' terminated unexpectedly\n", .{n.name}),
         }
     }
+
+    logs.cleanupLogs(init.io);
 
     init.gpa.free(launched_children);
     launched_children = &.{};
