@@ -2,6 +2,7 @@ const std = @import("std");
 const NodeConfig = @import("toml.zig").NodeConfig;
 const Registry = @import("../registry.zig");
 
+/// A process that was spawned by the launcher.
 pub const LaunchedNode = struct {
     name: []const u8,
     child: std.process.Child,
@@ -24,6 +25,11 @@ fn buildArgv(allocator: std.mem.Allocator, cfg: *const NodeConfig) ![]const []co
     return args;
 }
 
+/// Launch nodes as foreground processes.
+///
+/// Each node is spawned with stdin/stdout/stderr inherited.
+/// Returns an owned slice of handles that the caller can wait on.
+/// On error, all previously-launched children are killed.
 pub fn launch(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig) ![]LaunchedNode {
     var launched = try std.ArrayListAligned(LaunchedNode, null).initCapacity(allocator, cfgs.len);
     errdefer {
@@ -46,6 +52,10 @@ pub fn launch(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig
     return launched.toOwnedSlice(allocator);
 }
 
+/// Launch nodes as detached background processes.
+///
+/// Each node's stdout/stderr is redirected to a log file in `logs_dir`.
+/// Nodes are registered in the registry for lifecycle management.
 pub fn launchDetached(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig, logs_dir: []const u8) !void {
     const cwd = std.Io.Dir.cwd();
     try cwd.createDirPath(io, logs_dir);

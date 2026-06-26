@@ -112,6 +112,11 @@ fn parseMessageText(allocator: std.mem.Allocator, text: []const u8) !Msg {
     };
 }
 
+/// Parse a `.glu` message definition file into an array of `Msg`.
+///
+/// The file is read incrementally into a fixed buffer. Messages are
+/// delimited by `message <name> { ... }` blocks. Supports multiple
+/// messages per file.
 pub fn parse(init: std.process.Init, fp: []const u8) ![]Msg {
     const cwd = std.Io.Dir.cwd();
     var file = try cwd.openFile(init.io, fp, .{});

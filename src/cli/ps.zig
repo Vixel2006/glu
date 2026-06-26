@@ -2,6 +2,7 @@ const std = @import("std");
 const utils = @import("utils.zig");
 const Registry = @import("../registry.zig");
 
+/// List registered glu nodes (`glu ps`).
 pub fn cmdPs(init: std.process.Init) void {
     cmdPs_(init) catch |err| utils.logErr("ps", err);
 }

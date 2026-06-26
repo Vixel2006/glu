@@ -3,6 +3,7 @@ const utils = @import("utils.zig");
 const parser = @import("../codegen/parser.zig");
 const generate = @import("../codegen/generator.zig").generate;
 
+/// Generate Zig structs from a .glu message definition (`glu codegen -f <file> -o <dir>`).
 pub fn cmdCodegen(init: std.process.Init, args: *std.process.Args.Iterator) void {
     cmdCodegen_(init, args) catch |err| utils.logErr("codegen", err);
 }

@@ -3,9 +3,15 @@ const c = @import("std").c;
 const os = @import("std").os.linux;
 const SEEK_END = 2;
 
+/// Magic number used to identify glu shared memory segments (`0x474C5500` = "GLU\0").
 pub const GLU_MAGIC = 0x474C5500;
+/// Maximum number of concurrent readers (subscribers) per channel.
 pub const MAX_READERS = 8;
 
+/// Layout of the shared memory header at the start of every channel.
+///
+/// The `name` field is padded to 64 bytes to push the `read` array past
+/// the first cache line, reducing false sharing between writer and readers.
 pub const Header = extern struct {
     magic: u32 = GLU_MAGIC,
     write: u32,
@@ -13,7 +19,7 @@ pub const Header = extern struct {
     msg_size: u32,
     capacity: u32,
     name_len: u32,
-    name: [64]u8, // pushes read past cache line boundary
+    name: [64]u8,
     read: [MAX_READERS]u32,
 };
 
@@ -21,12 +27,22 @@ comptime {
     std.debug.assert(@sizeOf(Header) == 120);
 }
 
+/// A POSIX shared-memory channel backed by `shm_open` + `mmap`.
+///
+/// Multiple processes can open the same named channel. The first opener
+/// creates and initialises the segment; subsequent openers attach to it
+/// and increment a reference counter. The last `close` unlinks the shm.
 pub const Channel = struct {
     fd: i32,
     ptr: [*]u8,
     header: *Header,
     size: usize,
 
+    /// Open (or attach to) a named shared memory channel.
+    ///
+    /// The first call with a given `name` creates the segment and
+    /// initialises the header. Subsequent calls attach to the existing
+    /// segment and bump the connection counter.
     pub fn open(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32) !Channel {
         const name_z = try allocator.dupeZ(u8, name);
         defer allocator.free(name_z);
@@ -91,6 +107,10 @@ pub const Channel = struct {
         return .{ .fd = fd, .ptr = ptr, .header = hdr, .size = map_size };
     }
 
+    /// Close this channel handle and unmap the shared memory.
+    ///
+    /// The underlying POSIX shm is unlinked only when the last connection
+    /// is closed (reference counting via `conns`).
     pub fn close(self: *Channel) void {
         const prev = @atomicRmw(u32, &self.header.conns, .Sub, 1, .monotonic);
 
@@ -108,6 +128,11 @@ pub const Channel = struct {
     }
 };
 
+/// Returns the slowest (smallest) active read cursor.
+///
+/// Inactive readers (those with `maxInt(u32)`) are skipped so they don't
+/// block the writer. If no readers are active the write cursor itself is
+/// returned, meaning the writer will never be held back.
 pub fn slowestReader(readers: []const u32, write_cursor: u32) u32 {
     var min = write_cursor;
     for (readers) |reader| {
@@ -118,21 +143,30 @@ pub fn slowestReader(readers: []const u32, write_cursor: u32) u32 {
     return min;
 }
 
-/// We are sure to have only one publisher for the channel so we can use the write chan without atomic
-/// this can make the write faster
+/// Write a message into the ring buffer.
+///
+/// We are sure to have only one publisher for the channel so we can use
+/// the write cursor without atomics, making the fast path cheaper.
+/// Blocks with a spin-loop if the buffer is full (slowest-reader
+/// backpressure).
 pub fn write(chan: *Channel, comptime T: type, msg: *const T) void {
-    defer @atomicStore(u32, &chan.header.write, chan.header.write + 1, .release);
+    defer chan.header.write += 1;
 
     const cap = chan.header.capacity;
 
-    // Check if the write trying to write on an un-read slot and stop it until the reader catch up
-    while (chan.header.write -% slowestReader(&chan.header.read, chan.header.write) >= cap) std.atomic.spinLoopHint();
+    while (chan.header.write -% slowestReader(&chan.header.read, chan.header.write) >= cap)
+        std.atomic.spinLoopHint();
 
     const msg_size = chan.header.msg_size;
     const slot = chan.ptr + @sizeOf(Header) + (chan.header.write % cap) * msg_size;
     @memcpy(slot, @as(*const [@sizeOf(T)]u8, @ptrCast(msg)));
 }
 
+/// Advance the read cursor for `sub_id` and return a pointer to the slot.
+///
+/// Each subscriber owns one slot in the `read` array and their cursor
+/// is advanced atomically. Slots are reused once all subscribers have
+/// read or dropped them.
 pub fn read(chan: *Channel, comptime T: type, sub_id: u32) *T {
     const msg_size = chan.header.msg_size;
     const idx = @atomicRmw(u32, &chan.header.read[sub_id], .Add, 1, .acquire) % chan.header.capacity;

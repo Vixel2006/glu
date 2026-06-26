@@ -4,12 +4,17 @@ const os = std.os.linux;
 
 const REGISTRY_DIR = "/tmp/glu/nodes";
 
+/// A discovered node with its PID and health status.
 pub const NodeEntry = struct {
     name: []const u8,
     pid: u32,
     alive: bool,
 };
 
+/// Register a node by name with an explicit PID.
+///
+/// Writes a `.pid` file under `/tmp/glu/nodes/` so other processes can
+/// discover the node via `listAlive`.
 pub fn registerPid(name: []const u8, pid: u32) !void {
     const io = std.Io.Threaded.global_single_threaded.io();
     const cwd = std.Io.Dir.cwd();
@@ -25,6 +30,7 @@ pub fn registerPid(name: []const u8, pid: u32) !void {
     try w.print("{d}", .{pid});
 }
 
+/// Register the current process under `name`.
 pub fn register(name: []const u8) !void {
     const io = std.Io.Threaded.global_single_threaded.io();
     const cwd = std.Io.Dir.cwd();
@@ -48,6 +54,10 @@ pub fn unregister(name: []const u8) void {
     cwd.deleteFile(io, path) catch {};
 }
 
+/// Register the current process using its executable name (from `/proc/self/exe`).
+///
+/// This is a convenience for nodes that want to self-register without
+/// having to know their own name.
 pub fn registerOwnExe() void {
     var exe_buf: [1024]u8 = undefined;
     const len = std.os.linux.readlink("/proc/self/exe", &exe_buf, exe_buf.len);
@@ -68,6 +78,11 @@ pub fn unregisterOwnExe() void {
     }
 }
 
+/// List all registered nodes and their health status.
+///
+/// Scans `/tmp/glu/nodes/*.pid` files, reads each PID, and checks
+/// `/proc/<pid>/status` to determine if the process is still alive.
+/// Returns an owned slice allocated with `allocator`.
 pub fn listAlive(allocator: std.mem.Allocator) ![]NodeEntry {
     var entries = std.ArrayList(NodeEntry).empty;
 

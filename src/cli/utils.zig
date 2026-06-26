@@ -17,12 +17,19 @@ pub fn writer(init: std.process.Init) std.Io.File.Writer {
     return std.Io.File.stdout().writerStreaming(init.io, &.{});
 }
 
+/// A read-only handle to an existing shared memory topic.
+///
+/// Used by CLI commands (`list`, `info`) to inspect live channels
+/// without participating as a publisher or subscriber.
 pub const Topic = struct {
     fd: i32,
     mapped: usize,
     header: *align(1) Header,
     file_size: usize,
 
+    /// Open an existing topic for read-only inspection.
+    ///
+    /// Validates the magic number to ensure it's a glu channel.
     pub fn open(allocator: std.mem.Allocator, name: []const u8) !Topic {
         const name_z = try allocator.dupeZ(u8, name);
         defer allocator.free(name_z);

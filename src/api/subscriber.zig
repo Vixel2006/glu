@@ -5,27 +5,42 @@ const read = @import("../channel.zig").read;
 const Registry = @import("../registry.zig");
 const write = @import("../channel.zig").write;
 
+/// High-level subscriber wrapping a raw `Channel`.
+///
+/// Each subscriber occupies one slot in the channel's reader array
+/// (0 .. MAX_READERS-1). Multiple subscribers can attach to the
+/// same topic independently.
 pub const Subscriber = struct {
     channel: Channel,
     id: u32,
 
+    /// Create a new subscriber for topic `name` with the given reader `id`.
+    ///
+    /// The `id` must be unique per channel and < MAX_READERS.
+    /// Initialises the reader cursor to 0 (active) and self-registers.
     pub fn init(allocator: std.mem.Allocator, id: u32, name: []const u8, msg_size: u32, capacity: u32) !Subscriber {
         const sub: Subscriber = .{ .id = id, .channel = try Channel.open(allocator, name, msg_size, capacity) };
 
-        // initialize an active subscriber in the channel
         sub.channel.header.read[sub.id] = 0;
         Registry.registerOwnExe();
 
         return sub;
     }
 
+    /// Close this subscriber and mark its reader slot as inactive.
+    ///
+    /// Setting the read cursor to `maxInt(u32)` removes it from the
+    /// slowest-reader calculation so the publisher won't wait for us.
     pub fn deinit(self: *Subscriber) void {
-        // Assign inactive subscriber read index to max u32 so it doesn't affect the slowest reader calculation
         self.channel.header.read[self.id] = std.math.maxInt(u32);
         Registry.unregisterOwnExe();
         self.channel.close();
     }
 
+    /// Try to read the next message, returning `null` if none available.
+    ///
+    /// Non-blocking: compares the local read cursor against the global
+    /// write cursor and only advances when new data exists.
     pub fn receive(self: *Subscriber, comptime T: type) ?*T {
         const r = @atomicLoad(u32, &self.channel.header.read[self.id], .monotonic);
         const w = @atomicLoad(u32, &self.channel.header.write, .acquire);

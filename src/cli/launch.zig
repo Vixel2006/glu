@@ -53,6 +53,7 @@ fn handleSigint(_: os.SIG) callconv(.c) void {
     std.process.exit(1);
 }
 
+/// Launch nodes from a TOML config (`glu launch -f <file> [-d]`).
 pub fn cmdLaunch(init: std.process.Init, args: *std.process.Args.Iterator) void {
     cmdLaunch_(init, args) catch |err| utils.logErr("launch", err);
 }

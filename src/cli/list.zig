@@ -13,6 +13,7 @@ const Entry = struct {
     read_pos: u32,
 };
 
+/// List all active glu topics in shared memory (`glu list` / `glu ls`).
 pub fn cmdList(init: std.process.Init) void {
     cmdList_(init) catch |err| utils.logErr("list", err);
 }

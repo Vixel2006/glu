@@ -7,9 +7,17 @@ const write = @import("../channel.zig").write;
 const Registry = @import("../registry.zig");
 const read = @import("../channel.zig").read;
 
+/// High-level publisher wrapping a raw `Channel`.
+///
+/// Each topic can have at most one publisher. The publisher owns the
+/// shared memory segment (creates it on `init`, unlinks on `deinit`).
 pub const Publisher = struct {
     channel: Channel,
 
+    /// Create a new publisher for topic `name`.
+    ///
+    /// Shm-unlinks any stale segment first, then creates a fresh channel.
+    /// Self-registers the process in the node registry.
     pub fn init(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32) !Publisher {
         const name_z = try allocator.dupeZ(u8, name);
         defer allocator.free(name_z);
@@ -23,6 +31,12 @@ pub const Publisher = struct {
         Registry.unregisterOwnExe();
         self.channel.close();
     }
+
+    /// Reserve a slot in the ring buffer for writing.
+    ///
+    /// This is the first half of the two-phase publish pattern.
+    /// Fill the returned pointer then call `commit` to make the
+    /// message visible to subscribers. Blocks if the buffer is full.
     pub fn reserve(self: *Publisher, comptime T: type) *T {
         while (self.channel.header.write -% slowestReader(&self.channel.header.read, self.channel.header.write) >= self.channel.header.capacity)
             std.atomic.spinLoopHint();
@@ -30,10 +44,15 @@ pub const Publisher = struct {
         return @ptrCast(@alignCast(slot));
     }
 
+    /// Commit a reserved slot, making it visible to subscribers.
+    ///
+    /// Must be paired with a prior `reserve` call. Advances the write
+    /// cursor with a release store so readers see the written data.
     pub fn commit(self: *Publisher) void {
         @atomicStore(u32, &self.channel.header.write, self.channel.header.write + 1, .release);
     }
 
+    /// Convenience: write a message in one shot (reserve + copy + commit).
     pub fn publish(self: *Publisher, comptime T: type, msg: *const T) void {
         write(&self.channel, T, msg);
     }

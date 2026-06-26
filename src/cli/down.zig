@@ -4,6 +4,7 @@ const utils = @import("utils.zig");
 const logs = @import("logs.zig");
 const Registry = @import("../registry.zig");
 
+/// Stop all registered nodes (`glu down`).
 pub fn cmdDown(init: std.process.Init) void {
     cmdDown_(init) catch |err| utils.logErr("down", err);
 }

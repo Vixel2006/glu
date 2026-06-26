@@ -116,6 +116,10 @@ const Parser = struct {
     }
 };
 
+/// Parse a TOML launch configuration file into a `LaunchConfig`.
+///
+/// Supports `[[node]]` array-of-tables with `name`, `path`, `bin`,
+/// and `extra_cfg` keys. Comments (`#`) and blank lines are ignored.
 pub fn parse(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) !LaunchConfig {
     const cwd = std.Io.Dir.cwd();
     const file = try cwd.openFile(io, file_path, .{});

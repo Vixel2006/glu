@@ -3,6 +3,7 @@ const parser = @import("parser.zig");
 const Msg = parser.Msg;
 const Field = parser.Field;
 
+/// Generate Zig struct definitions from parsed glu messages and write to `out_path`.
 pub fn generate(allocator: std.mem.Allocator, init: std.process.Init, msgs: []const Msg, out_path: []const u8) !void {
     const cwd = std.Io.Dir.cwd();
 

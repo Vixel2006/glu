@@ -25,7 +25,8 @@ fn countTailLines(buf: []const u8, n: u64) usize {
     var line_count: u64 = 0;
     var i = buf.len;
     if (i > 0 and buf[i - 1] == '\n') i -= 1;
-    while (i > 0) : (i -= 1) {
+    while (i > 0) {
+        i -= 1;
         if (buf[i] == '\n') {
             line_count += 1;
             if (line_count == n) {
@@ -37,6 +38,7 @@ fn countTailLines(buf: []const u8, n: u64) usize {
     return start;
 }
 
+/// Print logs for a node (`glu logs [--tail <n>] [--head <n>] <node>`).
 pub fn cmdLogs(init: std.process.Init, args: *std.process.Args.Iterator) void {
     cmdLogs_(init, args, LOGS_DIR) catch |err| utils.logErr("info", err);
 }
