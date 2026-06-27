@@ -5,8 +5,19 @@ const os = @import("std").os.linux;
 pub const GLU_MAGIC = @import("../channel.zig").GLU_MAGIC;
 pub const Header = @import("../channel.zig").Header;
 
+const TopicErr = error{
+    OutOfMemory,
+    TopicNotFound,
+    InvalidTopic,
+    MmapFailed,
+    BadMagic,
+};
+
 pub fn logErr(comptime ctx: []const u8, err: anyerror) void {
-    std.debug.print("error: {s}: {s}\n", .{ ctx, @errorName(err) });
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var fw = std.Io.File.stderr().writerStreaming(io, &.{});
+    const w = &fw.interface;
+    w.print("error: {s}: {s}\n", .{ ctx, @errorName(err) }) catch {};
     if (@errorReturnTrace()) |trace| {
         const cast: *const std.debug.StackTrace = @ptrCast(trace);
         std.debug.dumpStackTrace(cast);
@@ -15,6 +26,10 @@ pub fn logErr(comptime ctx: []const u8, err: anyerror) void {
 
 pub fn writer(init: std.process.Init) std.Io.File.Writer {
     return std.Io.File.stdout().writerStreaming(init.io, &.{});
+}
+
+pub fn errWriter(init: std.process.Init) std.Io.File.Writer {
+    return std.Io.File.stderr().writerStreaming(init.io, &.{});
 }
 
 /// A read-only handle to an existing shared memory topic.
@@ -30,7 +45,7 @@ pub const Topic = struct {
     /// Open an existing topic for read-only inspection.
     ///
     /// Validates the magic number to ensure it's a glu channel.
-    pub fn open(allocator: std.mem.Allocator, name: []const u8) !Topic {
+    pub fn open(allocator: std.mem.Allocator, name: []const u8) TopicErr!Topic {
         const name_z = try allocator.dupeZ(u8, name);
         defer allocator.free(name_z);
 

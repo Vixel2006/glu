@@ -16,11 +16,13 @@ fn nextFlag(args: *std.process.Args.Iterator, flag: []const u8) ?[]const u8 {
 
 fn cmdCodegen_(init: std.process.Init, args: *std.process.Args.Iterator) !void {
     const file = nextFlag(args, "-f") orelse {
-        std.debug.print("usage: glu codegen -f <file.glu> -o </path/to/gen>\n", .{});
+        var ew = utils.errWriter(init);
+        ew.interface.print("usage: glu codegen -f <file.glu> -o </path/to/gen>\n", .{}) catch {};
         return error.MissingArgument;
     };
     const out_dir = nextFlag(args, "-o") orelse {
-        std.debug.print("usage: glu codegen -f <file.glu> -o </path/to/gen>\n", .{});
+        var ew = utils.errWriter(init);
+        ew.interface.print("usage: glu codegen -f <file.glu> -o </path/to/gen>\n", .{}) catch {};
         return error.MissingArgument;
     };
 

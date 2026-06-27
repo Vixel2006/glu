@@ -2,6 +2,12 @@ const std = @import("std");
 const c = @import("std").c;
 const os = std.os.linux;
 
+const RegistryErr = error{
+    OutOfMemory,
+    NoSpaceLeft,
+    FileSystem,
+};
+
 const REGISTRY_DIR = "/tmp/glu/nodes";
 
 /// A discovered node with its PID and health status.
@@ -15,35 +21,35 @@ pub const NodeEntry = struct {
 ///
 /// Writes a `.pid` file under `/tmp/glu/nodes/` so other processes can
 /// discover the node via `listAlive`.
-pub fn registerPid(name: []const u8, pid: u32) !void {
+pub fn registerPid(name: []const u8, pid: u32) RegistryErr!void {
     const io = std.Io.Threaded.global_single_threaded.io();
     const cwd = std.Io.Dir.cwd();
     cwd.createDirPath(io, REGISTRY_DIR) catch {};
 
     var path_buf: [256]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "{s}/{s}.pid", .{ REGISTRY_DIR, name });
-    var file = try cwd.createFile(io, path, .{});
+    var file = cwd.createFile(io, path, .{}) catch return RegistryErr.FileSystem;
     defer file.close(io);
 
     var fw: std.Io.File.Writer = file.writerStreaming(io, &.{});
     const w: *std.Io.Writer = &fw.interface;
-    try w.print("{d}", .{pid});
+    w.print("{d}", .{pid}) catch return RegistryErr.FileSystem;
 }
 
 /// Register the current process under `name`.
-pub fn register(name: []const u8) !void {
+pub fn register(name: []const u8) RegistryErr!void {
     const io = std.Io.Threaded.global_single_threaded.io();
     const cwd = std.Io.Dir.cwd();
     cwd.createDirPath(io, REGISTRY_DIR) catch {};
 
     var path_buf: [256]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "{s}/{s}.pid", .{ REGISTRY_DIR, name });
-    var file = try cwd.createFile(io, path, .{});
+    var file = cwd.createFile(io, path, .{}) catch return RegistryErr.FileSystem;
     defer file.close(io);
 
     var fw: std.Io.File.Writer = file.writerStreaming(io, &.{});
     const w: *std.Io.Writer = &fw.interface;
-    try w.print("{d}", .{os.getpid()});
+    w.print("{d}", .{os.getpid()}) catch return RegistryErr.FileSystem;
 }
 
 pub fn unregister(name: []const u8) void {
@@ -83,7 +89,7 @@ pub fn unregisterOwnExe() void {
 /// Scans `/tmp/glu/nodes/*.pid` files, reads each PID, and checks
 /// `/proc/<pid>/status` to determine if the process is still alive.
 /// Returns an owned slice allocated with `allocator`.
-pub fn listAlive(allocator: std.mem.Allocator) ![]NodeEntry {
+pub fn listAlive(allocator: std.mem.Allocator) RegistryErr![]NodeEntry {
     var entries = std.ArrayList(NodeEntry).empty;
 
     const dirp = c.opendir(REGISTRY_DIR) orelse return entries.toOwnedSlice(allocator);

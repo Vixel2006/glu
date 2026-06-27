@@ -67,7 +67,8 @@ pub fn cmdLogs_(init: std.process.Init, args: *std.process.Args.Iterator, logs_d
     }
 
     const node_name = node orelse {
-        std.debug.print("usage: glu logs [--tail <n>] [--head <n>] <node>\n", .{});
+        var ew = utils.errWriter(init);
+        ew.interface.print("usage: glu logs [--tail <n>] [--head <n>] <node>\n", .{}) catch {};
         return error.MissingArgument;
     };
 
@@ -95,7 +96,10 @@ pub fn cmdLogs_(init: std.process.Init, args: *std.process.Args.Iterator, logs_d
                 var buf: [MAX_BUF]u8 = undefined;
                 _ = try file.readPositionalAll(init.io, buf[0..to_read], 0);
                 const end = countHeadLines(buf[0..to_read], n);
-                if (end > 0) std.debug.print("{s}\n", .{buf[0..end]});
+                if (end > 0) {
+                    var ew = utils.errWriter(init);
+                    ew.interface.print("{s}\n", .{buf[0..end]}) catch {};
+                }
             } else if (tail) |n| {
                 const to_read = @min(file_len, MAX_BUF);
                 if (to_read == 0) return;
@@ -103,7 +107,10 @@ pub fn cmdLogs_(init: std.process.Init, args: *std.process.Args.Iterator, logs_d
                 var buf: [MAX_BUF]u8 = undefined;
                 _ = try file.readPositionalAll(init.io, buf[0..to_read], offset);
                 const start = countTailLines(buf[0..to_read], n);
-                if (start < to_read) std.debug.print("{s}\n", .{buf[start..to_read]});
+                if (start < to_read) {
+                    var ew = utils.errWriter(init);
+                    ew.interface.print("{s}\n", .{buf[start..to_read]}) catch {};
+                }
             }
 
             return;

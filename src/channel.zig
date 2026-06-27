@@ -3,6 +3,12 @@ const c = @import("std").c;
 const os = @import("std").os.linux;
 const SEEK_END = 2;
 
+const ShmErr = error{
+    OutOfMemory,
+    ShmOpenFailed,
+    MmapFailed
+};
+
 /// Magic number used to identify glu shared memory segments (`0x474C5500` = "GLU\0").
 pub const GLU_MAGIC = 0x474C5500;
 /// Maximum number of concurrent readers (subscribers) per channel.
@@ -43,7 +49,7 @@ pub const Channel = struct {
     /// The first call with a given `name` creates the segment and
     /// initialises the header. Subsequent calls attach to the existing
     /// segment and bump the connection counter.
-    pub fn open(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32) !Channel {
+    pub fn open(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32) ShmErr!Channel {
         const name_z = try allocator.dupeZ(u8, name);
         defer allocator.free(name_z);
 
@@ -60,7 +66,7 @@ pub const Channel = struct {
             created = false;
         }
 
-        if (fd == -1) return error.ShmOpenFailed;
+        if (fd == -1) return ShmErr.ShmOpenFailed;
 
         const data_size = msg_size * capacity;
         const total_size: usize = data_size + @sizeOf(Header);
@@ -84,7 +90,7 @@ pub const Channel = struct {
             0,
         );
 
-        if (mapped == ~@as(usize, 0)) return error.MmapFailed;
+        if (mapped == ~@as(usize, 0)) return ShmErr.MmapFailed;
 
         const ptr: [*]u8 = @ptrFromInt(mapped);
         const hdr: *Header = @ptrCast(@alignCast(ptr));

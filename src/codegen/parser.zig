@@ -1,5 +1,12 @@
 const std = @import("std");
 
+const ParseErr = error{
+    OutOfMemory,
+    FileSystem,
+    InvalidMessage,
+    MessageTooLarge,
+};
+
 pub const Field = struct {
     name: []const u8,
     type_: []const u8,
@@ -44,13 +51,13 @@ fn findClosingBrace(text: []const u8, start: usize) ?usize {
     return null;
 }
 
-fn dupStr(allocator: std.mem.Allocator, s: []const u8) ![]u8 {
+fn dupStr(allocator: std.mem.Allocator, s: []const u8) ParseErr![]u8 {
     const result = try allocator.alloc(u8, s.len);
     @memcpy(result, s);
     return result;
 }
 
-fn parseMessageText(allocator: std.mem.Allocator, text: []const u8) !Msg {
+fn parseMessageText(allocator: std.mem.Allocator, text: []const u8) ParseErr!Msg {
     var pos: usize = 7;
     pos = skipWhitespace(text, pos);
 
@@ -117,9 +124,9 @@ fn parseMessageText(allocator: std.mem.Allocator, text: []const u8) !Msg {
 /// The file is read incrementally into a fixed buffer. Messages are
 /// delimited by `message <name> { ... }` blocks. Supports multiple
 /// messages per file.
-pub fn parse(init: std.process.Init, fp: []const u8) ![]Msg {
+pub fn parse(init: std.process.Init, fp: []const u8) ParseErr![]Msg {
     const cwd = std.Io.Dir.cwd();
-    var file = try cwd.openFile(init.io, fp, .{});
+    var file = cwd.openFile(init.io, fp, .{}) catch return ParseErr.FileSystem;
     defer file.close(init.io);
 
     var messages = std.ArrayListAligned(Msg, null).empty;
@@ -141,7 +148,7 @@ pub fn parse(init: std.process.Init, fp: []const u8) ![]Msg {
 
     while (true) {
         if (end < buf.len) {
-            const n = try file.readPositionalAll(init.io, buf[end..], file_offset);
+            const n = file.readPositionalAll(init.io, buf[end..], file_offset) catch return ParseErr.FileSystem;
             if (n == 0 and end == 0) break;
             end += n;
             file_offset += n;

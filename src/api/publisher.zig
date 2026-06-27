@@ -7,6 +7,12 @@ const write = @import("../channel.zig").write;
 const Registry = @import("../registry.zig");
 const read = @import("../channel.zig").read;
 
+const PubErr = error{
+    OutOfMemory,
+    ShmOpenFailed,
+    MmapFailed,
+};
+
 /// High-level publisher wrapping a raw `Channel`.
 ///
 /// Each topic can have at most one publisher. The publisher owns the
@@ -18,7 +24,7 @@ pub const Publisher = struct {
     ///
     /// Shm-unlinks any stale segment first, then creates a fresh channel.
     /// Self-registers the process in the node registry.
-    pub fn init(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32) !Publisher {
+    pub fn init(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32) PubErr!Publisher {
         const name_z = try allocator.dupeZ(u8, name);
         defer allocator.free(name_z);
         _ = c.shm_unlink(name_z.ptr);

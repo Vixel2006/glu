@@ -1,5 +1,13 @@
 const std = @import("std");
 
+const TomlErr = error{
+    OutOfMemory,
+    FileSystem,
+    UnterminatedString,
+    UnterminatedArray,
+    InvalidSyntax,
+};
+
 pub const NodeConfig = struct {
     name: []const u8,
     path: []const u8 = "",
@@ -61,7 +69,7 @@ const Parser = struct {
         return null;
     }
 
-    fn parseString(self: *Parser, allocator: std.mem.Allocator) ![]const u8 {
+    fn parseString(self: *Parser, allocator: std.mem.Allocator) TomlErr![]const u8 {
         self.pos += 1;
         const start = self.pos;
         while (!self.done() and self.buf[self.pos] != '"') {
@@ -73,7 +81,7 @@ const Parser = struct {
         return result;
     }
 
-    fn parseInlineArray(self: *Parser, allocator: std.mem.Allocator) ![]const []const u8 {
+    fn parseInlineArray(self: *Parser, allocator: std.mem.Allocator) TomlErr![]const []const u8 {
         self.pos += 1;
         var items: std.ArrayListAligned([]const u8, null) = .empty;
         while (!self.done() and self.buf[self.pos] != ']') {
@@ -120,15 +128,15 @@ const Parser = struct {
 ///
 /// Supports `[[node]]` array-of-tables with `name`, `path`, `bin`,
 /// and `extra_cfg` keys. Comments (`#`) and blank lines are ignored.
-pub fn parse(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) !LaunchConfig {
+pub fn parse(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) TomlErr!LaunchConfig {
     const cwd = std.Io.Dir.cwd();
-    const file = try cwd.openFile(io, file_path, .{});
+    const file = cwd.openFile(io, file_path, .{}) catch return TomlErr.FileSystem;
     defer file.close(io);
 
-    const size = @as(usize, @intCast(try file.length(io)));
+    const size = @as(usize, @intCast(file.length(io) catch return TomlErr.FileSystem));
     const content = try allocator.alloc(u8, size);
     defer allocator.free(content);
-    _ = try file.readPositionalAll(io, content, 0);
+    _ = file.readPositionalAll(io, content, 0) catch return TomlErr.FileSystem;
     var p = Parser.init(content);
     var nodes: std.ArrayListAligned(NodeConfig, null) = .empty;
     errdefer {

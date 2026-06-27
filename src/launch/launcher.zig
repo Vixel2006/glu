@@ -2,13 +2,19 @@ const std = @import("std");
 const NodeConfig = @import("toml.zig").NodeConfig;
 const Registry = @import("../registry.zig");
 
+const LaunchErr = error{
+    OutOfMemory,
+    FileSystem,
+    NoSpaceLeft,
+};
+
 /// A process that was spawned by the launcher.
 pub const LaunchedNode = struct {
     name: []const u8,
     child: std.process.Child,
 };
 
-fn buildArgv(allocator: std.mem.Allocator, cfg: *const NodeConfig) ![]const []const u8 {
+fn buildArgv(allocator: std.mem.Allocator, cfg: *const NodeConfig) LaunchErr![]const []const u8 {
     if (cfg.bin.len > 0) {
         const args = try allocator.alloc([]const u8, 1 + cfg.extra_cfg.len);
         args[0] = cfg.bin;
@@ -30,7 +36,7 @@ fn buildArgv(allocator: std.mem.Allocator, cfg: *const NodeConfig) ![]const []co
 /// Each node is spawned with stdin/stdout/stderr inherited.
 /// Returns an owned slice of handles that the caller can wait on.
 /// On error, all previously-launched children are killed.
-pub fn launch(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig) ![]LaunchedNode {
+pub fn launch(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig) LaunchErr![]LaunchedNode {
     var launched = try std.ArrayListAligned(LaunchedNode, null).initCapacity(allocator, cfgs.len);
     errdefer {
         for (launched.items) |*n| n.child.kill(io);
@@ -39,12 +45,12 @@ pub fn launch(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig
 
     for (cfgs) |cfg| {
         const argv = try buildArgv(allocator, &cfg);
-        const child = try std.process.spawn(io, .{
+        const child = std.process.spawn(io, .{
             .argv = argv,
             .stdout = .inherit,
             .stdin = .inherit,
             .stderr = .inherit,
-        });
+        }) catch return LaunchErr.FileSystem;
         allocator.free(argv);
         launched.appendAssumeCapacity(.{ .name = cfg.name, .child = child });
     }
@@ -56,9 +62,9 @@ pub fn launch(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig
 ///
 /// Each node's stdout/stderr is redirected to a log file in `logs_dir`.
 /// Nodes are registered in the registry for lifecycle management.
-pub fn launchDetached(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig, logs_dir: []const u8) !void {
+pub fn launchDetached(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig, logs_dir: []const u8) LaunchErr!void {
     const cwd = std.Io.Dir.cwd();
-    try cwd.createDirPath(io, logs_dir);
+    cwd.createDirPath(io, logs_dir) catch return LaunchErr.FileSystem;
 
     for (cfgs) |cfg| {
         const argv = buildArgv(allocator, &cfg) catch continue;
@@ -66,7 +72,7 @@ pub fn launchDetached(io: std.Io, allocator: std.mem.Allocator, cfgs: []const No
         var path_buf: [256]u8 = undefined;
         const path = try std.fmt.bufPrint(&path_buf, "{s}/{s}.log", .{ logs_dir, cfg.name });
 
-        const file = try cwd.createFile(io, path, .{ .read = true });
+        const file = cwd.createFile(io, path, .{ .read = true }) catch return LaunchErr.FileSystem;
         defer file.close(io);
 
         const child = std.process.spawn(io, .{
@@ -76,7 +82,8 @@ pub fn launchDetached(io: std.Io, allocator: std.mem.Allocator, cfgs: []const No
             .stderr = .{ .file = file },
         }) catch |err| {
             allocator.free(argv);
-            std.debug.print("error spawning '{s}': {s}\n", .{ cfg.name, @errorName(err) });
+            var fw = std.Io.File.stderr().writerStreaming(io, &.{});
+            fw.interface.print("error spawning '{s}': {s}\n", .{ cfg.name, @errorName(err) }) catch {};
             continue;
         };
         allocator.free(argv);
@@ -84,7 +91,7 @@ pub fn launchDetached(io: std.Io, allocator: std.mem.Allocator, cfgs: []const No
     }
 }
 
-fn testNodePath(allocator: std.mem.Allocator, dir: std.testing.TmpDir, name: []const u8) ![]const u8 {
+fn testNodePath(allocator: std.mem.Allocator, dir: std.testing.TmpDir, name: []const u8) LaunchErr![]const u8 {
     return std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/{s}", .{ &dir.sub_path, name });
 }
 

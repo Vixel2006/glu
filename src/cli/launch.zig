@@ -71,19 +71,22 @@ fn cmdLaunch_(init: std.process.Init, args: *std.process.Args.Iterator) !void {
     }
 
     const file_path = file orelse {
-        std.debug.print("usage: glu launch -f <file.toml> [-d]\n", .{});
+        var ew = utils.errWriter(init);
+        ew.interface.print("usage: glu launch -f <file.toml> [-d]\n", .{}) catch {};
         return error.MissingArgument;
     };
 
     var config = toml.parse(init.io, init.gpa, file_path) catch |err| {
-        std.debug.print("error parsing launch config '{s}': {}\n", .{ file_path, err });
+        var ew = utils.errWriter(init);
+        ew.interface.print("error parsing launch config '{s}': {}\n", .{ file_path, err }) catch {};
         return err;
     };
     defer config.deinit(init.gpa);
 
     if (detach) {
         try launch_mod.launchDetached(init.io, init.gpa, config.nodes, "/tmp/glu/logs");
-        std.debug.print("launched {d} node(s) in background\n", .{config.nodes.len});
+        var fw = utils.writer(init);
+        fw.interface.print("launched {d} node(s) in background\n", .{config.nodes.len}) catch {};
         return;
     }
 
@@ -97,17 +100,22 @@ fn cmdLaunch_(init: std.process.Init, args: *std.process.Args.Iterator) !void {
     };
     _ = os.sigaction(os.SIG.INT, &sa, null);
 
-    std.debug.print("launched {d} node(s)\n", .{launched_children.len});
+    {
+        var fw = utils.writer(init);
+        fw.interface.print("launched {d} node(s)\n", .{launched_children.len}) catch {};
+    }
 
     for (launched_children) |*n| {
         const term = n.child.wait(init.io) catch |err| {
-            std.debug.print("error waiting for node '{s}': {}\n", .{ n.name, err });
+            var fw = utils.writer(init);
+            fw.interface.print("error waiting for node '{s}': {}\n", .{ n.name, err }) catch {};
             continue;
         };
+        var fw = utils.writer(init);
         switch (term) {
-            .exited => |code| std.debug.print("node '{s}' exited with code {d}\n", .{ n.name, code }),
-            .signal => |sig| std.debug.print("node '{s}' killed by signal {}\n", .{ n.name, sig }),
-            else => std.debug.print("node '{s}' terminated unexpectedly\n", .{n.name}),
+            .exited => |code| fw.interface.print("node '{s}' exited with code {d}\n", .{ n.name, code }) catch {},
+            .signal => |sig| fw.interface.print("node '{s}' killed by signal {}\n", .{ n.name, sig }) catch {},
+            else => fw.interface.print("node '{s}' terminated unexpectedly\n", .{n.name}) catch {},
         }
     }
 

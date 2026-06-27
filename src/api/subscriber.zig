@@ -5,6 +5,12 @@ const read = @import("../channel.zig").read;
 const Registry = @import("../registry.zig");
 const write = @import("../channel.zig").write;
 
+const SubErr = error{
+    OutOfMemory,
+    ShmOpenFailed,
+    MmapFailed,
+};
+
 /// High-level subscriber wrapping a raw `Channel`.
 ///
 /// Each subscriber occupies one slot in the channel's reader array
@@ -18,7 +24,7 @@ pub const Subscriber = struct {
     ///
     /// The `id` must be unique per channel and < MAX_READERS.
     /// Initialises the reader cursor to 0 (active) and self-registers.
-    pub fn init(allocator: std.mem.Allocator, id: u32, name: []const u8, msg_size: u32, capacity: u32) !Subscriber {
+    pub fn init(allocator: std.mem.Allocator, id: u32, name: []const u8, msg_size: u32, capacity: u32) SubErr!Subscriber {
         const sub: Subscriber = .{ .id = id, .channel = try Channel.open(allocator, name, msg_size, capacity) };
 
         sub.channel.header.read[sub.id] = 0;

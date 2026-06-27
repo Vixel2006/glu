@@ -1,4 +1,5 @@
 const std = @import("std");
+const utils = @import("cli/utils.zig");
 const list = @import("cli/list.zig");
 const info = @import("cli/info.zig");
 const ps = @import("cli/ps.zig");
@@ -7,8 +8,10 @@ const logs = @import("cli/logs.zig");
 const codegen = @import("cli/codegen.zig");
 const down = @import("cli/down.zig");
 
-fn printUsage() void {
-    std.debug.print(
+fn printUsage(init: std.process.Init) void {
+    var fw = utils.writer(init);
+    const w = &fw.interface;
+    w.print(
         \\usage: glu <command> [args]
         \\
         \\commands:
@@ -33,7 +36,7 @@ fn printUsage() void {
         \\  down     Stop all running nodes
         \\           glu down
         \\
-    , .{});
+    , .{}) catch {};
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -41,7 +44,7 @@ pub fn main(init: std.process.Init) !void {
     _ = args_iter.next();
 
     const cmd = args_iter.next() orelse {
-        printUsage();
+        printUsage(init);
         return;
     };
 
@@ -60,6 +63,6 @@ pub fn main(init: std.process.Init) !void {
     } else if (std.mem.eql(u8, cmd, "down")) {
         down.cmdDown(init);
     } else {
-        printUsage();
+        printUsage(init);
     }
 }
