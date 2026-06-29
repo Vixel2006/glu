@@ -44,7 +44,7 @@ pub const TcpListener = struct {
         }
 
         const opt: c_int = 1;
-        if (c.setsockopt(fd, c.SOL.SOCKET, c.SO.REUSEADDR, &opt, @sizeOf(c_int) == -1)) {
+        if (c.setsockopt(fd, c.SOL.SOCKET, c.SO.REUSEADDR, &opt, @sizeOf(c_int)) == -1) {
             return TcpErr.SetSockOptFailed;
         }
 
