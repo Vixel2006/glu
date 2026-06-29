@@ -38,10 +38,15 @@ pub const TcpListener = struct {
     /// If `port` is 0, the OS assigns an available port (query
     /// `.port` afterwards to discover the actual port).
     pub fn init(port: u16) TcpErr!TcpListener {
-        const fd = try makeSocket();
-        errdefer _ = c.close(fd);
+        const fd = c.socket(c.AF.INET, c.SOCK.STREAM, 0);
+        if (fd < 0) {
+            return mapErr(c._errno().*);
+        }
 
-        try setReuseAddr(fd, true);
+        const opt: c_int = 1;
+        if (c.setsockopt(fd, c.SOL.SOCKET, c.SO.REUSEADDR, &opt, @sizeOf(c_int) == -1)) {
+            return TcpErr.SetSockOptFailed;
+        }
 
         var addr = posix.sockaddr.in{
             .family = c.AF.INET,
@@ -163,18 +168,6 @@ pub const TcpConnection = struct {
             return mapErr(c._errno().*);
     }
 };
-
-fn makeSocket() TcpErr!i32 {
-    const fd = c.socket(c.AF.INET, c.SOCK.STREAM, 0);
-    if (fd == -1) return mapErr(c._errno().*);
-    return fd;
-}
-
-fn setReuseAddr(fd: i32, enable: bool) TcpErr!void {
-    const optval: c_int = if (enable) 1 else 0;
-    if (c.setsockopt(fd, c.SOL.SOCKET, c.SO.REUSEADDR, &optval, @sizeOf(c_int)) == -1)
-        return TcpErr.SetSockOptFailed;
-}
 
 test "TcpListener: bind and deinit cleanly" {
     var listener = try TcpListener.init(0);
