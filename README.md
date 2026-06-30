@@ -62,6 +62,7 @@ The robotics community has struggled with ROS2 for years. Between massive Docker
 - **Slowest-Reader Protection**: Up to 8 concurrent subscribers per topic can read independently. If a subscriber runs slow, the publisher spins rather than overwriting unread slots, guaranteeing zero data loss.
 - **Sub-ms Registry & Discovery**: No heavy discovery daemon or network multicasting. Active nodes are registered deterministically under `/tmp/glu/nodes` using their PID.
 - **Custom Message DSL & Codegen**: Describe your structures in clean `.glu` files and compile them straight into native, packed Zig structs with `glu codegen`.
+- **TCP/UDP Networking**: First-class socket APIs (`glu.tcp` and `glu.udp`) for cross-machine communication, telemetry streaming, and node discovery — no bloat, just raw sockets.
 - **Integrated Process Orchestrator**: Run and manage your robot nodes gracefully via `glu launch` using simple TOML configuration files.
 
 ---

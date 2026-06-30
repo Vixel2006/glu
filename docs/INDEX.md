@@ -9,7 +9,7 @@ here's how we're doing things:
 ## documentation map
 
 - [quickstart](../README.md#quickstart) — from zero to running your first node in 60 seconds. compiling faster than you can check twitter.
-- [api reference](./api.md) — how to use `glu.Publisher` and `glu.Subscriber` without reading a 500-page manual.
+- [api reference](./api.md) — how to use `glu.Publisher`, `glu.Subscriber`, `glu.tcp`, and `glu.udp` without reading a 500-page manual.
 - [architecture](./architecture.md) — under the hood. lock-free ring buffers, POSIX shared memory (`/dev/shm`), and how we keep it zero-copy.
 - [orchestration & cli](./launch.md) — orchestrating your nodes using `launch.toml` and managing them via CLI. 
 

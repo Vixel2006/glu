@@ -112,3 +112,119 @@ while (true) {
     std.time.sleep(10 * std.time.ns_per_ms);
 }
 ```
+
+---
+
+## `glu.tcp`
+
+raw TCP networking for cross-machine communication. designed for when your robot needs to talk to another robot, a ground station, or a web dashboard.
+
+unlike the SHM pub/sub (shared memory, same machine only), TCP is for sending bytes over a network. no serialization or codegen required — you send whatever bytes you want.
+
+### server
+
+```zig
+// listen on a port
+var server = try glu.tcp.Listener.listen(9000);
+defer server.deinit();
+
+// accept a connection (blocks)
+var conn = try server.accept();
+defer conn.deinit();
+```
+
+### client
+
+```zig
+// connect to a remote server
+var conn = try glu.tcp.Connection.connect("192.168.1.100", 9000);
+defer conn.deinit();
+
+// send all bytes (blocks until fully sent)
+try conn.send(&data);
+
+// receive up to buffer.len bytes
+const n = try conn.receive(&buffer);
+
+// toggle non-blocking mode
+try conn.setBlocking(false);
+```
+
+### full example: echo server
+
+```zig
+const glu = @import("glu");
+
+pub fn main() !void {
+    var server = try glu.tcp.Listener.listen(7777);
+    defer server.deinit();
+
+    var conn = try server.accept();
+    defer conn.deinit();
+
+    var buf: [4096]u8 = undefined;
+    while (true) {
+        const n = conn.receive(&buf) catch |err| switch (err) {
+            error.ConnectionReset => break,
+            else => return err,
+        };
+        _ = try conn.send(buf[0..n]);
+    }
+}
+```
+
+---
+
+## `glu.udp`
+
+UDP sockets for discovery, telemetry, and high-frequency loss-tolerant streams. perfect for heartbeats, node discovery, and sensor data that doesn't need retransmission.
+
+### socket setup
+
+```zig
+// bind to a port (0 = OS assigns an ephemeral port)
+var sock = try glu.udp.Socket.bind(42100);
+defer sock.deinit();
+```
+
+### sending
+
+```zig
+// send a datagram to a specific host
+try sock.sendTo("192.168.1.100", 42100, "hello");
+
+// the port is available after bind(0)
+std.debug.print("bound to port {d}\n", .{sock.port});
+```
+
+### receiving
+
+```zig
+var buf: [256]u8 = undefined;
+const result = try sock.receiveFrom(&buf);
+
+// the datagram contents
+std.debug.print("received: {s}\n", .{result.data});
+
+// who sent it
+std.debug.print("from: {s}:{d}\n", .{
+    result.sender.host[0..result.sender.host_len],
+    result.sender.port,
+});
+```
+
+### non-blocking
+
+```zig
+try sock.setBlocking(false);
+
+var buf: [64]u8 = undefined;
+const result = sock.receiveFrom(&buf) catch |err| switch (err) {
+    error.WouldBlock => {
+        // no data yet, try again later
+        std.time.sleep(std.time.ns_per_ms);
+        continue;
+    },
+    else => |e| return e,
+};
+```
