@@ -30,23 +30,20 @@ fn mapErr(errno_val: i32) TcpErr {
 }
 
 /// A TCP listener bound to a port, accepting incoming connections.
-pub const TcpListener = struct {
+pub const Listener = struct {
     fd: i32,
     port: u16,
 
     /// Bind to `port` on all interfaces and start listening.
     /// If `port` is 0, the OS assigns an available port (query
     /// `.port` afterwards to discover the actual port).
-    pub fn init(port: u16) TcpErr!TcpListener {
+    pub fn listen(port: u16) TcpErr!Listener {
         const fd = c.socket(c.AF.INET, c.SOCK.STREAM, 0);
-        if (fd < 0) {
-            return mapErr(c._errno().*);
-        }
+        if (fd < 0) return mapErr(c._errno().*);
 
         const opt: c_int = 1;
-        if (c.setsockopt(fd, c.SOL.SOCKET, c.SO.REUSEADDR, &opt, @sizeOf(c_int)) == -1) {
+        if (c.setsockopt(fd, c.SOL.SOCKET, c.SO.REUSEADDR, &opt, @sizeOf(c_int)) == -1)
             return TcpErr.SetSockOptFailed;
-        }
 
         var addr = posix.sockaddr.in{
             .family = c.AF.INET,
@@ -70,29 +67,29 @@ pub const TcpListener = struct {
                 break :blk port;
         };
 
-        return TcpListener{ .fd = fd, .port = actual_port };
+        return Listener{ .fd = fd, .port = actual_port };
     }
 
     /// Accept an incoming connection. Blocks until one arrives.
-    pub fn accept(self: *TcpListener) TcpErr!TcpConnection {
+    pub fn accept(self: *Listener) TcpErr!Connection {
         var client_addr: posix.sockaddr.in = undefined;
         var addrlen: posix.socklen_t = @sizeOf(posix.sockaddr.in);
         const client_fd = c.accept(self.fd, @ptrCast(&client_addr), &addrlen);
         if (client_fd == -1) return mapErr(c._errno().*);
-        return TcpConnection{ .fd = client_fd };
+        return Connection{ .fd = client_fd };
     }
 
-    pub fn deinit(self: *TcpListener) void {
+    pub fn deinit(self: *Listener) void {
         _ = c.close(self.fd);
     }
 };
 
 /// A TCP connection (client-side or accepted server-side).
-pub const TcpConnection = struct {
+pub const Connection = struct {
     fd: i32,
 
     /// Connect to `host:port` with automatic address resolution.
-    pub fn init(host: []const u8, port: u16) TcpErr!TcpConnection {
+    pub fn connect(host: []const u8, port: u16) TcpErr!Connection {
         var hints = mem.zeroes(c.addrinfo);
         hints.family = c.AF.UNSPEC;
         hints.socktype = c.SOCK.STREAM;
@@ -123,14 +120,14 @@ pub const TcpConnection = struct {
                 continue;
             }
 
-            return TcpConnection{ .fd = fd };
+            return Connection{ .fd = fd };
         }
 
         return TcpErr.ConnectFailed;
     }
 
     /// Send all `data` over the connection. Blocks until fully sent or error.
-    pub fn send(self: *TcpConnection, data: []const u8) TcpErr!usize {
+    pub fn send(self: *Connection, data: []const u8) TcpErr!usize {
         var offset: usize = 0;
         while (offset < data.len) {
             const rc = c.send(self.fd, data.ptr + offset, data.len - offset, c.MSG.NOSIGNAL);
@@ -147,19 +144,19 @@ pub const TcpConnection = struct {
     /// Receive up to `buffer.len` bytes. Returns number of bytes read.
     /// Returns `ConnectionReset` if the remote peer closed the connection
     /// (recv returned 0).
-    pub fn recv(self: *TcpConnection, buffer: []u8) TcpErr!usize {
+    pub fn receive(self: *Connection, buffer: []u8) TcpErr!usize {
         const rc = c.recv(self.fd, buffer.ptr, buffer.len, 0);
         if (rc == -1) return mapErr(c._errno().*);
         if (rc == 0) return TcpErr.ConnectionReset;
         return @as(usize, @intCast(rc));
     }
 
-    pub fn deinit(self: *TcpConnection) void {
+    pub fn deinit(self: *Connection) void {
         _ = c.close(self.fd);
     }
 
     /// Switch between blocking and non-blocking I/O mode.
-    pub fn setBlocking(self: *TcpConnection, blocking: bool) TcpErr!void {
+    pub fn setBlocking(self: *Connection, blocking: bool) TcpErr!void {
         const flags = c.fcntl(self.fd, c.F.GETFL);
         if (flags == -1) return mapErr(c._errno().*);
         const nonblock: c_int = @bitCast(linux.O{ .NONBLOCK = true });
@@ -169,27 +166,26 @@ pub const TcpConnection = struct {
     }
 };
 
-test "TcpListener: bind and deinit cleanly" {
-    var listener = try TcpListener.init(0);
+test "Listener: bind and deinit cleanly" {
+    var listener = try Listener.listen(0);
     defer listener.deinit();
     try std.testing.expect(listener.fd >= 0);
 }
 
-test "TcpConnection: connect refused returns ConnectFailed" {
-    // Try connecting to a port that's unlikely to be open
-    const result = TcpConnection.init("127.0.0.1", 1);
+test "Connection: connect refused returns ConnectFailed" {
+    const result = Connection.connect("127.0.0.1", 1);
     try std.testing.expectError(error.ConnectFailed, result);
 }
 
-test "TcpListener + TcpConnection: accept a connection" {
-    var listener = try TcpListener.init(0);
+test "Listener + Connection: accept a connection" {
+    var listener = try Listener.listen(0);
     defer listener.deinit();
 
     const port = listener.port;
 
     const pid = c.fork();
     if (pid == 0) {
-        var conn = TcpConnection.init("127.0.0.1", port) catch c.exit(1);
+        var conn = Connection.connect("127.0.0.1", port) catch c.exit(1);
         conn.deinit();
         c.exit(0);
     }
@@ -206,15 +202,15 @@ test "TcpListener + TcpConnection: accept a connection" {
     _ = c.waitpid(pid, null, 0);
 }
 
-test "TcpConnection: send and receive data" {
-    var listener = try TcpListener.init(0);
+test "Connection: send and receive data" {
+    var listener = try Listener.listen(0);
     defer listener.deinit();
     const port = listener.port;
 
     const msg = "hello glu!";
     const pid = c.fork();
     if (pid == 0) {
-        var conn = TcpConnection.init("127.0.0.1", port) catch c.exit(1);
+        var conn = Connection.connect("127.0.0.1", port) catch c.exit(1);
         _ = conn.send(msg) catch c.exit(1);
         conn.deinit();
         c.exit(0);
@@ -227,7 +223,7 @@ test "TcpConnection: send and receive data" {
     defer server.deinit();
 
     var buf: [64]u8 = undefined;
-    const n = server.recv(&buf) catch {
+    const n = server.receive(&buf) catch {
         _ = c.waitpid(pid, null, 0);
         return error.TestFailed;
     };
@@ -237,17 +233,17 @@ test "TcpConnection: send and receive data" {
     _ = c.waitpid(pid, null, 0);
 }
 
-test "TcpConnection: setBlocking toggles non-blocking mode" {
-    var listener = try TcpListener.init(0);
+test "Connection: setBlocking toggles non-blocking mode" {
+    var listener = try Listener.listen(0);
     defer listener.deinit();
     const port = listener.port;
 
     const pid = c.fork();
     if (pid == 0) {
-        var conn = TcpConnection.init("127.0.0.1", port) catch c.exit(1);
+        var conn = Connection.connect("127.0.0.1", port) catch c.exit(1);
         conn.setBlocking(false) catch c.exit(1);
         var buf: [1]u8 = undefined;
-        const result = conn.recv(&buf);
+        const result = conn.receive(&buf);
         if (result == error.WouldBlock) c.exit(0);
         c.exit(1);
     }

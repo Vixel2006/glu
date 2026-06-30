@@ -7,8 +7,8 @@ pub const generator = @import("codegen/generator.zig");
 pub const Publisher = @import("api/publisher.zig").Publisher;
 pub const Subscriber = @import("api/subscriber.zig").Subscriber;
 pub const Registry = @import("registry.zig");
-pub const tcp = @import("transport/tcp.zig");
-pub const udp = @import("transport/udp.zig");
+pub const tcp = @import("api/tcp.zig");
+pub const udp = @import("api/udp.zig");
 
 comptime {
     _ = @import("channel.zig");
@@ -17,8 +17,8 @@ comptime {
     _ = @import("api/publisher.zig");
     _ = @import("api/subscriber.zig");
     _ = @import("registry.zig");
-    _ = @import("transport/tcp.zig");
-    _ = @import("transport/udp.zig");
+    _ = @import("api/tcp.zig");
+    _ = @import("api/udp.zig");
     _ = @import("launch/toml.zig");
     _ = @import("launch/launcher.zig");
     _ = @import("cli/logs.zig");

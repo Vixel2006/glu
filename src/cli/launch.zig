@@ -54,11 +54,7 @@ fn handleSigint(_: os.SIG) callconv(.c) void {
 }
 
 /// Launch nodes from a TOML config (`glu launch -f <file> [-d]`).
-pub fn cmdLaunch(init: std.process.Init, args: *std.process.Args.Iterator) void {
-    cmdLaunch_(init, args) catch |err| utils.logErr("launch", err);
-}
-
-fn cmdLaunch_(init: std.process.Init, args: *std.process.Args.Iterator) !void {
+pub fn cmdLaunch(init: std.process.Init, args: *std.process.Args.Iterator) !void {
     var file: ?[]const u8 = null;
     var detach = false;
 

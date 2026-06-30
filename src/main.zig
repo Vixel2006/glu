@@ -49,19 +49,19 @@ pub fn main(init: std.process.Init) !void {
     };
 
     if (std.mem.eql(u8, cmd, "launch")) {
-        launch.cmdLaunch(init, &args_iter);
+        launch.cmdLaunch(init, &args_iter) catch |err| utils.logErr("launch", err);
     } else if (std.mem.eql(u8, cmd, "codegen")) {
-        codegen.cmdCodegen(init, &args_iter);
+        codegen.cmdCodegen(init, &args_iter) catch |err| utils.logErr("codegen", err);
     } else if (std.mem.eql(u8, cmd, "logs")) {
-        logs.cmdLogs(init, &args_iter);
+        logs.cmdLogs(init, &args_iter, "/tmp/glu/logs") catch |err| utils.logErr("logs", err);
     } else if (std.mem.eql(u8, cmd, "list") or std.mem.eql(u8, cmd, "ls")) {
-        list.cmdList(init);
+        list.cmdList(init) catch |err| utils.logErr("list", err);
     } else if (std.mem.eql(u8, cmd, "info")) {
-        info.cmdInfo(init, &args_iter);
+        info.cmdInfo(init, &args_iter) catch |err| utils.logErr("info", err);
     } else if (std.mem.eql(u8, cmd, "ps")) {
-        ps.cmdPs(init);
+        ps.cmdPs(init) catch |err| utils.logErr("ps", err);
     } else if (std.mem.eql(u8, cmd, "down")) {
-        down.cmdDown(init);
+        down.cmdDown(init) catch |err| utils.logErr("down", err);
     } else {
         printUsage(init);
     }
