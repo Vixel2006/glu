@@ -39,11 +39,7 @@ fn countTailLines(buf: []const u8, n: u64) usize {
 }
 
 /// Print logs for a node (`glu logs [--tail <n>] [--head <n>] <node>`).
-pub fn cmdLogs(init: std.process.Init, args: *std.process.Args.Iterator) void {
-    cmdLogs_(init, args, LOGS_DIR) catch |err| utils.logErr("info", err);
-}
-
-pub fn cmdLogs_(init: std.process.Init, args: *std.process.Args.Iterator, logs_dir: []const u8) !void {
+pub fn cmdLogs(init: std.process.Init, args: *std.process.Args.Iterator, logs_dir: []const u8) !void {
     var tail: ?u64 = null;
     var head: ?u64 = null;
     var node: ?[]const u8 = null;
@@ -119,6 +115,16 @@ pub fn cmdLogs_(init: std.process.Init, args: *std.process.Args.Iterator, logs_d
 }
 
 test "logs: missing argument returns error" {
+    const c = std.c;
+    const devnull = c.open("/dev/null", std.os.linux.O{ .ACCMODE = .WRONLY }, @as(c_uint, 0));
+    const saved_stderr = c.dup(2);
+    _ = c.dup2(devnull, 2);
+    defer {
+        _ = c.dup2(saved_stderr, 2);
+        _ = c.close(saved_stderr);
+        _ = c.close(devnull);
+    }
+
     const init = std.process.Init{
         .minimal = .{
             .environ = std.process.Environ.empty,
@@ -133,11 +139,21 @@ test "logs: missing argument returns error" {
 
     var args_iter = std.process.Args.Iterator.init(init.minimal.args);
 
-    const err = cmdLogs_(init, &args_iter, "/nonexistent");
+    const err = cmdLogs(init, &args_iter, "/nonexistent");
     try std.testing.expectError(error.MissingArgument, err);
 }
 
 test "logs: reads matching log file" {
+    const c = std.c;
+    const devnull = c.open("/dev/null", std.os.linux.O{ .ACCMODE = .WRONLY }, @as(c_uint, 0));
+    const saved_stderr = c.dup(2);
+    _ = c.dup2(devnull, 2);
+    defer {
+        _ = c.dup2(saved_stderr, 2);
+        _ = c.close(saved_stderr);
+        _ = c.close(devnull);
+    }
+
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -163,7 +179,7 @@ test "logs: reads matching log file" {
 
     var args_iter = std.process.Args.Iterator.init(init.minimal.args);
 
-    try cmdLogs_(init, &args_iter, logs_dir);
+    try cmdLogs(init, &args_iter, logs_dir);
 }
 
 test "logs: no matching file silently returns" {
@@ -192,5 +208,5 @@ test "logs: no matching file silently returns" {
 
     var args_iter = std.process.Args.Iterator.init(init.minimal.args);
 
-    try cmdLogs_(init, &args_iter, logs_dir);
+    try cmdLogs(init, &args_iter, logs_dir);
 }
