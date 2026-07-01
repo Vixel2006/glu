@@ -1,0 +1,43 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - '*'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install xz-utils (for act local testing)
+        run: apt-get update && apt-get install -y xz-utils
+        if: env.ACT == 'true'
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Check formatting
+        run: zig fmt --check src/ bench/
+
+      - name: Build
+        run: zig build
+
+      - name: Build examples
+        run: zig build examples
+
+      - name: Run tests
+        run: zig build test
+
+      - name: Run benchmarks
+        run: zig build bench

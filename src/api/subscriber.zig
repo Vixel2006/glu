@@ -27,7 +27,12 @@ pub const Subscriber = struct {
     pub fn init(allocator: std.mem.Allocator, id: u32, name: []const u8, msg_size: u32, capacity: u32) SubErr!Subscriber {
         const sub: Subscriber = .{ .id = id, .channel = try Channel.open(allocator, name, msg_size, capacity) };
 
-        sub.channel.header.read[sub.id] = 0;
+        // Initialize read cursor to the current write position so that a late-joining
+        // subscriber (e.g. a profiler that starts after the publisher) only sees new
+        // messages. Setting it to 0 would cause the publisher to deadlock waiting for
+        // the subscriber to drain all old ring-buffer slots that no longer exist.
+        const current_write = @atomicLoad(u32, &sub.channel.header.write, .acquire);
+        sub.channel.header.read[sub.id] = current_write;
         Registry.registerOwnExe();
 
         return sub;

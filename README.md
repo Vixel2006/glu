@@ -367,11 +367,12 @@ Measurements are taken on an Intel Core i5 system over 100,000 iterations:
 
 ## Ecosystem
 
-The vision of `glu` is a modular, Unix-like ecosystem. Rather than a monolith, each module lives in its own repository:
+The vision of `glu` is a modular, Unix-like ecosystem. Rather than a monolith, each tool lives in its own repository and composes with the others via glu's protocol:
 
 | Repository | Scope / Purpose | Status |
 | :--- | :--- | :--- |
 | **glu** (this) | The core protocol library, message codegen, and CLI tools | **Active (Alpha)** |
+| **glu-sim** | Robotics simulator — test your nodes in a 3D world without real hardware | *Planned* |
 | **glu-viz** | Web-based real-time 3D dashboard & diagnostics tool | *Planned* |
 | **glu-nav** | Real-time path planning, navigation, and SLAM module | *Planned* |
 | **glu-drivers** | Low-latency sensor drivers toolkit (Lidar, IMU, cameras) | *Planned* |
@@ -382,21 +383,9 @@ The vision of `glu` is a modular, Unix-like ecosystem. Rather than a monolith, e
 
 ## Contributing
 
-We welcome contributions of all skill levels! The `glu` project values clean code, performance, and simplicity.
+glu follows the Unix philosophy: **do one thing and do it well**. we keep the core lean and build everything else as separate, composable tools.
 
-### Local Development Setup
-Clone the repository and run the test suite to ensure everything builds correctly:
-
-```bash
-git clone https://github.com/Vixel2006/glu
-cd glu
-zig build test
-```
-
-### Standards
-- **Keep it Simple**: We only add features that belong in the core communication layer. If it can be a separate node, it doesn't belong in the core middleware.
-- **Run benchmarks**: Ensure your changes don't introduce performance regressions by comparing before-and-after runs using `zig build bench`.
-- **No CLA**: We keep open-source open. No complex licensing agreements, just code under the MIT license.
+we welcome contributions of all skill levels. read [CONTRIBUTING.md](./CONTRIBUTING.md) for the full guide — how to set up, coding style, PR process, and where to start.
 
 ---
 
