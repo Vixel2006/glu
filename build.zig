@@ -35,6 +35,56 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
+    // ── C shared + static library ──────────────────────────────────────────
+    //
+    // Produces libglu.so and libglu.a in zig-out/lib/, with a C header
+    // installed to zig-out/include/glu/glu.h.
+    //
+    // Usage:
+    //   zig build glu-lib          # build both shared + static
+    //   zig build glu-shared       # build shared only
+    //   zig build glu-static       # build static only
+    //
+
+    const lib_mod = b.createModule(.{
+        .root_source_file = b.path("src/c_api.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "glu", .module = mod },
+        },
+    });
+
+    const glu_shared = b.addLibrary(.{
+        .name = "glu",
+        .root_module = lib_mod,
+        .linkage = .dynamic,
+    });
+
+    const install_shared = b.addInstallArtifact(glu_shared, .{});
+    const shared_step = b.step("glu-shared", "Build libglu.so");
+    shared_step.dependOn(&install_shared.step);
+
+    const glu_static = b.addLibrary(.{
+        .name = "glu",
+        .root_module = lib_mod,
+        .linkage = .static,
+    });
+
+    const install_static = b.addInstallArtifact(glu_static, .{});
+    const static_step = b.step("glu-static", "Build libglu.a");
+    static_step.dependOn(&install_static.step);
+
+    const install_header = b.addInstallFile(b.path("include/glu/glu.h"), "include/glu/glu.h");
+    const install_hpp = b.addInstallFile(b.path("include/glu/glu.hpp"), "include/glu/glu.hpp");
+
+    const glu_lib_step = b.step("glu-lib", "Build libglu.so + libglu.a + headers");
+    glu_lib_step.dependOn(&install_shared.step);
+    glu_lib_step.dependOn(&install_static.step);
+    glu_lib_step.dependOn(&install_header.step);
+    glu_lib_step.dependOn(&install_hpp.step);
+
     const test_mod = b.createModule(.{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
