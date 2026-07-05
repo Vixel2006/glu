@@ -1,6 +1,6 @@
 const std = @import("std");
-const parser = @import("glu").parser;
-const generator = @import("glu").generator;
+const parser = @import("../src/codegen/parser.zig");
+const generator = @import("../src/codegen/generator.zig");
 
 fn makeInit(allocator: std.mem.Allocator) std.process.Init {
     return .{

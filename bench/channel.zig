@@ -2,8 +2,8 @@ const std = @import("std");
 const c = std.c;
 const zbench = @import("zbench");
 const Channel = @import("glu").Channel;
-const write = @import("glu").write;
-const read = @import("glu").read;
+const write = @import("../src/channel.zig").write;
+const read = @import("../src/channel.zig").read;
 
 const Msg32 = extern struct { data: [32]u8 };
 const Msg256 = extern struct { data: [256]u8 };

@@ -1,7 +1,6 @@
 const std = @import("std");
 const c = @import("std").c;
 const os = @import("std").os.linux;
-const SEEK_END = 2;
 
 const ShmErr = error{
     OutOfMemory,
@@ -50,19 +49,33 @@ pub const Channel = struct {
     /// initialises the header. Subsequent calls attach to the existing
     /// segment and bump the connection counter.
     pub fn open(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32) ShmErr!Channel {
-        const name_z = try allocator.dupeZ(u8, name);
+        // POSIX shm_open requires the name to start with '/' and contain
+        // no other '/' characters.  Replace inner slashes with '_' so that
+        // topic names like "/farm/weather" produce a valid shm name.
+        const shm_name = try allocator.alloc(u8, name.len);
+        defer allocator.free(shm_name);
+        for (name, 0..) |ch, i| {
+            shm_name[i] = if (i > 0 and ch == '/') '_' else ch;
+        }
+        const name_z = try allocator.dupeZ(u8, shm_name);
         defer allocator.free(name_z);
 
-        const o_flags: c_int = @as(c_int, @bitCast(os.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true }));
-
-        var fd: i32 = c.shm_open(name_z.ptr, o_flags, 0o644);
+        // Attempt to create the segment exclusively.
+        const excl_flags: c_int = @as(c_int, @bitCast(os.O{
+            .ACCMODE = .RDWR,
+            .CREAT = true,
+            .EXCL = true,
+        }));
+        var fd: i32 = c.shm_open(name_z.ptr, excl_flags, 0o644);
         var created = true;
 
         if (fd == -1) {
-            const open_flags: c_int = @as(c_int, @bitCast(os.O{
+            // shm_open failed with O_EXCL.  If the file already exists
+            // (EEXIST) we attach to it; any other error is terminal.
+            const rdwr_flags: c_int = @as(c_int, @bitCast(os.O{
                 .ACCMODE = .RDWR,
             }));
-            fd = c.shm_open(name_z.ptr, open_flags, 0);
+            fd = c.shm_open(name_z.ptr, rdwr_flags, 0);
             created = false;
         }
 
@@ -72,13 +85,9 @@ pub const Channel = struct {
         const total_size: usize = data_size + @sizeOf(Header);
         const map_size: usize = total_size;
 
+        // Only the creator sets the size. Attachers trust the existing layout.
         if (created) {
             _ = c.ftruncate(fd, @intCast(total_size));
-        } else {
-            const current_size = @as(usize, @intCast(c.lseek(fd, 0, SEEK_END)));
-            if (current_size < total_size) {
-                _ = c.ftruncate(fd, @intCast(total_size));
-            }
         }
 
         const mapped = os.mmap(
@@ -107,7 +116,7 @@ pub const Channel = struct {
             @memcpy(hdr.name[0..name_len], name[0..name_len]);
             hdr.name[name_len] = 0;
         } else {
-            _ = @atomicRmw(u32, &hdr.conns, .Add, 1, .monotonic);
+            _ = @atomicRmw(u32, &hdr.conns, .Add, 1, .acq_rel);
         }
 
         return .{ .fd = fd, .ptr = ptr, .header = hdr, .size = map_size };
@@ -118,13 +127,18 @@ pub const Channel = struct {
     /// The underlying POSIX shm is unlinked only when the last connection
     /// is closed (reference counting via `conns`).
     pub fn close(self: *Channel) void {
-        const prev = @atomicRmw(u32, &self.header.conns, .Sub, 1, .monotonic);
+        const prev = @atomicRmw(u32, &self.header.conns, .Sub, 1, .acq_rel);
 
         const needs_unlink = prev == 1;
         var name_buf: [256]u8 = undefined;
         const name_z: ?[:0]u8 = if (needs_unlink) blk: {
             const name_slice = self.header.name[0..self.header.name_len];
-            break :blk std.fmt.bufPrintZ(&name_buf, "{s}", .{name_slice}) catch null;
+            // Re-apply the same sanitisation as open(): replace inner '/' with '_'.
+            for (name_slice, 0..) |ch, i| {
+                name_buf[i] = if (i > 0 and ch == '/') '_' else ch;
+            }
+            name_buf[name_slice.len] = 0;
+            break :blk name_buf[0..name_slice.len :0];
         } else null;
 
         _ = os.munmap(self.ptr, self.size);
@@ -132,6 +146,8 @@ pub const Channel = struct {
 
         if (name_z) |nz| _ = c.shm_unlink(nz.ptr);
     }
+
+    pub const deinit = close;
 };
 
 /// Returns the slowest (smallest) active read cursor.
@@ -156,8 +172,12 @@ pub fn slowestReader(readers: []const u32, write_cursor: u32) u32 {
 /// Blocks with a spin-loop if the buffer is full (slowest-reader
 /// backpressure).
 pub fn write(chan: *Channel, comptime T: type, msg: *const T) void {
-    defer chan.header.write += 1;
+    writeRaw(chan, @as(*const anyopaque, @ptrCast(msg)));
+}
 
+/// Type-erased write — uses `chan.header.msg_size` instead of `@sizeOf(T)`.
+/// Called by the generic `write()` and by the C API wrapper.
+pub fn writeRaw(chan: *Channel, msg: *const anyopaque) void {
     const cap = chan.header.capacity;
 
     while (chan.header.write -% slowestReader(&chan.header.read, chan.header.write) >= cap)
@@ -165,7 +185,10 @@ pub fn write(chan: *Channel, comptime T: type, msg: *const T) void {
 
     const msg_size = chan.header.msg_size;
     const slot = chan.ptr + @sizeOf(Header) + (chan.header.write % cap) * msg_size;
-    @memcpy(slot, @as(*const [@sizeOf(T)]u8, @ptrCast(msg)));
+    @memcpy(slot, @as([*]const u8, @ptrCast(msg))[0..msg_size]);
+
+    // Publish the slot: make data visible to readers before advancing the cursor.
+    _ = @atomicRmw(u32, &chan.header.write, .Add, 1, .release);
 }
 
 /// Advance the read cursor for `sub_id` and return a pointer to the slot.
@@ -174,10 +197,15 @@ pub fn write(chan: *Channel, comptime T: type, msg: *const T) void {
 /// is advanced atomically. Slots are reused once all subscribers have
 /// read or dropped them.
 pub fn read(chan: *Channel, comptime T: type, sub_id: u32) *T {
+    return @ptrCast(@alignCast(readRaw(chan, sub_id)));
+}
+
+/// Type-erased read — returns `*anyopaque` instead of `*T`.
+pub fn readRaw(chan: *Channel, sub_id: u32) *anyopaque {
     const msg_size = chan.header.msg_size;
     const idx = @atomicRmw(u32, &chan.header.read[sub_id], .Add, 1, .acquire) % chan.header.capacity;
     const slot = chan.ptr + @sizeOf(Header) + idx * msg_size;
-    return @ptrCast(@alignCast(slot));
+    return @ptrCast(slot);
 }
 
 test "slowestReader: skips inactive MAX_U32 readers" {

@@ -4,7 +4,6 @@ const ParseErr = error{
     OutOfMemory,
     FileSystem,
     InvalidMessage,
-    MessageTooLarge,
 };
 
 pub const Field = struct {
@@ -16,8 +15,6 @@ pub const Msg = struct {
     name: []const u8,
     fields: []const Field,
 };
-
-const BUF_SIZE = 4096;
 
 fn skipWhitespace(text: []const u8, start: usize) usize {
     var i = start;
@@ -121,13 +118,18 @@ fn parseMessageText(allocator: std.mem.Allocator, text: []const u8) ParseErr!Msg
 
 /// Parse a `.glu` message definition file into an array of `Msg`.
 ///
-/// The file is read incrementally into a fixed buffer. Messages are
-/// delimited by `message <name> { ... }` blocks. Supports multiple
-/// messages per file.
+/// Reads the entire file, then extracts messages delimited by
+/// `message <name> { ... }` blocks. Supports multiple messages per file.
 pub fn parse(init: std.process.Init, fp: []const u8) ParseErr![]Msg {
     const cwd = std.Io.Dir.cwd();
     var file = cwd.openFile(init.io, fp, .{}) catch return ParseErr.FileSystem;
     defer file.close(init.io);
+
+    const size = @as(usize, @intCast(file.length(init.io) catch return ParseErr.FileSystem));
+    const content = try init.gpa.alloc(u8, size);
+    defer init.gpa.free(content);
+
+    _ = file.readPositionalAll(init.io, content, 0) catch return ParseErr.FileSystem;
 
     var messages = std.ArrayListAligned(Msg, null).empty;
     errdefer {
@@ -142,48 +144,19 @@ pub fn parse(init: std.process.Init, fp: []const u8) ParseErr![]Msg {
         messages.deinit(init.gpa);
     }
 
-    var buf: [BUF_SIZE]u8 = undefined;
-    var end: usize = 0;
-    var file_offset: u64 = 0;
+    var pos: usize = 0;
+    while (pos < content.len) {
+        pos = skipWhitespace(content, pos);
+        if (pos >= content.len) break;
 
-    while (true) {
-        if (end < buf.len) {
-            const n = file.readPositionalAll(init.io, buf[end..], file_offset) catch return ParseErr.FileSystem;
-            if (n == 0 and end == 0) break;
-            end += n;
-            file_offset += n;
+        if (pos + 7 <= content.len and std.mem.eql(u8, content[pos..pos + 7], "message")) {
+            const close = findClosingBrace(content, pos) orelse return error.InvalidMessage;
+            const msg = try parseMessageText(init.gpa, content[pos..close + 1]);
+            try messages.append(init.gpa, msg);
+            pos = close + 1;
+        } else {
+            pos += 1;
         }
-        if (end == 0) break;
-
-        var pos: usize = 0;
-        while (pos < end) {
-            pos = skipWhitespace(buf[0..end], pos);
-            if (pos >= end) break;
-
-            if (pos + 7 <= end and std.mem.eql(u8, buf[pos..pos + 7], "message")) {
-                const close = findClosingBrace(buf[0..end], pos);
-                if (close) |c| {
-                    const msg = try parseMessageText(init.gpa, buf[pos..c + 1]);
-                    try messages.append(init.gpa, msg);
-                    pos = c + 1;
-                } else {
-                    break;
-                }
-            } else {
-                pos += 1;
-            }
-        }
-
-        if (pos > 0) {
-            if (pos < end) {
-                std.mem.copyForwards(u8, buf[0..], buf[pos..end]);
-                end -= pos;
-            } else {
-                end = 0;
-            }
-        }
-
-        if (end >= buf.len) return error.MessageTooLarge;
     }
 
     return messages.toOwnedSlice(init.gpa);

@@ -2,6 +2,7 @@ const std = @import("std");
 const c = std.c;
 const Channel = @import("../channel.zig").Channel;
 const read = @import("../channel.zig").read;
+const readRaw = @import("../channel.zig").readRaw;
 const Registry = @import("../registry.zig");
 const write = @import("../channel.zig").write;
 
@@ -32,7 +33,7 @@ pub const Subscriber = struct {
         // messages. Setting it to 0 would cause the publisher to deadlock waiting for
         // the subscriber to drain all old ring-buffer slots that no longer exist.
         const current_write = @atomicLoad(u32, &sub.channel.header.write, .acquire);
-        sub.channel.header.read[sub.id] = current_write;
+        @atomicStore(u32, &sub.channel.header.read[sub.id], current_write, .release);
         Registry.registerOwnExe();
 
         return sub;
@@ -53,9 +54,15 @@ pub const Subscriber = struct {
     /// Non-blocking: compares the local read cursor against the global
     /// write cursor and only advances when new data exists.
     pub fn receive(self: *Subscriber, comptime T: type) ?*T {
+        const raw = self.receiveRaw() orelse return null;
+        return @ptrCast(@alignCast(raw));
+    }
+
+    /// Type-erased receive — returns `?*anyopaque` instead of `?*T`.
+    pub fn receiveRaw(self: *Subscriber) ?*anyopaque {
         const r = @atomicLoad(u32, &self.channel.header.read[self.id], .monotonic);
         const w = @atomicLoad(u32, &self.channel.header.write, .acquire);
-        if (r < w) return read(&self.channel, T, self.id);
+        if (r < w) return readRaw(&self.channel, self.id);
         return null;
     }
 };

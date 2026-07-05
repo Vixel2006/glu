@@ -127,3 +127,110 @@ pub fn listAlive(allocator: std.mem.Allocator) RegistryErr![]NodeEntry {
 
     return entries.toOwnedSlice(allocator);
 }
+
+test "register and listAlive" {
+    const allocator = std.testing.allocator;
+
+    const name = "glu-test-register-alive";
+    defer unregister(name);
+
+    try register(name);
+
+    const entries = try listAlive(allocator);
+    defer {
+        for (entries) |e| allocator.free(e.name);
+        allocator.free(entries);
+    }
+
+    var found = false;
+    for (entries) |e| {
+        if (std.mem.eql(u8, e.name, name)) {
+            found = true;
+            try std.testing.expectEqual(@as(u32, @intCast(os.getpid())), e.pid);
+            try std.testing.expect(e.alive);
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "registerPid with explicit PID" {
+    const allocator = std.testing.allocator;
+
+    const name = "glu-test-register-pid";
+    defer unregister(name);
+
+    try registerPid(name, 42);
+
+    const entries = try listAlive(allocator);
+    defer {
+        for (entries) |e| allocator.free(e.name);
+        allocator.free(entries);
+    }
+
+    var found = false;
+    for (entries) |e| {
+        if (std.mem.eql(u8, e.name, name)) {
+            found = true;
+            try std.testing.expectEqual(@as(u32, 42), e.pid);
+        }
+    }
+    try std.testing.expect(found);
+}
+
+test "unregister removes entry" {
+    const allocator = std.testing.allocator;
+
+    const name = "glu-test-unregister";
+    try register(name);
+
+    // Verify it exists
+    {
+        const entries = try listAlive(allocator);
+        defer {
+            for (entries) |e| allocator.free(e.name);
+            allocator.free(entries);
+        }
+        var found = false;
+        for (entries) |e| {
+            if (std.mem.eql(u8, e.name, name)) {
+                found = true;
+            }
+        }
+        try std.testing.expect(found);
+    }
+
+    unregister(name);
+
+    // Verify it's gone
+    {
+        const entries = try listAlive(allocator);
+        defer {
+            for (entries) |e| allocator.free(e.name);
+            allocator.free(entries);
+        }
+        for (entries) |e| {
+            try std.testing.expect(!std.mem.eql(u8, e.name, name));
+        }
+    }
+}
+
+test "unregister nonexistent name does not crash" {
+    unregister("glu-test-nonexistent-this-should-not-exist");
+}
+
+test "listAlive empty when no matching nodes" {
+    const allocator = std.testing.allocator;
+
+    const name = "glu-test-list-empty";
+    defer unregister(name);
+
+    const entries = try listAlive(allocator);
+    defer {
+        for (entries) |e| allocator.free(e.name);
+        allocator.free(entries);
+    }
+
+    for (entries) |e| {
+        try std.testing.expect(!std.mem.eql(u8, e.name, name));
+    }
+}
