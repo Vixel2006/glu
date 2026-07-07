@@ -114,7 +114,7 @@ pub fn main() void {
             gaussianNoise(&rng_state, 0.05);
 
         // Zero-copy publish: reserve a slot, fill it in-place, then commit.
-        const slot = publisher.reserve(msgs.Telemetry);
+        const slot: *msgs.Telemetry = @ptrCast(@alignCast(publisher.reserve()));
         slot.* = msgs.Telemetry{
             .seq = seq,
             .timestamp = milliTimestamp(),

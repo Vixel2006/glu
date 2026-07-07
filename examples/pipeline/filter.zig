@@ -81,7 +81,8 @@ pub fn main() void {
     var total_noise: f64 = 0;
 
     while (true) {
-        if (sub.receive(msgs.RawSensor)) |raw| {
+        if (sub.receive()) |r| {
+            const raw: *msgs.RawSensor = @ptrCast(@alignCast(r));
             count += 1;
             total_noise += raw.noise;
 
@@ -100,7 +101,7 @@ pub fn main() void {
             const magnitude = std.math.sqrt(ema_x * ema_x + ema_y * ema_y + ema_z * ema_z);
 
             // Zero-copy publish of the filtered message.
-            const slot = pub_.reserve(msgs.Filtered);
+            const slot: *msgs.Filtered = @ptrCast(@alignCast(pub_.reserve()));
             slot.* = msgs.Filtered{
                 .seq = raw.seq,
                 .timestamp = milliTimestamp(),

@@ -82,7 +82,8 @@ pub fn main() void {
     var count: u64 = 0;
 
     while (true) {
-        if (sub.receive(msgs.Filtered)) |filtered| {
+        if (sub.receive()) |raw| {
+            const filtered: *msgs.Filtered = @ptrCast(@alignCast(raw));
             count += 1;
 
             // Differential drive mixing.
@@ -91,7 +92,7 @@ pub fn main() void {
             const enabled: u8 = if (filtered.magnitude > motion_threshold) 1 else 0;
 
             // Zero-copy publish of motor command.
-            const slot = pub_.reserve(msgs.MotorCmd);
+            const slot: *msgs.MotorCmd = @ptrCast(@alignCast(pub_.reserve()));
             slot.* = msgs.MotorCmd{
                 .seq = filtered.seq,
                 .timestamp = milliTimestamp(),

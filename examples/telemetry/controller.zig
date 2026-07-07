@@ -90,7 +90,8 @@ pub fn main() void {
     var last_summary = milliTimestamp();
 
     while (true) {
-        if (subscriber.receive(msgs.Telemetry)) |msg| {
+        if (subscriber.receive()) |raw| {
+            const msg: *msgs.Telemetry = @ptrCast(@alignCast(raw));
             total_count += 1;
             w_count += 1;
 

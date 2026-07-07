@@ -1,7 +1,7 @@
 pub const Channel = @import("channel.zig").Channel;
 pub const GLU_MAGIC = @import("channel.zig").GLU_MAGIC;
-pub const writeRaw = @import("channel.zig").writeRaw;
-pub const readRaw = @import("channel.zig").readRaw;
+pub const write = @import("channel.zig").write;
+pub const read = @import("channel.zig").read;
 pub const Publisher = @import("api/publisher.zig").Publisher;
 pub const Subscriber = @import("api/subscriber.zig").Subscriber;
 pub const tcp = @import("api/tcp.zig");

@@ -97,7 +97,8 @@ pub fn main() void {
 
     while (true) {
         // Drain all available messages before sleeping.
-        while (subscriber.receive(msgs.Telemetry)) |msg| {
+        while (subscriber.receive()) |raw| {
+            const msg: *msgs.Telemetry = @ptrCast(@alignCast(raw));
             window_count += 1;
             temp_stats.update(msg.temperature);
             pres_stats.update(msg.pressure);

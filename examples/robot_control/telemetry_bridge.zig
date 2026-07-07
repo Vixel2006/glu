@@ -122,7 +122,8 @@ fn runBridge() void {
 
     while (true) {
         // Forward all available odometry messages.
-        while (odom_sub.receive(msgs.Odometry)) |odom| {
+        while (odom_sub.receive()) |raw| {
+            const odom: *msgs.Odometry = @ptrCast(@alignCast(raw));
             count += 1;
             const line = std.fmt.bufPrint(
                 &buf,
@@ -133,7 +134,8 @@ fn runBridge() void {
         }
 
         // Forward all available battery status messages.
-        while (bat_sub.receive(msgs.BatteryStatus)) |bat| {
+        while (bat_sub.receive()) |raw| {
+            const bat: *msgs.BatteryStatus = @ptrCast(@alignCast(raw));
             const line = std.fmt.bufPrint(
                 &buf,
                 "BAT  seq={d} pct={d:.1}%\n",

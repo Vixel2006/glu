@@ -89,11 +89,11 @@ export fn glu_channel_close(chan: *glu.Channel) void {
 }
 
 export fn glu_channel_write(chan: *glu.Channel, msg: *const anyopaque) void {
-    glu.writeRaw(chan, msg);
+    glu.write(chan, msg);
 }
 
 export fn glu_channel_read(chan: *glu.Channel, sub_id: u32) *anyopaque {
-    return glu.readRaw(chan, sub_id);
+    return glu.read(chan, sub_id);
 }
 
 export fn glu_channel_msg_size(chan: *const glu.Channel) u32 {
@@ -121,7 +121,7 @@ export fn glu_publisher_deinit(p: *glu.Publisher) void {
 }
 
 export fn glu_publisher_reserve(p: *glu.Publisher) *anyopaque {
-    return p.reserveRaw();
+    return p.reserve();
 }
 
 export fn glu_publisher_commit(p: *glu.Publisher) void {
@@ -129,7 +129,7 @@ export fn glu_publisher_commit(p: *glu.Publisher) void {
 }
 
 export fn glu_publisher_publish(p: *glu.Publisher, msg: *const anyopaque) void {
-    p.publishRaw(msg);
+    p.publish(msg);
 }
 
 // ─────────────────────────────────────────────
@@ -145,7 +145,7 @@ export fn glu_subscriber_deinit(sub: *glu.Subscriber) void {
 }
 
 export fn glu_subscriber_receive(sub: *glu.Subscriber) ?*anyopaque {
-    return sub.receiveRaw();
+    return sub.receive();
 }
 
 // ─────────────────────────────────────────────

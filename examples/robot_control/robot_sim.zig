@@ -105,7 +105,8 @@ pub fn main() void {
     while (true) : (seq += 1) {
         // Consume the latest command velocity (non-blocking).
         // We process every available message to stay up to date.
-        while (cmd_sub.receive(msgs.Twist)) |cmd| {
+        while (cmd_sub.receive()) |raw| {
+            const cmd: *msgs.Twist = @ptrCast(@alignCast(raw));
             linear_vel = cmd.linear_x;
             angular_vel = cmd.angular_z;
         }
@@ -116,7 +117,7 @@ pub fn main() void {
         y += linear_vel * std.math.sin(theta) * dt;
 
         // Publish odometry (zero-copy).
-        const slot = odom_pub.reserve(msgs.Odometry);
+        const slot: *msgs.Odometry = @ptrCast(@alignCast(odom_pub.reserve()));
         slot.* = msgs.Odometry{
             .seq = seq,
             .timestamp = milliTimestamp(),
@@ -129,7 +130,8 @@ pub fn main() void {
         odom_pub.commit();
 
         // Check battery (non-blocking — only prints when a new message arrives).
-        while (bat_sub.receive(msgs.BatteryStatus)) |bat| {
+        while (bat_sub.receive()) |raw| {
+            const bat: *msgs.BatteryStatus = @ptrCast(@alignCast(raw));
             if (bat.percentage < bat_warn_pct) {
                 std.debug.print(
                     "\x1b[33m[robot_sim] BATTERY LOW  {d:.1}%  {d:.2}V\x1b[0m\n",

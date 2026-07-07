@@ -2,7 +2,6 @@ const std = @import("std");
 const c = std.c;
 const Channel = @import("../channel.zig").Channel;
 const read = @import("../channel.zig").read;
-const readRaw = @import("../channel.zig").readRaw;
 const Registry = @import("../registry.zig");
 const write = @import("../channel.zig").write;
 
@@ -53,16 +52,10 @@ pub const Subscriber = struct {
     ///
     /// Non-blocking: compares the local read cursor against the global
     /// write cursor and only advances when new data exists.
-    pub fn receive(self: *Subscriber, comptime T: type) ?*T {
-        const raw = self.receiveRaw() orelse return null;
-        return @ptrCast(@alignCast(raw));
-    }
-
-    /// Type-erased receive — returns `?*anyopaque` instead of `?*T`.
-    pub fn receiveRaw(self: *Subscriber) ?*anyopaque {
+    pub fn receive(self: *Subscriber) ?*anyopaque {
         const r = @atomicLoad(u32, &self.channel.header.read[self.id], .monotonic);
         const w = @atomicLoad(u32, &self.channel.header.write, .acquire);
-        if (r < w) return readRaw(&self.channel, self.id);
+        if (r < w) return read(&self.channel, self.id);
         return null;
     }
 };
@@ -80,7 +73,7 @@ test "Subscriber: publish via raw Channel, receive via Subscriber" {
     const pid = c.fork();
     if (pid == 0) {
         var child_chan = Channel.open(allocator, "/glu_test_subscriber", @sizeOf(TestMsg), 2) catch c.exit(1);
-        write(&child_chan, TestMsg, &.{ .x = 99, .y = 42 });
+        write(&child_chan, @ptrCast(&TestMsg{ .x = 99, .y = 42 }));
         child_chan.close();
         c.exit(0);
     }
@@ -89,9 +82,10 @@ test "Subscriber: publish via raw Channel, receive via Subscriber" {
         var ts = std.c.timespec{ .sec = 0, .nsec = 100_000_000 };
         _ = c.nanosleep(&ts, null);
     }
-    const msg = sub.receive(TestMsg) orelse return error.TestFailed;
-    try std.testing.expect(msg.x == 99);
-    try std.testing.expect(msg.y == 42);
+    const msg = sub.receive() orelse return error.TestFailed;
+    const msg_ptr: *const TestMsg = @ptrCast(@alignCast(msg));
+    try std.testing.expect(msg_ptr.x == 99);
+    try std.testing.expect(msg_ptr.y == 42);
     _ = c.waitpid(pid, null, 0);
 }
 
@@ -109,8 +103,8 @@ test "two subscribers on the same channel both receive messages" {
     const pid = c.fork();
     if (pid == 0) {
         var child_chan = Channel.open(allocator, "/glu_test_two_subs", @sizeOf(TestMsg), 8) catch c.exit(1);
-        write(&child_chan, TestMsg, &.{ .x = 1, .y = 2 });
-        write(&child_chan, TestMsg, &.{ .x = 3, .y = 4 });
+        write(&child_chan, @ptrCast(&TestMsg{ .x = 1, .y = 2 }));
+        write(&child_chan, @ptrCast(&TestMsg{ .x = 3, .y = 4 }));
         child_chan.close();
         c.exit(0);
     }
@@ -120,21 +114,25 @@ test "two subscribers on the same channel both receive messages" {
         _ = c.nanosleep(&ts, null);
     }
 
-    const m0a = sub0.receive(TestMsg) orelse return error.TestFailed;
-    try std.testing.expect(m0a.x == 1);
-    try std.testing.expect(m0a.y == 2);
+    const m0a = sub0.receive() orelse return error.TestFailed;
+    const m0a_ptr: *const TestMsg = @ptrCast(@alignCast(m0a));
+    try std.testing.expect(m0a_ptr.x == 1);
+    try std.testing.expect(m0a_ptr.y == 2);
 
-    const m0b = sub0.receive(TestMsg) orelse return error.TestFailed;
-    try std.testing.expect(m0b.x == 3);
-    try std.testing.expect(m0b.y == 4);
+    const m0b = sub0.receive() orelse return error.TestFailed;
+    const m0b_ptr: *const TestMsg = @ptrCast(@alignCast(m0b));
+    try std.testing.expect(m0b_ptr.x == 3);
+    try std.testing.expect(m0b_ptr.y == 4);
 
-    const m1a = sub1.receive(TestMsg) orelse return error.TestFailed;
-    try std.testing.expect(m1a.x == 1);
-    try std.testing.expect(m1a.y == 2);
+    const m1a = sub1.receive() orelse return error.TestFailed;
+    const m1a_ptr: *const TestMsg = @ptrCast(@alignCast(m1a));
+    try std.testing.expect(m1a_ptr.x == 1);
+    try std.testing.expect(m1a_ptr.y == 2);
 
-    const m1b = sub1.receive(TestMsg) orelse return error.TestFailed;
-    try std.testing.expect(m1b.x == 3);
-    try std.testing.expect(m1b.y == 4);
+    const m1b = sub1.receive() orelse return error.TestFailed;
+    const m1b_ptr: *const TestMsg = @ptrCast(@alignCast(m1b));
+    try std.testing.expect(m1b_ptr.x == 3);
+    try std.testing.expect(m1b_ptr.y == 4);
 
     _ = c.waitpid(pid, null, 0);
 }

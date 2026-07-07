@@ -4,7 +4,6 @@ const Channel = @import("../channel.zig").Channel;
 const Header = @import("../channel.zig").Header;
 const slowestReader = @import("../channel.zig").slowestReader;
 const write = @import("../channel.zig").write;
-const writeRaw = @import("../channel.zig").writeRaw;
 const Registry = @import("../registry.zig");
 const read = @import("../channel.zig").read;
 
@@ -44,12 +43,7 @@ pub const Publisher = struct {
     /// This is the first half of the two-phase publish pattern.
     /// Fill the returned pointer then call `commit` to make the
     /// message visible to subscribers. Blocks if the buffer is full.
-    pub fn reserve(self: *Publisher, comptime T: type) *T {
-        return @ptrCast(@alignCast(self.reserveRaw()));
-    }
-
-    /// Type-erased reserve — returns `*anyopaque` instead of `*T`.
-    pub fn reserveRaw(self: *Publisher) *anyopaque {
+    pub fn reserve(self: *Publisher) *anyopaque {
         while (self.channel.header.write -% slowestReader(&self.channel.header.read, self.channel.header.write) >= self.channel.header.capacity)
             std.atomic.spinLoopHint();
         const slot = self.channel.ptr + @sizeOf(Header) + (self.channel.header.write % self.channel.header.capacity) * self.channel.header.msg_size;
@@ -64,14 +58,9 @@ pub const Publisher = struct {
         @atomicStore(u32, &self.channel.header.write, self.channel.header.write + 1, .release);
     }
 
-    /// Convenience: write a message in one shot (reserve + copy + commit).
-    pub fn publish(self: *Publisher, comptime T: type, msg: *const T) void {
-        self.publishRaw(@as(*const anyopaque, @ptrCast(msg)));
-    }
-
-    /// Type-erased publish — accepts `*const anyopaque` instead of `*const T`.
-    pub fn publishRaw(self: *Publisher, msg: *const anyopaque) void {
-        writeRaw(&self.channel, msg);
+    /// Write a message in one shot (reserve + copy + commit).
+    pub fn publish(self: *Publisher, msg: *const anyopaque) void {
+        write(&self.channel, msg);
     }
 };
 
@@ -88,7 +77,7 @@ test "Publisher: reserve and commit directly" {
     if (pid == 0) {
         var child_chan = Channel.open(allocator, "/glu_test_reserve", @sizeOf(TestMsg), 5) catch c.exit(1);
         var publisher = Publisher{ .channel = child_chan };
-        const slot = publisher.reserve(TestMsg);
+        const slot: *TestMsg = @ptrCast(@alignCast(publisher.reserve()));
         slot.* = TestMsg{ .x = 42, .y = 99 };
         publisher.commit();
         child_chan.close();
@@ -99,7 +88,7 @@ test "Publisher: reserve and commit directly" {
         var ts = std.c.timespec{ .sec = 0, .nsec = 100_000_000 };
         _ = c.nanosleep(&ts, null);
     }
-    const msg = read(&chan, TestMsg, 0);
+    const msg: *const TestMsg = @ptrCast(@alignCast(read(&chan, 0)));
     try std.testing.expect(msg.x == 42);
     try std.testing.expect(msg.y == 99);
     _ = c.waitpid(pid, null, 0);
@@ -116,7 +105,7 @@ test "Publisher: publish a message, read it via raw Channel" {
     if (pid == 0) {
         var child_chan = Channel.open(allocator, "/glu_test_publisher", @sizeOf(TestMsg), 5) catch c.exit(1);
         var publisher = Publisher{ .channel = child_chan };
-        publisher.publish(TestMsg, &.{ .x = 7, .y = 13 });
+        publisher.publish(@ptrCast(&TestMsg{ .x = 7, .y = 13 }));
         child_chan.close();
         c.exit(0);
     }
@@ -125,7 +114,7 @@ test "Publisher: publish a message, read it via raw Channel" {
         var ts = std.c.timespec{ .sec = 0, .nsec = 100_000_000 };
         _ = c.nanosleep(&ts, null);
     }
-    const msg = read(&chan, TestMsg, 0);
+    const msg: *const TestMsg = @ptrCast(@alignCast(read(&chan, 0)));
     try std.testing.expect(msg.x == 7);
     try std.testing.expect(msg.y == 13);
     _ = c.waitpid(pid, null, 0);

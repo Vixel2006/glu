@@ -91,7 +91,7 @@ pub fn main() void {
         const t: f32 = @as(f32, @floatFromInt(seq)) * dt;
         const noise = gaussianNoise(&rng, noise_std);
 
-        const slot = publisher.reserve(msgs.RawSensor);
+        const slot: *msgs.RawSensor = @ptrCast(@alignCast(publisher.reserve()));
         slot.* = msgs.RawSensor{
             .seq = seq,
             .timestamp = milliTimestamp(),

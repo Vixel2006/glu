@@ -167,20 +167,19 @@ pub fn slowestReader(readers: []const u32, write_cursor: u32) u32 {
 
 /// Write a message into the ring buffer.
 ///
-/// We are sure to have only one publisher for the channel so we can use
-/// the write cursor without atomics, making the fast path cheaper.
+/// Uses `chan.header.msg_size` so a single entry point serves both Zig
+/// and C callers without type-level polymorphism.
 /// Blocks with a spin-loop if the buffer is full (slowest-reader
 /// backpressure).
-pub fn write(chan: *Channel, comptime T: type, msg: *const T) void {
-    writeRaw(chan, @as(*const anyopaque, @ptrCast(msg)));
-}
-
-/// Type-erased write — uses `chan.header.msg_size` instead of `@sizeOf(T)`.
-/// Called by the generic `write()` and by the C API wrapper.
-pub fn writeRaw(chan: *Channel, msg: *const anyopaque) void {
+pub fn write(chan: *Channel, msg: *const anyopaque) void {
     const cap = chan.header.capacity;
 
+    // TODO: This waiting loop is basically a quality of service (QoS) feature.
+    // we should have a mechanism to give the programmer control if they want to do the block
+    // or they want the writer to just continue writing and maybe do reseting to the slowest reader pointer
     while (chan.header.write -% slowestReader(&chan.header.read, chan.header.write) >= cap)
+        // TODO: here we do yield from the writer if the slowest reader isn't catching up
+        // we should be able to implement a semaphore or condition variables for maximum performance
         std.atomic.spinLoopHint();
 
     const msg_size = chan.header.msg_size;
@@ -196,12 +195,7 @@ pub fn writeRaw(chan: *Channel, msg: *const anyopaque) void {
 /// Each subscriber owns one slot in the `read` array and their cursor
 /// is advanced atomically. Slots are reused once all subscribers have
 /// read or dropped them.
-pub fn read(chan: *Channel, comptime T: type, sub_id: u32) *T {
-    return @ptrCast(@alignCast(readRaw(chan, sub_id)));
-}
-
-/// Type-erased read — returns `*anyopaque` instead of `*T`.
-pub fn readRaw(chan: *Channel, sub_id: u32) *anyopaque {
+pub fn read(chan: *Channel, sub_id: u32) *anyopaque {
     const msg_size = chan.header.msg_size;
     const idx = @atomicRmw(u32, &chan.header.read[sub_id], .Add, 1, .acquire) % chan.header.capacity;
     const slot = chan.ptr + @sizeOf(Header) + idx * msg_size;
@@ -235,9 +229,9 @@ test "writer not blocked when no active readers" {
     const pid = c.fork();
     if (pid == 0) {
         var child_chan = Channel.open(allocator, "/glu_test_nowriterblock", @sizeOf(TestMsg), 2) catch c.exit(1);
-        write(&child_chan, TestMsg, &.{ .x = 1, .y = 1 });
-        write(&child_chan, TestMsg, &.{ .x = 2, .y = 2 });
-        write(&child_chan, TestMsg, &.{ .x = 3, .y = 3 });
+        write(&child_chan, @ptrCast(&TestMsg{ .x = 1, .y = 1 }));
+        write(&child_chan, @ptrCast(&TestMsg{ .x = 2, .y = 2 }));
+        write(&child_chan, @ptrCast(&TestMsg{ .x = 3, .y = 3 }));
         child_chan.close();
         c.exit(0);
     }
@@ -272,8 +266,8 @@ test "two readers read independently from the same channel" {
             _ = c.nanosleep(&ts, null);
         }
 
-        const m0 = read(&child_chan, TestMsg, 1);
-        const m1 = read(&child_chan, TestMsg, 1);
+        const m0: *const TestMsg = @ptrCast(@alignCast(read(&child_chan, 1)));
+        const m1: *const TestMsg = @ptrCast(@alignCast(read(&child_chan, 1)));
         if (m0.x != 10 or m0.y != 20) c.exit(1);
         if (m1.x != 30 or m1.y != 40) c.exit(1);
 
@@ -281,18 +275,18 @@ test "two readers read independently from the same channel" {
         c.exit(0);
     }
 
-    write(&chan, TestMsg, &.{ .x = 10, .y = 20 });
-    write(&chan, TestMsg, &.{ .x = 30, .y = 40 });
+    write(&chan, @ptrCast(&TestMsg{ .x = 10, .y = 20 }));
+    write(&chan, @ptrCast(&TestMsg{ .x = 30, .y = 40 }));
 
     {
         var ts = std.c.timespec{ .sec = 0, .nsec = 50_000_000 };
         _ = c.nanosleep(&ts, null);
     }
 
-    const m0 = read(&chan, TestMsg, 0);
+    const m0: *const TestMsg = @ptrCast(@alignCast(read(&chan, 0)));
     try std.testing.expect(m0.x == 10);
     try std.testing.expect(m0.y == 20);
-    const m1 = read(&chan, TestMsg, 0);
+    const m1: *const TestMsg = @ptrCast(@alignCast(read(&chan, 0)));
     try std.testing.expect(m1.x == 30);
     try std.testing.expect(m1.y == 40);
 
@@ -311,7 +305,7 @@ test "cross-process: producer writes, consumer reads via fork" {
     const pid = c.fork();
     if (pid == 0) {
         var child_chan = Channel.open(allocator, "/glu_test_fork", @sizeOf(TestMsg), 5) catch c.exit(1);
-        write(&child_chan, TestMsg, &TestMsg{ .x = 42, .y = 99 });
+        write(&child_chan, @ptrCast(&TestMsg{ .x = 42, .y = 99 }));
         child_chan.close();
         c.exit(0);
     }
@@ -320,7 +314,7 @@ test "cross-process: producer writes, consumer reads via fork" {
         var ts = std.c.timespec{ .sec = 0, .nsec = 100_000_000 };
         _ = c.nanosleep(&ts, null);
     }
-    const msg = read(&chan, TestMsg, 0);
+    const msg: *const TestMsg = @ptrCast(@alignCast(read(&chan, 0)));
     try std.testing.expect(msg.x == 42);
     try std.testing.expect(msg.y == 99);
 

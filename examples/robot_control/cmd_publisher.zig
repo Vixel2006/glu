@@ -100,7 +100,7 @@ pub fn main() void {
         const angular_z = std.math.sin(angular_freq * t);
 
         // Zero-copy Twist publish.
-        const slot = cmd_pub.reserve(msgs.Twist);
+        const slot: *msgs.Twist = @ptrCast(@alignCast(cmd_pub.reserve()));
         slot.* = msgs.Twist{
             .seq = seq_cmd,
             .timestamp = milliTimestamp(),
@@ -123,7 +123,7 @@ pub fn main() void {
                 .current = bat_current_draw,
                 .percentage = bat_pct,
             };
-            bat_pub.publish(msgs.BatteryStatus, &bat_msg);
+            bat_pub.publish(@ptrCast(&bat_msg));
             seq_bat += 1;
         }
 
