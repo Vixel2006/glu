@@ -18,9 +18,6 @@ fn printUsage(init: std.process.Init) void {
         \\  launch   Launch nodes from a TOML config file
         \\           glu launch -f <file.toml> [-d]
         \\
-        \\  codegen  Generate Zig structs from a .glu message definition
-        \\           glu codegen -f <file.glu> -o <path/to/gen>
-        \\
         \\  list     List active topics in shared memory
         \\           glu list
         \\
