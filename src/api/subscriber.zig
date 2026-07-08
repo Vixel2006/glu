@@ -18,7 +18,7 @@ const SubErr = error{
 /// same topic independently.
 pub const Subscriber = struct {
     channel: Channel,
-    id: u32,
+    id: u32, // TODO: I think we need to make a mechanism for dynamic subscription 
 
     /// Create a new subscriber for topic `name` with the given reader `id`.
     ///

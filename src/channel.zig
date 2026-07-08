@@ -26,6 +26,7 @@ pub const Header = extern struct {
     name_len: u32,
     name: [64]u8,
     read: [MAX_READERS]u32,
+    // TODO: I think we maybe need to add a QoS handler here that should go to (0 = best-effort (don't care about slowest reader.), 1=reliable(the one we have now), 2=)
 };
 
 comptime {
@@ -156,6 +157,8 @@ pub const Channel = struct {
 /// block the writer. If no readers are active the write cursor itself is
 /// returned, meaning the writer will never be held back.
 pub fn slowestReader(readers: []const u32, write_cursor: u32) u32 {
+    // FIXME: Here if a reader crashes the read cursor freezes and publisher will spin-wait forever
+    // we should implement a mechanism in the subscribers that makes it crashes without a deadlock
     var min = write_cursor;
     for (readers) |reader| {
         if (reader != std.math.maxInt(u32)) {
