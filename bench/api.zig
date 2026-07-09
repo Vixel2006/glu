@@ -10,7 +10,7 @@ var sub_channel: Subscriber = undefined;
 var sub_pub: Publisher = undefined;
 
 fn beforePublisher() void {
-    pub_channel = Publisher.init(std.heap.page_allocator, "/glu_bench_pub", @sizeOf(TestMsg), 4096) catch unreachable;
+    pub_channel = Publisher.init(std.heap.page_allocator, "/glu_bench_pub", @sizeOf(TestMsg), 4096, .reliable) catch unreachable;
 }
 
 fn afterPublisher() void {
@@ -22,7 +22,7 @@ fn resetPublisher() void {
 }
 
 fn beforeSubscriber() void {
-    sub_pub = Publisher.init(std.heap.page_allocator, "/glu_bench_sub", @sizeOf(TestMsg), 16384) catch unreachable;
+    sub_pub = Publisher.init(std.heap.page_allocator, "/glu_bench_sub", @sizeOf(TestMsg), 16384, .reliable) catch unreachable;
     sub_channel = Subscriber.init(std.heap.page_allocator, "/glu_bench_sub", @sizeOf(TestMsg), 16384) catch unreachable;
     var i: u32 = 0;
     while (i < 16384) : (i += 1) {

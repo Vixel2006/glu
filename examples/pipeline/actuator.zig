@@ -66,6 +66,7 @@ pub fn main() void {
         output_topic,
         @sizeOf(msgs.MotorCmd),
         capacity,
+        .reliable,
     ) catch |e| {
         std.debug.print("[actuator] publisher init failed: {}\n", .{e});
         return;

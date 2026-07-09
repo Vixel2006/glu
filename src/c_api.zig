@@ -80,8 +80,8 @@ fn destroy(ptr: anytype) void {
 //  Channel
 // ─────────────────────────────────────────────
 
-export fn glu_channel_open(name: [*:0]const u8, msg_size: u32, capacity: u32, out: *?*glu.Channel) c_int {
-    return allocWrap(glu.Channel, glu.Channel.open(alloc, std.mem.sliceTo(name, 0), msg_size, capacity), out);
+export fn glu_channel_open(name: [*:0]const u8, msg_size: u32, capacity: u32, tos: u32, out: *?*glu.Channel) c_int {
+    return allocWrap(glu.Channel, glu.Channel.open(alloc, std.mem.sliceTo(name, 0), msg_size, capacity, @enumFromInt(glu.ToS, tos)), out);
 }
 
 export fn glu_channel_close(chan: *glu.Channel) void {
@@ -112,8 +112,8 @@ export fn glu_channel_write_cursor(chan: *const glu.Channel) u32 {
 //  Publisher
 // ─────────────────────────────────────────────
 
-export fn glu_publisher_init(name: [*:0]const u8, msg_size: u32, capacity: u32, out: *?*glu.Publisher) c_int {
-    return allocWrap(glu.Publisher, glu.Publisher.init(alloc, std.mem.sliceTo(name, 0), msg_size, capacity), out);
+export fn glu_publisher_init(name: [*:0]const u8, msg_size: u32, capacity: u32, tos: u32, out: *?*glu.Publisher) c_int {
+    return allocWrap(glu.Publisher, glu.Publisher.init(alloc, std.mem.sliceTo(name, 0), msg_size, capacity, @enumFromInt(glu.ToS, tos)), out);
 }
 
 export fn glu_publisher_deinit(p: *glu.Publisher) void {

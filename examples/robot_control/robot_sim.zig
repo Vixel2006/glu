@@ -74,6 +74,7 @@ pub fn main() void {
         odom_topic,
         @sizeOf(msgs.Odometry),
         capacity,
+        .reliable,
     ) catch |e| {
         std.debug.print("[robot_sim] odom publisher init failed: {}\n", .{e});
         return;

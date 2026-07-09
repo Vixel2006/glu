@@ -8,6 +8,11 @@
 extern "C" {
 #endif
 
+/* ── Type of Service ──────────────────────── */
+
+#define GLU_RELIABLE 0
+#define GLU_BEST_EFFORT 1
+
 /* ── Error codes ──────────────────────────── */
 
 #define GLU_OK 0
@@ -48,7 +53,7 @@ typedef struct {
 /* ── Channel ──────────────────────────────── */
 
 int glu_channel_open(const char *name, uint32_t msg_size, uint32_t capacity,
-                     glu_channel_t **out);
+                     int tos, glu_channel_t **out);
 void glu_channel_close(glu_channel_t *chan);
 void glu_channel_write(glu_channel_t *chan, const void *msg, uint32_t msg_size);
 void *glu_channel_read(glu_channel_t *chan, uint32_t sub_id);
@@ -59,7 +64,7 @@ uint32_t glu_channel_write_cursor(const glu_channel_t *chan);
 /* ── Publisher ────────────────────────────── */
 
 int glu_publisher_init(const char *name, uint32_t msg_size, uint32_t capacity,
-                       glu_publisher_t **out);
+                       int tos, glu_publisher_t **out);
 void glu_publisher_deinit(glu_publisher_t *pub);
 void *glu_publisher_reserve(glu_publisher_t *pub);
 void glu_publisher_commit(glu_publisher_t *pub);

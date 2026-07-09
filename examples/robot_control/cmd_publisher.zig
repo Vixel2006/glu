@@ -59,6 +59,7 @@ pub fn main() void {
         cmd_topic,
         @sizeOf(msgs.Twist),
         capacity,
+        .reliable,
     ) catch |e| {
         std.debug.print("[cmd_pub] cmd publisher init failed: {}\n", .{e});
         return;
@@ -71,6 +72,7 @@ pub fn main() void {
         bat_topic,
         @sizeOf(msgs.BatteryStatus),
         capacity,
+        .reliable,
     ) catch |e| {
         std.debug.print("[cmd_pub] battery publisher init failed: {}\n", .{e});
         return;

@@ -15,6 +15,12 @@ pub const GLU_MAGIC = 0x474C5500;
 /// Maximum number of concurrent readers (subscribers) per channel.
 pub const MAX_READERS = 8;
 
+/// Type of Service for channel delivery semantics.
+pub const ToS = enum(u32) {
+    reliable = 0,
+    best_effort = 1,
+};
+
 /// Layout of the shared memory header at the start of every channel.
 ///
 /// The `name` field is padded to 64 bytes to push the `read` array past
@@ -25,6 +31,8 @@ pub const Header = extern struct {
     conns: u32,
     msg_size: u32,
     capacity: u32,
+    tos: u32,
+    _pad: u32,
     name_len: u32,
     name: [64]u8,
     read: [MAX_READERS]u32,
@@ -32,7 +40,7 @@ pub const Header = extern struct {
 };
 
 comptime {
-    std.debug.assert(@sizeOf(Header) == 152);
+    std.debug.assert(@sizeOf(Header) == 160);
 }
 
 /// A POSIX shared-memory channel backed by `shm_open` + `mmap`.
@@ -51,7 +59,7 @@ pub const Channel = struct {
     /// The first call with a given `name` creates the segment and
     /// initialises the header. Subsequent calls attach to the existing
     /// segment and bump the connection counter.
-    pub fn open(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32) ShmErr!Channel {
+    pub fn open(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32, tos: ToS) ShmErr!Channel {
         // POSIX shm_open requires the name to start with '/' and contain
         // no other '/' characters.  Replace inner slashes with '_' so that
         // topic names like "/farm/weather" produce a valid shm name.
@@ -114,6 +122,7 @@ pub const Channel = struct {
             hdr.conns = 1;
             hdr.msg_size = msg_size;
             hdr.capacity = capacity;
+            hdr.tos = @intFromEnum(tos);
             const name_len = @min(@as(u32, @intCast(name.len)), 63);
             hdr.name_len = name_len;
             @memcpy(hdr.name[0..name_len], name[0..name_len]);
@@ -190,12 +199,11 @@ pub fn slowestReader(readers: []const u32, write_cursor: u32) u32 {
 /// backpressure).
 pub fn write(chan: *Channel, msg: *const anyopaque) void {
     const cap = chan.header.capacity;
+    const tos: ToS = @enumFromInt(chan.header.tos);
 
-    // TODO: This waiting loop is basically a quality of service (QoS) feature.
-    // we should have a mechanism to give the programmer control if they want to do the block
-    // or they want the writer to just continue writing and maybe do reseting to the slowest reader pointer
     while (chan.header.write -% slowestReader(&chan.header.read, chan.header.write) >= cap) {
         sweepDeadReaders(&chan.header.read, &chan.header.pids);
+        if (tos == .best_effort) break;
         if (chan.header.write -% slowestReader(&chan.header.read, chan.header.write) < cap) break;
         std.atomic.spinLoopHint();
     }
@@ -272,12 +280,12 @@ test "writer not blocked when no active readers" {
 
     _ = c.shm_unlink("/glu_test_nowriterblock");
 
-    var chan = try Channel.open(allocator, "/glu_test_nowriterblock", @sizeOf(TestMsg), 2);
+    var chan = try Channel.open(allocator, "/glu_test_nowriterblock", @sizeOf(TestMsg), 2, .reliable);
     defer chan.close();
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open(allocator, "/glu_test_nowriterblock", @sizeOf(TestMsg), 2) catch c.exit(1);
+        var child_chan = Channel.open(allocator, "/glu_test_nowriterblock", @sizeOf(TestMsg), 2, .reliable) catch c.exit(1);
         write(&child_chan, @ptrCast(&TestMsg{ .x = 1, .y = 1 }));
         write(&child_chan, @ptrCast(&TestMsg{ .x = 2, .y = 2 }));
         write(&child_chan, @ptrCast(&TestMsg{ .x = 3, .y = 3 }));
@@ -300,14 +308,14 @@ test "two readers read independently from the same channel" {
 
     _ = c.shm_unlink("/glu_test_two_readers");
 
-    var chan = try Channel.open(allocator, "/glu_test_two_readers", @sizeOf(TestMsg), 8);
+    var chan = try Channel.open(allocator, "/glu_test_two_readers", @sizeOf(TestMsg), 8, .reliable);
     defer chan.close();
 
     @atomicStore(u32, &chan.header.read[0], 0, .release);
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open(allocator, "/glu_test_two_readers", @sizeOf(TestMsg), 8) catch c.exit(1);
+        var child_chan = Channel.open(allocator, "/glu_test_two_readers", @sizeOf(TestMsg), 8, .reliable) catch c.exit(1);
         @atomicStore(u32, &child_chan.header.read[1], 0, .release);
 
         {
@@ -348,12 +356,12 @@ test "cross-process: producer writes, consumer reads via fork" {
 
     _ = c.shm_unlink("/glu_test_fork");
 
-    var chan = try Channel.open(allocator, "/glu_test_fork", @sizeOf(TestMsg), 5);
+    var chan = try Channel.open(allocator, "/glu_test_fork", @sizeOf(TestMsg), 5, .reliable);
     defer chan.close();
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open(allocator, "/glu_test_fork", @sizeOf(TestMsg), 5) catch c.exit(1);
+        var child_chan = Channel.open(allocator, "/glu_test_fork", @sizeOf(TestMsg), 5, .reliable) catch c.exit(1);
         write(&child_chan, @ptrCast(&TestMsg{ .x = 42, .y = 99 }));
         child_chan.close();
         c.exit(0);

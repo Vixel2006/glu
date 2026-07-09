@@ -58,6 +58,7 @@ pub fn main() void {
         filtered_topic,
         @sizeOf(msgs.Filtered),
         capacity,
+        .reliable,
     ) catch |e| {
         std.debug.print("[filter] publisher init failed: {}\n", .{e});
         return;

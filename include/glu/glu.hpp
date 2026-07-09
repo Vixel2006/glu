@@ -62,8 +62,8 @@ inline int check(int rc) {
 
 class Channel {
 public:
-    Channel(const char* name, uint32_t msg_size, uint32_t capacity) {
-        detail::check(glu_channel_open(name, msg_size, capacity, &chan_));
+    Channel(const char* name, uint32_t msg_size, uint32_t capacity, int tos = GLU_RELIABLE) {
+        detail::check(glu_channel_open(name, msg_size, capacity, tos, &chan_));
     }
 
     ~Channel() { if (chan_) glu_channel_close(chan_); }
@@ -102,8 +102,8 @@ private:
 template <typename T>
 class Publisher {
 public:
-    Publisher(const char* name, uint32_t capacity = 64) {
-        detail::check(glu_publisher_init(name, sizeof(T), capacity, &pub_));
+    Publisher(const char* name, uint32_t capacity = 64, int tos = GLU_RELIABLE) {
+        detail::check(glu_publisher_init(name, sizeof(T), capacity, tos, &pub_));
     }
 
     ~Publisher() { if (pub_) glu_publisher_deinit(pub_); }
