@@ -3,6 +3,7 @@ const c = std.c;
 const Channel = @import("../channel.zig").Channel;
 const Header = @import("../channel.zig").Header;
 const slowestReader = @import("../channel.zig").slowestReader;
+const sweepDeadReaders = @import("../channel.zig").sweepDeadReaders;
 const write = @import("../channel.zig").write;
 const read = @import("../channel.zig").read;
 
@@ -40,8 +41,11 @@ pub const Publisher = struct {
     /// Fill the returned pointer then call `commit` to make the
     /// message visible to subscribers. Blocks if the buffer is full.
     pub fn reserve(self: *Publisher) *anyopaque {
-        while (self.channel.header.write -% slowestReader(&self.channel.header.read, self.channel.header.write) >= self.channel.header.capacity)
+        while (self.channel.header.write -% slowestReader(&self.channel.header.read, self.channel.header.write) >= self.channel.header.capacity) {
+            sweepDeadReaders(&self.channel.header.read, &self.channel.header.pids);
+            if (self.channel.header.write -% slowestReader(&self.channel.header.read, self.channel.header.write) < self.channel.header.capacity) break;
             std.atomic.spinLoopHint();
+        }
         const slot = self.channel.ptr + @sizeOf(Header) + (self.channel.header.write % self.channel.header.capacity) * self.channel.header.msg_size;
         return @ptrCast(slot);
     }

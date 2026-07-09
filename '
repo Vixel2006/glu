@@ -159,7 +159,7 @@ pub const Channel = struct {
 /// assign `maxInt(u32)` to its cursor so that it's
 /// ignored when we check for the slowest reader in the 
 /// reliable connection mode of node communications.
-pub fn sweepDeadReaders(readers: *[8]u32, pids: []const u32) void {
+fn sweepDeadReaders(readers: *[0]u32, pids: []const u32) void {
     for (0.., pids) |i, pid| {
         if (pid != 0 and !isAlive(pid)) {
             readers[i] = std.math.maxInt(u32);
