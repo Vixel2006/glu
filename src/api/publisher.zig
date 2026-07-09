@@ -2,6 +2,7 @@ const std = @import("std");
 const c = std.c;
 const Channel = @import("../channel.zig").Channel;
 const Header = @import("../channel.zig").Header;
+const ToS = @import("../channel.zig").ToS;
 const slowestReader = @import("../channel.zig").slowestReader;
 const sweepDeadReaders = @import("../channel.zig").sweepDeadReaders;
 const write = @import("../channel.zig").write;
@@ -24,11 +25,11 @@ pub const Publisher = struct {
     ///
     /// Shm-unlinks any stale segment first, then creates a fresh channel.
     /// Self-registers the process in the node registry.
-    pub fn init(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32) PubErr!Publisher {
+    pub fn init(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32, tos: ToS) PubErr!Publisher {
         const name_z = try allocator.dupeZ(u8, name);
         defer allocator.free(name_z);
         _ = c.shm_unlink(name_z.ptr);
-        return Publisher{ .channel = try Channel.open(allocator, name, msg_size, capacity) };
+        return Publisher{ .channel = try Channel.open(allocator, name, msg_size, capacity, tos) };
     }
 
     pub fn deinit(self: *Publisher) void {
@@ -41,9 +42,13 @@ pub const Publisher = struct {
     /// Fill the returned pointer then call `commit` to make the
     /// message visible to subscribers. Blocks if the buffer is full.
     pub fn reserve(self: *Publisher) *anyopaque {
-        while (self.channel.header.write -% slowestReader(&self.channel.header.read, self.channel.header.write) >= self.channel.header.capacity) {
+        const cap = self.channel.header.capacity;
+        const tos: ToS = @enumFromInt(self.channel.header.tos);
+
+        while (self.channel.header.write -% slowestReader(&self.channel.header.read, self.channel.header.write) >= cap) {
+            if (tos == .best_effort) break;
             sweepDeadReaders(&self.channel.header.read, &self.channel.header.pids);
-            if (self.channel.header.write -% slowestReader(&self.channel.header.read, self.channel.header.write) < self.channel.header.capacity) break;
+            if (self.channel.header.write -% slowestReader(&self.channel.header.read, self.channel.header.write) < cap) break;
             std.atomic.spinLoopHint();
         }
         const slot = self.channel.ptr + @sizeOf(Header) + (self.channel.header.write % self.channel.header.capacity) * self.channel.header.msg_size;
@@ -70,12 +75,12 @@ test "Publisher: reserve and commit directly" {
 
     _ = c.shm_unlink("/glu_test_reserve");
 
-    var chan = try Channel.open(allocator, "/glu_test_reserve", @sizeOf(TestMsg), 5);
+    var chan = try Channel.open(allocator, "/glu_test_reserve", @sizeOf(TestMsg), 5, .reliable);
     defer chan.close();
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open(allocator, "/glu_test_reserve", @sizeOf(TestMsg), 5) catch c.exit(1);
+        var child_chan = Channel.open(allocator, "/glu_test_reserve", @sizeOf(TestMsg), 5, .reliable) catch c.exit(1);
         var publisher = Publisher{ .channel = child_chan };
         const slot: *TestMsg = @ptrCast(@alignCast(publisher.reserve()));
         slot.* = TestMsg{ .x = 42, .y = 99 };
@@ -98,12 +103,12 @@ test "Publisher: publish a message, read it via raw Channel" {
     const TestMsg = packed struct { x: u32, y: u32 };
     const allocator = std.heap.page_allocator;
 
-    var chan = try Channel.open(allocator, "/glu_test_publisher", @sizeOf(TestMsg), 5);
+    var chan = try Channel.open(allocator, "/glu_test_publisher", @sizeOf(TestMsg), 5, .reliable);
     defer chan.close();
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open(allocator, "/glu_test_publisher", @sizeOf(TestMsg), 5) catch c.exit(1);
+        var child_chan = Channel.open(allocator, "/glu_test_publisher", @sizeOf(TestMsg), 5, .reliable) catch c.exit(1);
         var publisher = Publisher{ .channel = child_chan };
         publisher.publish(@ptrCast(&TestMsg{ .x = 7, .y = 13 }));
         child_chan.close();

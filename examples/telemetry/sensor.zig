@@ -69,6 +69,7 @@ pub fn main() void {
         topic,
         @sizeOf(msgs.Telemetry),
         capacity,
+        .reliable,
     ) catch |e| {
         std.debug.print("[sensor] publisher init failed: {}\n", .{e});
         return;

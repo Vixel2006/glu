@@ -24,7 +24,7 @@ pub const Subscriber = struct {
     /// The `id` must be unique per channel and < MAX_READERS.
     /// Initialises the reader cursor to 0 (active) and self-registers.
     pub fn init(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32) SubErr!Subscriber {
-        const chan = try Channel.open(allocator, name, msg_size, capacity);
+        const chan = try Channel.open(allocator, name, msg_size, capacity, .reliable);
 
         var id: u32 = undefined;
         for(0.., chan.header.read) |i, cursor| {
@@ -83,7 +83,7 @@ test "Subscriber: publish via raw Channel, receive via Subscriber" {
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open(allocator, "/glu_test_subscriber", @sizeOf(TestMsg), 2) catch c.exit(1);
+        var child_chan = Channel.open(allocator, "/glu_test_subscriber", @sizeOf(TestMsg), 2, .reliable) catch c.exit(1);
         write(&child_chan, @ptrCast(&TestMsg{ .x = 99, .y = 42 }));
         child_chan.close();
         c.exit(0);
@@ -113,7 +113,7 @@ test "two subscribers on the same channel both receive messages" {
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open(allocator, "/glu_test_two_subs", @sizeOf(TestMsg), 8) catch c.exit(1);
+        var child_chan = Channel.open(allocator, "/glu_test_two_subs", @sizeOf(TestMsg), 8, .reliable) catch c.exit(1);
         write(&child_chan, @ptrCast(&TestMsg{ .x = 1, .y = 2 }));
         write(&child_chan, @ptrCast(&TestMsg{ .x = 3, .y = 4 }));
         child_chan.close();

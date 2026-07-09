@@ -71,6 +71,7 @@ pub fn main() void {
         topic,
         @sizeOf(msgs.RawSensor),
         capacity,
+        .reliable,
     ) catch |e| {
         std.debug.print("[imu_sensor] publisher init failed: {}\n", .{e});
         return;
