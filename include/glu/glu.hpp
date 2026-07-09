@@ -143,8 +143,8 @@ private:
 template <typename T>
 class Subscriber {
 public:
-    Subscriber(uint32_t id, const char* name, uint32_t capacity = 64) {
-        detail::check(glu_subscriber_init(id, name, sizeof(T), capacity, &sub_));
+    Subscriber(const char* name, uint32_t capacity = 64) {
+        detail::check(glu_subscriber_init(name, sizeof(T), capacity, &sub_));
     }
 
     ~Subscriber() { if (sub_) glu_subscriber_deinit(sub_); }

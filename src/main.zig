@@ -5,7 +5,6 @@ const info = @import("cli/info.zig");
 const ps = @import("cli/ps.zig");
 const launch = @import("cli/launch.zig");
 const logs = @import("cli/logs.zig");
-const codegen = @import("cli/codegen.zig");
 const down = @import("cli/down.zig");
 
 fn printUsage(init: std.process.Init) void {
@@ -47,8 +46,6 @@ pub fn main(init: std.process.Init) !void {
 
     if (std.mem.eql(u8, cmd, "launch")) {
         launch.cmdLaunch(init, &args_iter) catch |err| utils.logErr("launch", err);
-    } else if (std.mem.eql(u8, cmd, "codegen")) {
-        codegen.cmdCodegen(init, &args_iter) catch |err| utils.logErr("codegen", err);
     } else if (std.mem.eql(u8, cmd, "logs")) {
         logs.cmdLogs(init, &args_iter, "/tmp/glu/logs") catch |err| utils.logErr("logs", err);
     } else if (std.mem.eql(u8, cmd, "list") or std.mem.eql(u8, cmd, "ls")) {

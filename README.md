@@ -227,9 +227,7 @@ pub fn main() !void {
     const allocator = std.heap.page_allocator;
     const topic = "/telemetry";
     const capacity = 4096;
-    const subscriber_id = 0; // Distinct slot (0-7) for this subscriber
 
-    var subscriber = try glu.Subscriber.init(allocator, subscriber_id, topic, @sizeOf(msgs.Telemetry), capacity);
     defer subscriber.deinit();
 
     std.debug.print("Subscribed to telemetry topic...\n", .{});

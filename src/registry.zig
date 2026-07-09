@@ -60,34 +60,20 @@ pub fn unregister(name: []const u8) void {
     cwd.deleteFile(io, path) catch {};
 }
 
-/// Register the current process using its executable name (from `/proc/self/exe`).
+/// Check if a process with the given PID is still alive.
 ///
-/// This is a convenience for nodes that want to self-register without
-/// having to know their own name.
-pub fn registerOwnExe() void {
-    var exe_buf: [1024]u8 = undefined;
-    const len = std.os.linux.readlink("/proc/self/exe", &exe_buf, exe_buf.len);
-    if (len > 0 and len <= exe_buf.len) {
-        const path = exe_buf[0..len];
-        const exe_name = std.fs.path.basename(path);
-        register(exe_name) catch {};
-    }
-}
-
-pub fn unregisterOwnExe() void {
-    var exe_buf: [1024]u8 = undefined;
-    const len = std.os.linux.readlink("/proc/self/exe", &exe_buf, exe_buf.len);
-    if (len > 0 and len <= exe_buf.len) {
-        const path = exe_buf[0..len];
-        const exe_name = std.fs.path.basename(path);
-        unregister(exe_name);
-    }
+/// Uses `access(F_OK)` on `/proc/<pid>/status`, which is a cheap
+/// OS-level existence check with no privileges required.
+pub fn isAlive(pid: u32) bool {
+    var buf: [64]u8 = undefined;
+    const path = std.fmt.bufPrintZ(&buf, "/proc/{d}/status", .{pid}) catch return false;
+    return c.access(path.ptr, 0) == 0;
 }
 
 /// List all registered nodes and their health status.
 ///
-/// Scans `/tmp/glu/nodes/*.pid` files, reads each PID, and checks
-/// `/proc/<pid>/status` to determine if the process is still alive.
+/// Scans `/tmp/glu/nodes/*.pid` files, reads each PID, and calls
+/// `isAlive` to determine if the process is still running.
 /// Returns an owned slice allocated with `allocator`.
 pub fn listAlive(allocator: std.mem.Allocator) RegistryErr![]NodeEntry {
     var entries = std.ArrayList(NodeEntry).empty;
@@ -117,12 +103,8 @@ pub fn listAlive(allocator: std.mem.Allocator) RegistryErr![]NodeEntry {
         const content = buf[0..@as(usize, @intCast(nread))];
         const pid = std.fmt.parseInt(u32, std.mem.trim(u8, content, " \n\r"), 10) catch continue;
 
-        var proc_buf: [256]u8 = undefined;
-        const proc_z = std.fmt.bufPrintZ(&proc_buf, "/proc/{d}/status", .{pid}) catch continue;
-        const alive = c.access(proc_z.ptr, 0) == 0; // F_OK == 0
-
         const name_copy = try allocator.dupe(u8, node_name);
-        try entries.append(allocator, .{ .name = name_copy, .pid = pid, .alive = alive });
+        try entries.append(allocator, .{ .name = name_copy, .pid = pid, .alive = isAlive(pid) });
     }
 
     return entries.toOwnedSlice(allocator);

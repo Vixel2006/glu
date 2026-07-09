@@ -136,8 +136,8 @@ export fn glu_publisher_publish(p: *glu.Publisher, msg: *const anyopaque) void {
 //  Subscriber
 // ─────────────────────────────────────────────
 
-export fn glu_subscriber_init(id: u32, name: [*:0]const u8, msg_size: u32, capacity: u32, out: *?*glu.Subscriber) c_int {
-    return allocWrap(glu.Subscriber, glu.Subscriber.init(alloc, id, std.mem.sliceTo(name, 0), msg_size, capacity), out);
+export fn glu_subscriber_init(name: [*:0]const u8, msg_size: u32, capacity: u32, out: *?*glu.Subscriber) c_int {
+    return allocWrap(glu.Subscriber, glu.Subscriber.init(alloc, std.mem.sliceTo(name, 0), msg_size, capacity), out);
 }
 
 export fn glu_subscriber_deinit(sub: *glu.Subscriber) void {

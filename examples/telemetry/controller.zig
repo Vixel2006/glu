@@ -16,7 +16,6 @@ const msgs = @import("msgs.zig");
 // -- configuration -----------------------------------------------------------
 const topic = "/telemetry";
 const capacity = 4096;
-const subscriber_id = 0;
 const summary_interval_ms = 5_000; // print rolling summary every 5 s
 
 // Alert thresholds
@@ -54,7 +53,6 @@ pub fn main() void {
 
     var subscriber = glu.Subscriber.init(
         allocator,
-        subscriber_id,
         topic,
         @sizeOf(msgs.Telemetry),
         capacity,

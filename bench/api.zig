@@ -23,7 +23,7 @@ fn resetPublisher() void {
 
 fn beforeSubscriber() void {
     sub_pub = Publisher.init(std.heap.page_allocator, "/glu_bench_sub", @sizeOf(TestMsg), 16384) catch unreachable;
-    sub_channel = Subscriber.init(std.heap.page_allocator, 0, "/glu_bench_sub", @sizeOf(TestMsg), 16384) catch unreachable;
+    sub_channel = Subscriber.init(std.heap.page_allocator, "/glu_bench_sub", @sizeOf(TestMsg), 16384) catch unreachable;
     var i: u32 = 0;
     while (i < 16384) : (i += 1) {
         sub_pub.publish(TestMsg, &.{ .x = i, .y = i + 1 });

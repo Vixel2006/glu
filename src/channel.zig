@@ -2,6 +2,8 @@ const std = @import("std");
 const c = @import("std").c;
 const os = @import("std").os.linux;
 
+const isAlive = @import("registry.zig").isAlive;
+
 const ShmErr = error{
     OutOfMemory,
     ShmOpenFailed,
@@ -26,11 +28,11 @@ pub const Header = extern struct {
     name_len: u32,
     name: [64]u8,
     read: [MAX_READERS]u32,
-    // TODO: I think we maybe need to add a QoS handler here that should go to (0 = best-effort (don't care about slowest reader.), 1=reliable(the one we have now), 2=)
+    pids: [MAX_READERS]u32,
 };
 
 comptime {
-    std.debug.assert(@sizeOf(Header) == 120);
+    std.debug.assert(@sizeOf(Header) == 152);
 }
 
 /// A POSIX shared-memory channel backed by `shm_open` + `mmap`.
@@ -151,14 +153,26 @@ pub const Channel = struct {
     pub const deinit = close;
 };
 
+/// Search for Dead Readers and inactive it
+///
+/// Find the pid of the dead subscriber node and
+/// assign `maxInt(u32)` to its cursor so that it's
+/// ignored when we check for the slowest reader in the 
+/// reliable connection mode of node communications.
+fn sweepDeadReaders(readers: [*]u32, pids: []const u32) void {
+    for (0.., pids) |i, pid| {
+        if (pid != 0 and !isAlive(pid)) {
+            readers[i] = std.math.maxInt(u32);
+        }
+    }
+}
+
 /// Returns the slowest (smallest) active read cursor.
 ///
 /// Inactive readers (those with `maxInt(u32)`) are skipped so they don't
 /// block the writer. If no readers are active the write cursor itself is
 /// returned, meaning the writer will never be held back.
 pub fn slowestReader(readers: []const u32, write_cursor: u32) u32 {
-    // FIXME: Here if a reader crashes the read cursor freezes and publisher will spin-wait forever
-    // we should implement a mechanism in the subscribers that makes it crashes without a deadlock
     var min = write_cursor;
     for (readers) |reader| {
         if (reader != std.math.maxInt(u32)) {
@@ -180,10 +194,11 @@ pub fn write(chan: *Channel, msg: *const anyopaque) void {
     // TODO: This waiting loop is basically a quality of service (QoS) feature.
     // we should have a mechanism to give the programmer control if they want to do the block
     // or they want the writer to just continue writing and maybe do reseting to the slowest reader pointer
-    while (chan.header.write -% slowestReader(&chan.header.read, chan.header.write) >= cap)
-        // TODO: here we do yield from the writer if the slowest reader isn't catching up
-        // we should be able to implement a semaphore or condition variables for maximum performance
+    while (chan.header.write -% slowestReader(&chan.header.read, chan.header.write) >= cap) {
+        sweepDeadReaders(&chan.header.read, &chan.header.pids);
+        if (chan.header.write -% slowestReader(&chan.header.read, chan.header.write) < cap) break;
         std.atomic.spinLoopHint();
+    }
 
     const msg_size = chan.header.msg_size;
     const slot = chan.ptr + @sizeOf(Header) + (chan.header.write % cap) * msg_size;
@@ -218,6 +233,37 @@ test "slowestReader: returns write cursor when no active readers" {
 test "slowestReader: active reader lower than write cursor is selected" {
     const readers = [_]u32{ std.math.maxInt(u32), 2, std.math.maxInt(u32), std.math.maxInt(u32), std.math.maxInt(u32), std.math.maxInt(u32), std.math.maxInt(u32), std.math.maxInt(u32) };
     try std.testing.expectEqual(@as(u32, 2), slowestReader(&readers, 10));
+}
+
+test "sweepDeadReaders: reclaims slots of dead PIDs" {
+    var readers = [_]u32{ 10, 20, std.math.maxInt(u32), 40, 50, std.math.maxInt(u32), std.math.maxInt(u32), std.math.maxInt(u32) };
+    var pids = [_]u32{ @intCast(os.getpid()), 0, 0, 999999999, @intCast(os.getpid()), 0, 0, 0 };
+
+    sweepDeadReaders(&readers, &pids);
+
+    try std.testing.expectEqual(@as(u32, 10), readers[0]);
+    try std.testing.expectEqual(@as(u32, 20), readers[1]);
+    try std.testing.expectEqual(std.math.maxInt(u32), readers[2]);
+    try std.testing.expectEqual(std.math.maxInt(u32), readers[3]);
+    try std.testing.expectEqual(@as(u32, 50), readers[4]);
+}
+
+test "sweepDeadReaders: no crash when all PIDs are zero" {
+    var readers = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8 };
+    var pids = [_]u32{ 0, 0, 0, 0, 0, 0, 0, 0 };
+
+    sweepDeadReaders(&readers, &pids);
+
+    for (&readers) |r| try std.testing.expect(r != std.math.maxInt(u32));
+}
+
+test "sweepDeadReaders: leaves unowned slots unchanged" {
+    var readers = [_]u32{ std.math.maxInt(u32) } ** MAX_READERS;
+    var pids = [_]u32{ 0, 0, 0, 0, 0, 0, 0, 0 };
+
+    sweepDeadReaders(&readers, &pids);
+
+    for (&readers) |r| try std.testing.expectEqual(std.math.maxInt(u32), r);
 }
 
 test "writer not blocked when no active readers" {
