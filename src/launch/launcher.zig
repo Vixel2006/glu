@@ -52,6 +52,7 @@ pub fn launch(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig
             .stderr = .inherit,
         }) catch return LaunchErr.FileSystem;
         allocator.free(argv);
+        if (child.id) |pid| Registry.registerPid(cfg.name, @intCast(pid)) catch {};
         launched.appendAssumeCapacity(.{ .name = cfg.name, .child = child });
     }
 

@@ -2,7 +2,6 @@ const std = @import("std");
 const c = std.c;
 const Channel = @import("../channel.zig").Channel;
 const read = @import("../channel.zig").read;
-const Registry = @import("../registry.zig");
 const write = @import("../channel.zig").write;
 
 const SubErr = error{
@@ -44,7 +43,9 @@ pub const Subscriber = struct {
         // the subscriber to drain all old ring-buffer slots that no longer exist.
         const current_write = @atomicLoad(u32, &sub.channel.header.write, .acquire);
         @atomicStore(u32, &sub.channel.header.read[sub.id], current_write, .release);
-        Registry.registerOwnExe();
+
+        const pid: u32 = @intCast(std.os.linux.getpid());
+        @atomicStore(u32, &sub.channel.header.pids[sub.id], pid, .monotonic);
 
         return sub;
     }
@@ -55,7 +56,6 @@ pub const Subscriber = struct {
     /// slowest-reader calculation so the publisher won't wait for us.
     pub fn deinit(self: *Subscriber) void {
         self.channel.header.read[self.id] = std.math.maxInt(u32);
-        Registry.unregisterOwnExe();
         self.channel.close();
     }
 

@@ -4,7 +4,6 @@ const Channel = @import("../channel.zig").Channel;
 const Header = @import("../channel.zig").Header;
 const slowestReader = @import("../channel.zig").slowestReader;
 const write = @import("../channel.zig").write;
-const Registry = @import("../registry.zig");
 const read = @import("../channel.zig").read;
 
 const PubErr = error{
@@ -28,13 +27,10 @@ pub const Publisher = struct {
         const name_z = try allocator.dupeZ(u8, name);
         defer allocator.free(name_z);
         _ = c.shm_unlink(name_z.ptr);
-        const p = Publisher{ .channel = try Channel.open(allocator, name, msg_size, capacity) };
-        Registry.registerOwnExe();
-        return p;
+        return Publisher{ .channel = try Channel.open(allocator, name, msg_size, capacity) };
     }
 
     pub fn deinit(self: *Publisher) void {
-        Registry.unregisterOwnExe();
         self.channel.close();
     }
 
