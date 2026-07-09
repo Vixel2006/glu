@@ -61,7 +61,6 @@ The robotics community has struggled with ROS2 for years. Between massive Docker
 - **Lockless Zero-Copy IPC**: Shared memory rings using `shm_open` and `mmap` let publishers write directly to memory slots, and subscribers read directly from them—no serialization, no syscall context switches, and no copies.
 - **Slowest-Reader Protection**: Up to 8 concurrent subscribers per topic can read independently. If a subscriber runs slow, the publisher spins rather than overwriting unread slots, guaranteeing zero data loss.
 - **Sub-ms Registry & Discovery**: No heavy discovery daemon or network multicasting. Active nodes are registered deterministically under `/tmp/glu/nodes` using their PID.
-- **Custom Message DSL & Codegen**: Describe your structures in clean `.glu` files and compile them straight into native, packed Zig structs with `glu codegen`.
 - **TCP/UDP Networking**: First-class socket APIs (`glu.tcp` and `glu.udp`) for cross-machine communication, telemetry streaming, and node discovery — no bloat, just raw sockets.
 - **Integrated Process Orchestrator**: Run and manage your robot nodes gracefully via `glu launch` using simple TOML configuration files.
 
@@ -280,9 +279,6 @@ commands:
   launch   Launch nodes from a TOML config file
            glu launch -f <file.toml> [-d]
 
-  codegen  Generate Zig structs from a .glu message definition
-           glu codegen -f <file.glu> -o <path/to/gen>
-
   list     List active topics in shared memory
            glu list
 
@@ -361,7 +357,6 @@ Measurements are taken on an Intel Core i5 system over 100,000 iterations:
 | `publisher publish` | **~18 ns** | High-level publisher wrapping write action |
 | `subscriber receive` | **~18 ns** | Subscriber index alignment, check, and read |
 | `node creation` | **~5 µs** | Operating system `shm_open` and `mmap` initialization |
-| `codegen parsing` | **~8 µs** | Complete message DSL lexing, parsing, and file output |
 
 ---
 
@@ -371,7 +366,7 @@ The vision of `glu` is a modular, Unix-like ecosystem. Rather than a monolith, e
 
 | Repository | Scope / Purpose | Status |
 | :--- | :--- | :--- |
-| **glu** (this) | The core protocol library, message codegen, and CLI tools | **Active (Alpha)** |
+| **glu** (this) | The core protocol library, and CLI tools | **Active (Alpha)** |
 | **glu-sim** | Robotics simulator — test your nodes in a 3D world without real hardware | *Planned* |
 | **glu-viz** | Web-based real-time 3D dashboard & diagnostics tool | *Planned* |
 | **glu-nav** | Real-time path planning, navigation, and SLAM module | *Planned* |

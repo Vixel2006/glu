@@ -119,8 +119,6 @@ while (true) {
 
 raw TCP networking for cross-machine communication. designed for when your robot needs to talk to another robot, a ground station, or a web dashboard.
 
-unlike the SHM pub/sub (shared memory, same machine only), TCP is for sending bytes over a network. no serialization or codegen required — you send whatever bytes you want.
-
 ### server
 
 ```zig
