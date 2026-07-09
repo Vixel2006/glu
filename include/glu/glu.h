@@ -68,7 +68,7 @@ void glu_publisher_publish(glu_publisher_t *pub, const void *msg,
 
 /* ── Subscriber ───────────────────────────── */
 
-int glu_subscriber_init(uint32_t id, const char *name, uint32_t msg_size,
+int glu_subscriber_init(const char *name, uint32_t msg_size,
                         uint32_t capacity, glu_subscriber_t **out);
 void glu_subscriber_deinit(glu_subscriber_t *sub);
 void *glu_subscriber_receive(glu_subscriber_t *sub);

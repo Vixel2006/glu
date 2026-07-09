@@ -8,11 +8,11 @@ from ._bindings import (
 
 
 class Subscriber:
-    def __init__(self, sub_id: int, name: str, msg_size: int, capacity: int = 64):
+    def __init__(self, name: str, msg_size: int, capacity: int = 64):
         self._msg_size = msg_size
         self._handle = glu_subscriber_t()
         _check(_lib.glu_subscriber_init(
-            sub_id, name.encode(), msg_size, capacity,
+            name.encode(), msg_size, capacity,
             ctypes.byref(self._handle),
         ))
 

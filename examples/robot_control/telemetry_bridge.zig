@@ -20,8 +20,6 @@ const msgs = @import("msgs.zig");
 const odom_topic = "/odom";
 const bat_topic = "/battery";
 const capacity = 4096;
-const odom_sub_id = 0;
-const bat_sub_id = 1;
 const udp_host = "127.0.0.1";
 const udp_port: u16 = 9999;
 
@@ -83,7 +81,6 @@ fn runBridge() void {
 
     var odom_sub = glu.Subscriber.init(
         allocator,
-        odom_sub_id,
         odom_topic,
         @sizeOf(msgs.Odometry),
         capacity,
@@ -95,7 +92,6 @@ fn runBridge() void {
 
     var bat_sub = glu.Subscriber.init(
         allocator,
-        bat_sub_id,
         bat_topic,
         @sizeOf(msgs.BatteryStatus),
         capacity,

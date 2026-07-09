@@ -18,7 +18,6 @@ const msgs = @import("msgs.zig");
 const input_topic = "/imu_filtered";
 const output_topic = "/motors_cmd";
 const capacity = 4096;
-const subscriber_id = 0;
 
 // Motor mix parameters
 const base_pwm: f32 = 50.0; // % duty cycle at rest
@@ -53,7 +52,6 @@ pub fn main() void {
 
     var sub = glu.Subscriber.init(
         allocator,
-        subscriber_id,
         input_topic,
         @sizeOf(msgs.Filtered),
         capacity,

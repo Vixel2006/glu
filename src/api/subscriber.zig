@@ -18,14 +18,25 @@ const SubErr = error{
 /// same topic independently.
 pub const Subscriber = struct {
     channel: Channel,
-    id: u32, // TODO: I think we need to make a mechanism for dynamic subscription 
+    id: u32,
 
     /// Create a new subscriber for topic `name` with the given reader `id`.
     ///
     /// The `id` must be unique per channel and < MAX_READERS.
     /// Initialises the reader cursor to 0 (active) and self-registers.
-    pub fn init(allocator: std.mem.Allocator, id: u32, name: []const u8, msg_size: u32, capacity: u32) SubErr!Subscriber {
-        const sub: Subscriber = .{ .id = id, .channel = try Channel.open(allocator, name, msg_size, capacity) };
+    pub fn init(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32) SubErr!Subscriber {
+        const chan = try Channel.open(allocator, name, msg_size, capacity);
+
+        var id: u32 = undefined;
+        for(0.., chan.header.read) |i, cursor| {
+            if (cursor == std.math.maxInt(u32)) {
+                id = @intCast(i);
+                break;
+            }
+        }
+
+
+        const sub: Subscriber = .{ .id = id, .channel = chan };
 
         // Initialize read cursor to the current write position so that a late-joining
         // subscriber (e.g. a profiler that starts after the publisher) only sees new
@@ -67,7 +78,7 @@ test "Subscriber: publish via raw Channel, receive via Subscriber" {
     // we do unlink to close the stale POSIX shared memory from prior failed tests if any
     _ = c.shm_unlink("/glu_test_subscriber");
 
-    var sub = try Subscriber.init(allocator, 0, "/glu_test_subscriber", @sizeOf(TestMsg), 2);
+    var sub = try Subscriber.init(allocator, "/glu_test_subscriber", @sizeOf(TestMsg), 2);
     defer sub.deinit();
 
     const pid = c.fork();
@@ -95,9 +106,9 @@ test "two subscribers on the same channel both receive messages" {
 
     _ = c.shm_unlink("/glu_test_two_subs");
 
-    var sub0 = try Subscriber.init(allocator, 0, "/glu_test_two_subs", @sizeOf(TestMsg), 8);
+    var sub0 = try Subscriber.init(allocator, "/glu_test_two_subs", @sizeOf(TestMsg), 8);
     defer sub0.deinit();
-    var sub1 = try Subscriber.init(allocator, 1, "/glu_test_two_subs", @sizeOf(TestMsg), 8);
+    var sub1 = try Subscriber.init(allocator, "/glu_test_two_subs", @sizeOf(TestMsg), 8);
     defer sub1.deinit();
 
     const pid = c.fork();

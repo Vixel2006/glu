@@ -19,7 +19,6 @@ const msgs = @import("msgs.zig");
 const raw_topic = "/imu_raw";
 const filtered_topic = "/imu_filtered";
 const capacity = 4096;
-const subscriber_id = 0;
 const alpha: f32 = 0.1; // EMA smoothing factor (0=no update, 1=no smoothing)
 
 // -- helpers -----------------------------------------------------------------
@@ -45,7 +44,6 @@ pub fn main() void {
 
     var sub = glu.Subscriber.init(
         allocator,
-        subscriber_id,
         raw_topic,
         @sizeOf(msgs.RawSensor),
         capacity,

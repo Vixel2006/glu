@@ -17,7 +17,6 @@ const msgs = @import("msgs.zig");
 // -- configuration -----------------------------------------------------------
 const topic = "/telemetry";
 const capacity = 4096;
-const subscriber_id = 1; // slot 1 — controller occupies slot 0
 const report_interval_ms = 1_000;
 
 // -- helpers -----------------------------------------------------------------
@@ -63,7 +62,6 @@ pub fn main() void {
 
     var subscriber = glu.Subscriber.init(
         allocator,
-        subscriber_id,
         topic,
         @sizeOf(msgs.Telemetry),
         capacity,
@@ -80,7 +78,7 @@ pub fn main() void {
             "[monitor]   topic : {s}  (sub_id={d})\n" ++
             "[monitor]   Ctrl-C to stop\n" ++
             "[monitor] ──────────────────────────────────────────────\x1b[0m\n",
-        .{ topic, subscriber_id },
+        .{ topic, subscriber.id },
     );
 
     // Per-field running stats (all-time, never reset).

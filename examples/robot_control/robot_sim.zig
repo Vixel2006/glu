@@ -20,8 +20,6 @@ const cmd_topic = "/cmd_vel";
 const odom_topic = "/odom";
 const bat_topic = "/battery";
 const capacity = 4096;
-const cmd_sub_id = 0;
-const bat_sub_id = 0;
 const odom_rate_hz = 100;
 const bat_warn_pct: f32 = 85.0;
 
@@ -49,7 +47,6 @@ pub fn main() void {
     // Command velocity subscriber.
     var cmd_sub = glu.Subscriber.init(
         allocator,
-        cmd_sub_id,
         cmd_topic,
         @sizeOf(msgs.Twist),
         capacity,
@@ -62,7 +59,6 @@ pub fn main() void {
     // Battery subscriber (different topic — subscriber_id is per-topic).
     var bat_sub = glu.Subscriber.init(
         allocator,
-        bat_sub_id,
         bat_topic,
         @sizeOf(msgs.BatteryStatus),
         capacity,
