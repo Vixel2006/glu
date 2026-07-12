@@ -46,7 +46,7 @@ fn runReceiver() void {
     // Give the parent a moment to set up its socket before we bind.
     sleepMs(200);
 
-    var sock = glu.udp.Socket.bind(udp_port) catch |e| {
+    var sock = glu.udp.Socket.bind(udp_port, .{}) catch |e| {
         std.debug.print("[bridge/rx] bind port {d} failed: {}\n", .{ udp_port, e });
         return;
     };
@@ -102,7 +102,7 @@ fn runBridge() void {
     defer bat_sub.deinit();
 
     // Sender socket (ephemeral port — OS assigns it).
-    var sender = glu.udp.Socket.bind(0) catch |e| {
+    var sender = glu.udp.Socket.bind(0, .{}) catch |e| {
         std.debug.print("[bridge/tx] sender socket failed: {}\n", .{e});
         return;
     };
