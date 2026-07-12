@@ -49,8 +49,28 @@ class UdpSocket:
         host = endpoint.host[:host_len].decode("utf-8", errors="replace")
         return buf.raw[:out_bytes.value], host, endpoint.port
 
-    def set_blocking(self, blocking: bool) -> None:
-        _check(_lib.glu_udp_set_blocking(self._handle, int(blocking)))
+    def connect(self, host: str, port: int) -> None:
+        _check(_lib.glu_udp_socket_connect(self._handle, host.encode(), port))
+
+    def send(self, data: bytes | bytearray) -> int:
+        buf = bytes(data)
+        rc = _lib.glu_udp_send(self._handle, buf, len(buf))
+        if rc < 0:
+            _check(rc)
+        return rc
+
+    def receive(self, size: int = 65536) -> bytes:
+        buf = ctypes.create_string_buffer(size)
+        rc = _lib.glu_udp_receive(self._handle, buf, size)
+        if rc < 0:
+            _check(rc)
+        return buf.raw[:rc]
+
+    def join_multicast(self, group: str) -> None:
+        _check(_lib.glu_udp_join_multicast(self._handle, group.encode()))
+
+    def leave_multicast(self, group: str) -> None:
+        _check(_lib.glu_udp_leave_multicast(self._handle, group.encode()))
 
     @property
     def handle(self):

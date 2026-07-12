@@ -215,9 +215,6 @@ _lib.glu_tcp_receive.restype = ctypes.c_int
 _lib.glu_tcp_connection_deinit.argtypes = [glu_tcp_connection_t]
 _lib.glu_tcp_connection_deinit.restype = None
 
-_lib.glu_tcp_set_blocking.argtypes = [glu_tcp_connection_t, ctypes.c_int]
-_lib.glu_tcp_set_blocking.restype = ctypes.c_int
-
 _lib.glu_udp_bind.argtypes = [ctypes.c_uint16, ctypes.POINTER(glu_udp_socket_t)]
 _lib.glu_udp_bind.restype = ctypes.c_int
 
@@ -230,8 +227,14 @@ _lib.glu_udp_send_to.restype = ctypes.c_int
 _lib.glu_udp_receive_from.argtypes = [glu_udp_socket_t, ctypes.c_void_p, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(glu_udp_endpoint_t)]
 _lib.glu_udp_receive_from.restype = ctypes.c_int
 
-_lib.glu_udp_set_blocking.argtypes = [glu_udp_socket_t, ctypes.c_int]
-_lib.glu_udp_set_blocking.restype = ctypes.c_int
+_lib.glu_udp_socket_connect.argtypes = [glu_udp_socket_t, ctypes.c_char_p, ctypes.c_uint16]
+_lib.glu_udp_socket_connect.restype = ctypes.c_int
+
+_lib.glu_udp_send.argtypes = [glu_udp_socket_t, ctypes.c_void_p, ctypes.c_uint32]
+_lib.glu_udp_send.restype = ctypes.c_int
+
+_lib.glu_udp_receive.argtypes = [glu_udp_socket_t, ctypes.c_void_p, ctypes.c_uint32]
+_lib.glu_udp_receive.restype = ctypes.c_int
 
 _lib.glu_register.argtypes = [ctypes.c_char_p]
 _lib.glu_register.restype = ctypes.c_int

@@ -31,7 +31,10 @@ extern "C" {
 #define GLU_ERR_CONN_RESET (-13)
 #define GLU_ERR_INTERRUPTED (-14)
 #define GLU_ERR_SETSOCKOPT (-15)
+#define GLU_ERR_MESSAGE_TOO_LARGE (-16)
 #define GLU_ERR_NO_SPACE (-17)
+#define GLU_ERR_MULTICAST (-18)
+#define GLU_ERR_NOT_CONNECTED (-19)
 
 /* ── Opaque handle types ──────────────────── */
 
@@ -78,7 +81,7 @@ int glu_subscriber_init(const char *name, uint32_t msg_size,
 void glu_subscriber_deinit(glu_subscriber_t *sub);
 void *glu_subscriber_receive(glu_subscriber_t *sub);
 
-/* ── TCP ──────────────────────────────────── */
+/* ── TCP (basic) ──────────────────────────── */
 
 int glu_tcp_listen(uint16_t port, glu_tcp_listener_t **out);
 void glu_tcp_listener_deinit(glu_tcp_listener_t *listener);
@@ -89,9 +92,25 @@ int glu_tcp_connect(const char *host, uint16_t port,
 int glu_tcp_send(glu_tcp_connection_t *conn, const void *data, uint32_t len);
 int glu_tcp_receive(glu_tcp_connection_t *conn, void *buffer, uint32_t len);
 void glu_tcp_connection_deinit(glu_tcp_connection_t *conn);
-int glu_tcp_set_blocking(glu_tcp_connection_t *conn, int blocking);
 
-/* ── UDP ──────────────────────────────────── */
+/* ── TCP (extended) ───────────────────────── */
+
+int glu_tcp_listen_with_config(uint16_t port,
+                               int nodelay, int quickack,
+                               int keepalive, uint32_t keepalive_idle,
+                               uint32_t keepalive_interval,
+                               uint32_t keepalive_count,
+                               int32_t recv_buf, int32_t send_buf,
+                               int defer_accept, uint32_t connect_timeout_ms,
+                               uint32_t recv_timeout_ms,
+                               uint32_t send_timeout_ms,
+                               glu_tcp_listener_t **out);
+int glu_tcp_connect_with_config(const char *host, uint16_t port,
+                                uint32_t connect_timeout_ms,
+                                uint32_t recv_timeout_ms,
+                                uint32_t send_timeout_ms,
+                                glu_tcp_connection_t **out);
+/* ── UDP (basic) ──────────────────────────── */
 
 int glu_udp_bind(uint16_t port, glu_udp_socket_t **out);
 void glu_udp_deinit(glu_udp_socket_t *sock);
@@ -99,8 +118,20 @@ int glu_udp_send_to(glu_udp_socket_t *sock, const char *host, uint16_t port,
                     const void *data, uint32_t len);
 int glu_udp_receive_from(glu_udp_socket_t *sock, void *buffer, uint32_t len,
                          uint32_t *out_bytes, glu_udp_endpoint_t *out_endpoint);
-int glu_udp_set_blocking(glu_udp_socket_t *sock, int blocking);
+int glu_udp_socket_connect(glu_udp_socket_t *sock, const char *host,
+                           uint16_t port);
+int glu_udp_send(glu_udp_socket_t *sock, const void *data, uint32_t len);
+int glu_udp_receive(glu_udp_socket_t *sock, void *buffer, uint32_t len);
 
+/* ── UDP (extended) ───────────────────────── */
+
+int glu_udp_bind_with_config(uint16_t port,
+                             int32_t recv_buf, int32_t send_buf,
+                             int broadcast, uint32_t recv_timeout_ms,
+                             uint32_t send_timeout_ms,
+                             glu_udp_socket_t **out);
+int glu_udp_join_multicast(glu_udp_socket_t *sock, const char *group);
+int glu_udp_leave_multicast(glu_udp_socket_t *sock, const char *group);
 #ifdef __cplusplus
 }
 #endif

@@ -24,24 +24,27 @@ public:
 
     static const char* message_for(int code) noexcept {
         switch (code) {
-        case GLU_OK:              return "success";
-        case GLU_ERR_OUT_OF_MEM:  return "out of memory";
-        case GLU_ERR_SHM_OPEN:    return "shm_open failed";
-        case GLU_ERR_MMAP:        return "mmap failed";
-        case GLU_ERR_SOCKET:      return "socket creation failed";
-        case GLU_ERR_BIND:        return "bind failed";
-        case GLU_ERR_LISTEN:      return "listen failed";
-        case GLU_ERR_ACCEPT:      return "accept failed";
-        case GLU_ERR_CONNECT:     return "connect failed";
-        case GLU_ERR_SEND:        return "send failed";
-        case GLU_ERR_RECV:        return "receive failed";
-        case GLU_ERR_ADDR_RESOLVE: return "address resolution failed";
-        case GLU_ERR_WOULD_BLOCK:  return "operation would block";
-        case GLU_ERR_CONN_RESET:   return "connection reset";
-        case GLU_ERR_INTERRUPTED:  return "interrupted by signal";
-        case GLU_ERR_SETSOCKOPT:   return "setsockopt failed";
-        case GLU_ERR_NO_SPACE:     return "no space in ring buffer";
-        default:                   return "unknown error";
+        case GLU_OK:                 return "success";
+        case GLU_ERR_OUT_OF_MEM:     return "out of memory";
+        case GLU_ERR_SHM_OPEN:       return "shm_open failed";
+        case GLU_ERR_MMAP:           return "mmap failed";
+        case GLU_ERR_SOCKET:         return "socket creation failed";
+        case GLU_ERR_BIND:           return "bind failed";
+        case GLU_ERR_LISTEN:         return "listen failed";
+        case GLU_ERR_ACCEPT:         return "accept failed";
+        case GLU_ERR_CONNECT:        return "connect failed";
+        case GLU_ERR_SEND:           return "send failed";
+        case GLU_ERR_RECV:           return "receive failed";
+        case GLU_ERR_ADDR_RESOLVE:   return "address resolution failed";
+        case GLU_ERR_WOULD_BLOCK:    return "operation would block";
+        case GLU_ERR_CONN_RESET:     return "connection reset";
+        case GLU_ERR_INTERRUPTED:    return "interrupted by signal";
+        case GLU_ERR_SETSOCKOPT:     return "setsockopt failed";
+        case GLU_ERR_MESSAGE_TOO_LARGE: return "message too large";
+        case GLU_ERR_NO_SPACE:       return "no space in ring buffer";
+        case GLU_ERR_MULTICAST:      return "multicast operation failed";
+        case GLU_ERR_NOT_CONNECTED:  return "socket not connected";
+        default:                     return "unknown error";
         }
     }
 
@@ -209,8 +212,15 @@ public:
         return TcpConnection(conn);
     }
 
-    void set_blocking(bool blocking) {
-        detail::check(glu_tcp_set_blocking(conn_, blocking ? 1 : 0));
+    static TcpConnection connect_with_config(const char* host, uint16_t port,
+                                              uint32_t connect_timeout_ms = 5000,
+                                              uint32_t recv_timeout_ms = 0,
+                                              uint32_t send_timeout_ms = 0) {
+        glu_tcp_connection_t* conn;
+        detail::check(glu_tcp_connect_with_config(host, port, connect_timeout_ms,
+                                                   recv_timeout_ms, send_timeout_ms,
+                                                   &conn));
+        return TcpConnection(conn);
     }
 
     glu_tcp_connection_t* handle() noexcept { return conn_; }
@@ -312,8 +322,28 @@ public:
         return result;
     }
 
-    void set_blocking(bool blocking) {
-        detail::check(glu_udp_set_blocking(sock_, blocking ? 1 : 0));
+    void connect(const char* host, uint16_t port) {
+        detail::check(glu_udp_socket_connect(sock_, host, port));
+    }
+
+    int send(const void* data, uint32_t len) {
+        int rc = glu_udp_send(sock_, data, len);
+        if (rc < 0) throw Error(rc);
+        return rc;
+    }
+
+    int receive(void* buffer, uint32_t len) {
+        int rc = glu_udp_receive(sock_, buffer, len);
+        if (rc < 0) throw Error(rc);
+        return rc;
+    }
+
+    void join_multicast(const char* group) {
+        detail::check(glu_udp_join_multicast(sock_, group));
+    }
+
+    void leave_multicast(const char* group) {
+        detail::check(glu_udp_leave_multicast(sock_, group));
     }
 
     glu_udp_socket_t* handle() noexcept { return sock_; }
@@ -321,7 +351,6 @@ public:
 private:
     glu_udp_socket_t* sock_ = nullptr;
 };
-
 
 
 } // namespace glu

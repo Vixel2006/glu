@@ -19,7 +19,10 @@ pub const GLU_ERR_WOULD_BLOCK = -12;
 pub const GLU_ERR_CONN_RESET = -13;
 pub const GLU_ERR_INTERRUPTED = -14;
 pub const GLU_ERR_SETSOCKOPT = -15;
+pub const GLU_ERR_MESSAGE_TOO_LARGE = -16;
 pub const GLU_ERR_NO_SPACE = -17;
+pub const GLU_ERR_MULTICAST = -18;
+pub const GLU_ERR_NOT_CONNECTED = -19;
 
 const alloc = std.heap.c_allocator;
 
@@ -54,7 +57,10 @@ fn mapErr(err: anyerror) c_int {
         error.ConnectionReset => GLU_ERR_CONN_RESET,
         error.Interrupted => GLU_ERR_INTERRUPTED,
         error.SetSockOptFailed => GLU_ERR_SETSOCKOPT,
+        error.MessageTooLarge => GLU_ERR_MESSAGE_TOO_LARGE,
         error.NoSpaceLeft => GLU_ERR_NO_SPACE,
+        error.MulticastFailed => GLU_ERR_MULTICAST,
+        error.NotConnected => GLU_ERR_NOT_CONNECTED,
         else => GLU_ERR_OUT_OF_MEM,
     };
 }
@@ -81,7 +87,7 @@ fn destroy(ptr: anytype) void {
 // ─────────────────────────────────────────────
 
 export fn glu_channel_open(name: [*:0]const u8, msg_size: u32, capacity: u32, tos: u32, out: *?*glu.Channel) c_int {
-    return allocWrap(glu.Channel, glu.Channel.open(alloc, std.mem.sliceTo(name, 0), msg_size, capacity, @enumFromInt(glu.ToS, tos)), out);
+    return allocWrap(glu.Channel, glu.Channel.open(alloc, std.mem.sliceTo(name, 0), msg_size, capacity, @as(glu.ToS, @enumFromInt(tos))), out);
 }
 
 export fn glu_channel_close(chan: *glu.Channel) void {
@@ -113,7 +119,7 @@ export fn glu_channel_write_cursor(chan: *const glu.Channel) u32 {
 // ─────────────────────────────────────────────
 
 export fn glu_publisher_init(name: [*:0]const u8, msg_size: u32, capacity: u32, tos: u32, out: *?*glu.Publisher) c_int {
-    return allocWrap(glu.Publisher, glu.Publisher.init(alloc, std.mem.sliceTo(name, 0), msg_size, capacity, @enumFromInt(glu.ToS, tos)), out);
+    return allocWrap(glu.Publisher, glu.Publisher.init(alloc, std.mem.sliceTo(name, 0), msg_size, capacity, @as(glu.ToS, @enumFromInt(tos))), out);
 }
 
 export fn glu_publisher_deinit(p: *glu.Publisher) void {
@@ -153,7 +159,7 @@ export fn glu_subscriber_receive(sub: *glu.Subscriber) ?*anyopaque {
 // ─────────────────────────────────────────────
 
 export fn glu_tcp_listen(port: u16, out: *?*glu.tcp.Listener) c_int {
-    return allocWrap(glu.tcp.Listener, glu.tcp.Listener.listen(port), out);
+    return allocWrap(glu.tcp.Listener, glu.tcp.Listener.listen(port, .{}), out);
 }
 
 export fn glu_tcp_listener_deinit(listener: *glu.tcp.Listener) void {
@@ -169,12 +175,12 @@ export fn glu_tcp_accept(listener: *glu.tcp.Listener, out: *?*glu.tcp.Connection
 }
 
 export fn glu_tcp_connect(host: [*:0]const u8, port: u16, out: *?*glu.tcp.Connection) c_int {
-    return allocWrap(glu.tcp.Connection, glu.tcp.Connection.connect(std.mem.sliceTo(host, 0), port), out);
+    return allocWrap(glu.tcp.Connection, glu.tcp.Connection.connect(std.mem.sliceTo(host, 0), port, .{}), out);
 }
 
 export fn glu_tcp_send(conn: *glu.tcp.Connection, data: [*]const u8, len: u32) c_int {
-    const bytes = conn.send(data[0..len]) catch |err| return mapErr(err);
-    return @intCast(bytes);
+    conn.send(data[0..len]) catch |err| return mapErr(err);
+    return GLU_OK;
 }
 
 export fn glu_tcp_receive(conn: *glu.tcp.Connection, buffer: [*]u8, len: u32) c_int {
@@ -186,9 +192,31 @@ export fn glu_tcp_connection_deinit(conn: *glu.tcp.Connection) void {
     destroy(conn);
 }
 
-export fn glu_tcp_set_blocking(conn: *glu.tcp.Connection, blocking: bool) c_int {
-    conn.setBlocking(blocking) catch |err| return mapErr(err);
-    return GLU_OK;
+// ── TCP extended API ──
+
+export fn glu_tcp_listen_with_config(port: u16, nodelay: bool, quickack: bool, keepalive: bool, keepalive_idle: u32, keepalive_interval: u32, keepalive_count: u32, recv_buf: i32, send_buf: i32, defer_accept: bool, connect_timeout_ms: u32, recv_timeout_ms: u32, send_timeout_ms: u32, out: *?*glu.tcp.Listener) c_int {
+    return allocWrap(glu.tcp.Listener, glu.tcp.Listener.listen(port, .{
+        .nodelay = nodelay,
+        .quickack = quickack,
+        .keepalive = keepalive,
+        .keepalive_idle = keepalive_idle,
+        .keepalive_interval = keepalive_interval,
+        .keepalive_count = keepalive_count,
+        .recv_buf = if (recv_buf >= 0) @as(?i32, recv_buf) else null,
+        .send_buf = if (send_buf >= 0) @as(?i32, send_buf) else null,
+        .defer_accept = defer_accept,
+        .connect_timeout_ms = connect_timeout_ms,
+        .recv_timeout_ms = if (recv_timeout_ms > 0) @as(?u32, recv_timeout_ms) else null,
+        .send_timeout_ms = if (send_timeout_ms > 0) @as(?u32, send_timeout_ms) else null,
+    }), out);
+}
+
+export fn glu_tcp_connect_with_config(host: [*:0]const u8, port: u16, connect_timeout_ms: u32, recv_timeout_ms: u32, send_timeout_ms: u32, out: *?*glu.tcp.Connection) c_int {
+    return allocWrap(glu.tcp.Connection, glu.tcp.Connection.connect(std.mem.sliceTo(host, 0), port, .{
+        .connect_timeout_ms = connect_timeout_ms,
+        .recv_timeout_ms = if (recv_timeout_ms > 0) @as(?u32, recv_timeout_ms) else null,
+        .send_timeout_ms = if (send_timeout_ms > 0) @as(?u32, send_timeout_ms) else null,
+    }), out);
 }
 
 // ─────────────────────────────────────────────
@@ -196,7 +224,7 @@ export fn glu_tcp_set_blocking(conn: *glu.tcp.Connection, blocking: bool) c_int 
 // ─────────────────────────────────────────────
 
 export fn glu_udp_bind(port: u16, out: *?*glu.udp.Socket) c_int {
-    return allocWrap(glu.udp.Socket, glu.udp.Socket.bind(port), out);
+    return allocWrap(glu.udp.Socket, glu.udp.Socket.bind(port, .{}), out);
 }
 
 export fn glu_udp_deinit(sock: *glu.udp.Socket) void {
@@ -219,9 +247,40 @@ export fn glu_udp_receive_from(sock: *glu.udp.Socket, buffer: [*]u8, len: u32, o
     return GLU_OK;
 }
 
-export fn glu_udp_set_blocking(sock: *glu.udp.Socket, blocking: bool) c_int {
-    sock.setBlocking(blocking) catch |err| return mapErr(err);
+export fn glu_udp_socket_connect(sock: *glu.udp.Socket, host: [*:0]const u8, port: u16) c_int {
+    sock.connect(std.mem.sliceTo(host, 0), port) catch |err| return mapErr(err);
     return GLU_OK;
 }
 
+export fn glu_udp_send(sock: *glu.udp.Socket, data: [*]const u8, len: u32) c_int {
+    const bytes = sock.send(data[0..len]) catch |err| return mapErr(err);
+    return @intCast(bytes);
+}
+
+export fn glu_udp_receive(sock: *glu.udp.Socket, buffer: [*]u8, len: u32) c_int {
+    const bytes = sock.receive(buffer[0..len]) catch |err| return mapErr(err);
+    return @intCast(bytes);
+}
+
+// ── UDP extended API ──
+
+export fn glu_udp_bind_with_config(port: u16, recv_buf: i32, send_buf: i32, broadcast: bool, recv_timeout_ms: u32, send_timeout_ms: u32, out: *?*glu.udp.Socket) c_int {
+    return allocWrap(glu.udp.Socket, glu.udp.Socket.bind(port, .{
+        .recv_buf = if (recv_buf >= 0) @as(?i32, recv_buf) else null,
+        .send_buf = if (send_buf >= 0) @as(?i32, send_buf) else null,
+        .broadcast = broadcast,
+        .recv_timeout_ms = if (recv_timeout_ms > 0) @as(?u32, recv_timeout_ms) else null,
+        .send_timeout_ms = if (send_timeout_ms > 0) @as(?u32, send_timeout_ms) else null,
+    }), out);
+}
+
+export fn glu_udp_join_multicast(sock: *glu.udp.Socket, group: [*:0]const u8) c_int {
+    sock.joinMulticast(std.mem.sliceTo(group, 0)) catch |err| return mapErr(err);
+    return GLU_OK;
+}
+
+export fn glu_udp_leave_multicast(sock: *glu.udp.Socket, group: [*:0]const u8) c_int {
+    sock.leaveMulticast(std.mem.sliceTo(group, 0)) catch |err| return mapErr(err);
+    return GLU_OK;
+}
 

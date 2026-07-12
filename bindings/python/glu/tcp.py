@@ -4,6 +4,7 @@ from ._bindings import (
     _lib,
     glu_tcp_listener_t,
     glu_tcp_connection_t,
+    glu_udp_endpoint_t,
     _check,
 )
 
@@ -16,6 +17,21 @@ class TcpConnection:
     def connect(cls, host: str, port: int) -> "TcpConnection":
         out = glu_tcp_connection_t()
         _check(_lib.glu_tcp_connect(host.encode(), port, ctypes.byref(out)))
+        return cls(out)
+
+    @classmethod
+    def connect_with_timeout(
+        cls, host: str, port: int,
+        connect_timeout_ms: int = 5000,
+        recv_timeout_ms: int = 0,
+        send_timeout_ms: int = 0,
+    ) -> "TcpConnection":
+        out = glu_tcp_connection_t()
+        _check(_lib.glu_tcp_connect_with_config(
+            host.encode(), port,
+            connect_timeout_ms, recv_timeout_ms, send_timeout_ms,
+            ctypes.byref(out),
+        ))
         return cls(out)
 
     def close(self) -> None:
@@ -32,12 +48,9 @@ class TcpConnection:
     def __exit__(self, *args):
         self.close()
 
-    def send(self, data: bytes | bytearray) -> int:
+    def send(self, data: bytes | bytearray) -> None:
         buf = bytes(data)
-        rc = _lib.glu_tcp_send(self._handle, buf, len(buf))
-        if rc < 0:
-            _check(rc)
-        return rc
+        _check(_lib.glu_tcp_send(self._handle, buf, len(buf)))
 
     def receive(self, size: int = 4096) -> bytes:
         buf = ctypes.create_string_buffer(size)
@@ -45,9 +58,6 @@ class TcpConnection:
         if rc < 0:
             _check(rc)
         return buf.raw[:rc]
-
-    def set_blocking(self, blocking: bool) -> None:
-        _check(_lib.glu_tcp_set_blocking(self._handle, int(blocking)))
 
     @property
     def handle(self):
