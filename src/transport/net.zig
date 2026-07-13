@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const c = std.c;
 const posix = std.posix;
 const mem = std.mem;
@@ -14,6 +15,7 @@ pub const AddrErr = error{
 };
 
 pub fn resolve(host: []const u8, port: u16, socktype: c_int) AddrErr!posix.sockaddr.in {
+    assert(host.len > 0);
     var hints = mem.zeroes(c.addrinfo);
     hints.family = c.AF.UNSPEC;
     hints.socktype = socktype;

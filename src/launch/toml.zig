@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 
 const TomlErr = error{
     OutOfMemory,
@@ -129,6 +130,7 @@ const Parser = struct {
 /// Supports `[[node]]` array-of-tables with `name`, `path`, `bin`,
 /// and `extra_cfg` keys. Comments (`#`) and blank lines are ignored.
 pub fn parse(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) TomlErr!LaunchConfig {
+    assert(file_path.len > 0);
     const cwd = std.Io.Dir.cwd();
     const file = cwd.openFile(io, file_path, .{}) catch return TomlErr.FileSystem;
     defer file.close(io);

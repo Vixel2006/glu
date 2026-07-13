@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const c = @import("std").c;
 const os = @import("std").os.linux;
 
@@ -40,7 +41,10 @@ pub const Header = extern struct {
 };
 
 comptime {
+    std.debug.assert(MAX_READERS > 0 and MAX_READERS <= 8);
     std.debug.assert(@sizeOf(Header) == 160);
+    std.debug.assert(@offsetOf(Header, "read") == 96);
+    std.debug.assert(@offsetOf(Header, "pids") == 128);
 }
 
 /// A POSIX shared-memory channel backed by `shm_open` + `mmap`.
@@ -60,6 +64,9 @@ pub const Channel = struct {
     /// initialises the header. Subsequent calls attach to the existing
     /// segment and bump the connection counter.
     pub fn open(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32, tos: ToS) ShmErr!Channel {
+        assert(msg_size > 0);
+        assert(capacity > 0);
+        assert(name.len > 0);
         // POSIX shm_open requires the name to start with '/' and contain
         // no other '/' characters.  Replace inner slashes with '_' so that
         // topic names like "/farm/weather" produce a valid shm name.
@@ -139,6 +146,7 @@ pub const Channel = struct {
     /// The underlying POSIX shm is unlinked only when the last connection
     /// is closed (reference counting via `conns`).
     pub fn close(self: *Channel) void {
+        assert(self.fd != -1);
         const prev = @atomicRmw(u32, &self.header.conns, .Sub, 1, .acq_rel);
 
         const needs_unlink = prev == 1;
@@ -155,6 +163,7 @@ pub const Channel = struct {
 
         _ = os.munmap(self.ptr, self.size);
         _ = os.close(self.fd);
+        self.fd = -1;
 
         if (name_z) |nz| _ = c.shm_unlink(nz.ptr);
     }
@@ -169,6 +178,7 @@ pub const Channel = struct {
 /// ignored when we check for the slowest reader in the 
 /// reliable connection mode of node communications.
 pub fn sweepDeadReaders(readers: *[8]u32, pids: []const u32) void {
+    assert(pids.len >= 8);
     for (0.., pids) |i, pid| {
         if (pid != 0 and !isAlive(pid)) {
             readers[i] = std.math.maxInt(u32);
@@ -198,6 +208,7 @@ pub fn slowestReader(readers: []const u32, write_cursor: u32) u32 {
 /// Blocks with a spin-loop if the buffer is full (slowest-reader
 /// backpressure).
 pub fn write(chan: *Channel, msg: *const anyopaque) void {
+    assert(chan.fd != -1);
     const cap = chan.header.capacity;
     const tos: ToS = @enumFromInt(chan.header.tos);
 
@@ -222,6 +233,8 @@ pub fn write(chan: *Channel, msg: *const anyopaque) void {
 /// is advanced atomically. Slots are reused once all subscribers have
 /// read or dropped them.
 pub fn read(chan: *Channel, sub_id: u32) *anyopaque {
+    assert(chan.fd != -1);
+    assert(sub_id < MAX_READERS);
     const msg_size = chan.header.msg_size;
     const idx = @atomicRmw(u32, &chan.header.read[sub_id], .Add, 1, .acquire) % chan.header.capacity;
     const slot = chan.ptr + @sizeOf(Header) + idx * msg_size;

@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const c = std.c;
 const posix = std.posix;
 const mem = std.mem;
@@ -87,6 +88,7 @@ pub fn listen(port: u16, config: Config) TcpErr!struct { fd: i32, port: u16 } {
 }
 
 pub fn accept(fd: i32, config: Config) TcpErr!i32 {
+    assert(fd >= 0);
     var client_addr: posix.sockaddr.in = undefined;
     var addrlen: posix.socklen_t = @sizeOf(posix.sockaddr.in);
     const client_fd = c.accept(fd, @ptrCast(&client_addr), &addrlen);
@@ -113,6 +115,7 @@ pub fn accept(fd: i32, config: Config) TcpErr!i32 {
 }
 
 pub fn connect(host: []const u8, port: u16, config: Config) TcpErr!i32 {
+    assert(host.len > 0);
     const addr = try net.resolve(host, port, c.SOCK.STREAM);
 
     const fd = c.socket(c.AF.INET, c.SOCK.STREAM, 0);
@@ -191,6 +194,7 @@ pub fn connect(host: []const u8, port: u16, config: Config) TcpErr!i32 {
 }
 
 pub fn send(fd: i32, data: []const u8) TcpErr!void {
+    assert(fd >= 0);
     const len: u32 = @intCast(data.len);
     var len_buf: [4]u8 = undefined;
     mem.writeInt(u32, &len_buf, len, .little);
@@ -211,6 +215,7 @@ pub fn send(fd: i32, data: []const u8) TcpErr!void {
 }
 
 pub fn receive(fd: i32, buffer: []u8) TcpErr!usize {
+    assert(fd >= 0);
     var len_buf: [4]u8 = undefined;
 
     var offset: usize = 0;
@@ -259,6 +264,7 @@ pub fn receive(fd: i32, buffer: []u8) TcpErr!usize {
 }
 
 pub fn close(fd: i32) void {
+    assert(fd >= 0);
     _ = c.close(fd);
 }
 

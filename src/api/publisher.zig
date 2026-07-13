@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const c = std.c;
 const Channel = @import("../channel.zig").Channel;
 const Header = @import("../channel.zig").Header;
@@ -26,6 +27,9 @@ pub const Publisher = struct {
     /// Shm-unlinks any stale segment first, then creates a fresh channel.
     /// Self-registers the process in the node registry.
     pub fn init(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32, tos: ToS) PubErr!Publisher {
+        assert(msg_size > 0);
+        assert(capacity > 0);
+        assert(name.len > 0);
         const name_z = try allocator.dupeZ(u8, name);
         defer allocator.free(name_z);
         _ = c.shm_unlink(name_z.ptr);

@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const c = @import("std").c;
 const os = std.os.linux;
 
@@ -22,6 +23,8 @@ pub const NodeEntry = struct {
 /// Writes a `.pid` file under `/tmp/glu/nodes/` so other processes can
 /// discover the node via `listAlive`.
 pub fn registerPid(name: []const u8, pid: u32) RegistryErr!void {
+    assert(name.len > 0);
+    assert(pid > 0);
     const io = std.Io.Threaded.global_single_threaded.io();
     const cwd = std.Io.Dir.cwd();
     cwd.createDirPath(io, REGISTRY_DIR) catch {};
@@ -38,6 +41,7 @@ pub fn registerPid(name: []const u8, pid: u32) RegistryErr!void {
 
 /// Register the current process under `name`.
 pub fn register(name: []const u8) RegistryErr!void {
+    assert(name.len > 0);
     const io = std.Io.Threaded.global_single_threaded.io();
     const cwd = std.Io.Dir.cwd();
     cwd.createDirPath(io, REGISTRY_DIR) catch {};

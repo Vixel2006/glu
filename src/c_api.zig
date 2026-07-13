@@ -24,6 +24,10 @@ pub const GLU_ERR_NO_SPACE = -17;
 pub const GLU_ERR_MULTICAST = -18;
 pub const GLU_ERR_NOT_CONNECTED = -19;
 
+comptime {
+    std.debug.assert(GLU_ERR_NOT_CONNECTED == -19);
+}
+
 const alloc = std.heap.c_allocator;
 
 fn io() std.Io {

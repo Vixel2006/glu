@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const c = std.c;
 
 pub const SockErr = error{
@@ -50,6 +51,7 @@ fn setTimeval(fd: i32, level: c_int, opt: u32, ms: u32) SockErr!void {
 }
 
 pub fn applyTcp(fd: i32, opts: TcpOptions) SockErr!void {
+    assert(fd >= 0);
     if (opts.nodelay)
         try setInt(fd, IPPROTO_TCP, TCP_NODELAY, 1);
 
@@ -74,6 +76,7 @@ pub fn applyTcp(fd: i32, opts: TcpOptions) SockErr!void {
 }
 
 pub fn applyUdp(fd: i32, opts: UdpOptions) SockErr!void {
+    assert(fd >= 0);
     if (opts.recv_buf) |buf| try setInt(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.RCVBUF)), buf);
     if (opts.send_buf) |buf| try setInt(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.SNDBUF)), buf);
 

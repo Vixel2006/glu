@@ -1,6 +1,8 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const c = std.c;
 const Channel = @import("../channel.zig").Channel;
+const MAX_READERS = @import("../channel.zig").MAX_READERS;
 const read = @import("../channel.zig").read;
 const write = @import("../channel.zig").write;
 
@@ -34,6 +36,7 @@ pub const Subscriber = struct {
             }
         }
 
+        assert(id < MAX_READERS);
 
         const sub: Subscriber = .{ .id = id, .channel = chan };
 
@@ -55,6 +58,7 @@ pub const Subscriber = struct {
     /// Setting the read cursor to `maxInt(u32)` removes it from the
     /// slowest-reader calculation so the publisher won't wait for us.
     pub fn deinit(self: *Subscriber) void {
+        assert(self.id < MAX_READERS);
         self.channel.header.read[self.id] = std.math.maxInt(u32);
         self.channel.close();
     }
@@ -64,6 +68,7 @@ pub const Subscriber = struct {
     /// Non-blocking: compares the local read cursor against the global
     /// write cursor and only advances when new data exists.
     pub fn receive(self: *Subscriber) ?*anyopaque {
+        assert(self.id < MAX_READERS);
         const r = @atomicLoad(u32, &self.channel.header.read[self.id], .monotonic);
         const w = @atomicLoad(u32, &self.channel.header.write, .acquire);
         if (r < w) return read(&self.channel, self.id);

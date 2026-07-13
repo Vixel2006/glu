@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const c = @import("std").c;
 const os = @import("std").os.linux;
 
@@ -46,6 +47,7 @@ pub const Topic = struct {
     ///
     /// Validates the magic number to ensure it's a glu channel.
     pub fn open(allocator: std.mem.Allocator, name: []const u8) TopicErr!Topic {
+        assert(name.len > 0);
         const name_z = try allocator.dupeZ(u8, name);
         defer allocator.free(name_z);
 
@@ -68,7 +70,9 @@ pub const Topic = struct {
     }
 
     pub fn close(self: *Topic) void {
+        assert(self.fd != -1);
         _ = os.munmap(@ptrFromInt(self.mapped), self.file_size);
         _ = os.close(self.fd);
+        self.fd = -1;
     }
 };
