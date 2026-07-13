@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const c = std.c;
 const posix = std.posix;
 const mem = std.mem;
@@ -36,6 +37,10 @@ const IpMreq = extern struct {
     imr_multiaddr: u32,
     imr_interface: u32,
 };
+
+comptime {
+    std.debug.assert(@sizeOf(IpMreq) == 8);
+}
 
 pub const SocketConfig = struct {
     recv_buf: ?i32 = null,
@@ -88,6 +93,8 @@ pub fn bind(port: u16, config: SocketConfig) UdpErr!struct { fd: c_int, port: u1
 }
 
 pub fn sendTo(fd: c_int, host: []const u8, port: u16, data: []const u8) UdpErr!usize {
+    assert(fd >= 0);
+    assert(host.len > 0);
     const dest = try net.resolve(host, port, c.SOCK.DGRAM);
     const rc = c.sendto(fd, data.ptr, data.len, 0, @ptrCast(&dest), @sizeOf(posix.sockaddr.in));
     if (rc == -1) return mapErr(c._errno().*);
@@ -95,6 +102,7 @@ pub fn sendTo(fd: c_int, host: []const u8, port: u16, data: []const u8) UdpErr!u
 }
 
 pub fn receiveFrom(fd: c_int, buffer: []u8) UdpErr!ReceiveResult {
+    assert(fd >= 0);
     var sender_addr: posix.sockaddr.in = undefined;
     var addrlen: posix.socklen_t = @sizeOf(posix.sockaddr.in);
     const rc = c.recvfrom(fd, buffer.ptr, buffer.len, 0, @ptrCast(&sender_addr), &addrlen);
@@ -106,6 +114,7 @@ pub fn receiveFrom(fd: c_int, buffer: []u8) UdpErr!ReceiveResult {
 }
 
 pub fn joinMulticast(fd: c_int, group: []const u8) UdpErr!void {
+    assert(fd >= 0);
     const group_addr = try net.resolve(group, 0, c.SOCK.DGRAM);
     const mreq = IpMreq{
         .imr_multiaddr = group_addr.addr,
@@ -116,6 +125,7 @@ pub fn joinMulticast(fd: c_int, group: []const u8) UdpErr!void {
 }
 
 pub fn leaveMulticast(fd: c_int, group: []const u8) UdpErr!void {
+    assert(fd >= 0);
     const group_addr = try net.resolve(group, 0, c.SOCK.DGRAM);
     const mreq = IpMreq{
         .imr_multiaddr = group_addr.addr,
@@ -126,24 +136,29 @@ pub fn leaveMulticast(fd: c_int, group: []const u8) UdpErr!void {
 }
 
 pub fn connect(fd: c_int, host: []const u8, port: u16) UdpErr!void {
+    assert(fd >= 0);
+    assert(host.len > 0);
     const addr = try net.resolve(host, port, c.SOCK.DGRAM);
     if (c.connect(fd, @ptrCast(&addr), @sizeOf(posix.sockaddr.in)) == -1)
         return mapErr(c._errno().*);
 }
 
 pub fn send(fd: c_int, data: []const u8) UdpErr!usize {
+    assert(fd >= 0);
     const rc = c.send(fd, data.ptr, data.len, 0);
     if (rc == -1) return mapErr(c._errno().*);
     return @as(usize, @intCast(rc));
 }
 
 pub fn receive(fd: c_int, buffer: []u8) UdpErr!usize {
+    assert(fd >= 0);
     const rc = c.recv(fd, buffer.ptr, buffer.len, 0);
     if (rc == -1) return mapErr(c._errno().*);
     return @as(usize, @intCast(rc));
 }
 
 pub fn close(fd: c_int) void {
+    assert(fd >= 0);
     _ = c.close(fd);
 }
 

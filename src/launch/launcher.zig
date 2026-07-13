@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const NodeConfig = @import("toml.zig").NodeConfig;
 const Registry = @import("../registry.zig");
 
@@ -64,6 +65,7 @@ pub fn launch(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig
 /// Each node's stdout/stderr is redirected to a log file in `logs_dir`.
 /// Nodes are registered in the registry for lifecycle management.
 pub fn launchDetached(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig, logs_dir: []const u8) LaunchErr!void {
+    assert(logs_dir.len > 0);
     const cwd = std.Io.Dir.cwd();
     cwd.createDirPath(io, logs_dir) catch return LaunchErr.FileSystem;
 
