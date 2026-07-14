@@ -10,7 +10,10 @@ pub const Endpoint = struct {
     port: u16,
 };
 
+/// Convert a POSIX sockaddr_in to an `Endpoint`.
+/// Only handles IPv4 (`posix.sockaddr.in`); asserts the address family is `AF_INET`.
 pub fn sockaddrToEndpoint(addr: posix.sockaddr.in) Endpoint {
+    assert(addr.family == c.AF.INET);
     const host_bytes = @as(*const [4]u8, @ptrCast(&addr.addr));
     var endpoint = Endpoint{
         .host = undefined,
@@ -25,6 +28,7 @@ pub fn sockaddrToEndpoint(addr: posix.sockaddr.in) Endpoint {
     return endpoint;
 }
 
+/// Convert an `std.Io.net.IpAddress` (IPv4 or IPv6) to an `Endpoint`.
 pub fn ipAddressToEndpoint(addr: std.Io.net.IpAddress) Endpoint {
     return switch (addr) {
         .ip4 => |ip4| {

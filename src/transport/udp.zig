@@ -53,6 +53,7 @@ fn applySocketOpts(fd: i32, config: SocketConfig) void {
     if (config.send_timeout_ms) |ms| setTimeval(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.SNDTIMEO)), ms);
 }
 
+/// Bind a UDP socket on 0.0.0.0:{port}.
 pub fn bind(io: std.Io, port: u16, config: SocketConfig) std.Io.net.IpAddress.BindError!Socket {
     var addr_buf: [32]u8 = undefined;
     const addr_str = std.fmt.bufPrint(&addr_buf, "0.0.0.0:{d}", .{port}) catch return error.AddressUnavailable;
@@ -68,7 +69,12 @@ pub fn bind(io: std.Io, port: u16, config: SocketConfig) std.Io.net.IpAddress.Bi
     return socket;
 }
 
+/// Send a datagram to `host:port`.
+/// Asserts that `host` is non-empty, `port` is non-zero, and `data` is non-empty.
 pub fn sendTo(socket: *Socket, io: std.Io, host: []const u8, port: u16, data: []const u8) (std.Io.net.Socket.SendError || error{AddressUnavailable})!usize {
+    assert(host.len > 0);
+    assert(port > 0);
+    assert(data.len > 0);
     var addr_buf: [256]u8 = undefined;
     const addr_str = std.fmt.bufPrint(&addr_buf, "{s}:{d}", .{ host, port }) catch return error.AddressUnavailable;
     const addr = std.Io.net.IpAddress.parseLiteral(addr_str) catch return error.AddressUnavailable;
@@ -77,7 +83,10 @@ pub fn sendTo(socket: *Socket, io: std.Io, host: []const u8, port: u16, data: []
     return data.len;
 }
 
+/// Receive a datagram, returning the data and sender endpoint.
+/// Asserts that `buffer` is non-empty.
 pub fn receiveFrom(socket: *Socket, io: std.Io, buffer: []u8) std.Io.net.Socket.ReceiveError!ReceiveResult {
+    assert(buffer.len > 0);
     const received = try socket.receive(io, buffer);
     return ReceiveResult{
         .data = received.data,
@@ -85,7 +94,12 @@ pub fn receiveFrom(socket: *Socket, io: std.Io, buffer: []u8) std.Io.net.Socket.
     };
 }
 
+/// Connect a UDP socket to a remote address (filters incoming/outgoing datagrams).
+/// Asserts that `host` is non-empty and `port` is non-zero.
+/// Silently returns if the address fails to parse.
 pub fn connect(socket: *Socket, host: []const u8, port: u16) void {
+    assert(host.len > 0);
+    assert(port > 0);
     var addr_buf: [256]u8 = undefined;
     const addr_str = std.fmt.bufPrint(&addr_buf, "{s}:{d}", .{ host, port }) catch return;
     const addr = std.Io.net.IpAddress.parseLiteral(addr_str) catch return;
@@ -102,19 +116,29 @@ pub fn connect(socket: *Socket, host: []const u8, port: u16) void {
     _ = c.connect(socket.handle, @ptrCast(&sockaddr), @sizeOf(posix.sockaddr.in));
 }
 
+/// Send a datagram on a connected UDP socket.
+/// Asserts that `data` is non-empty.
 pub fn send(socket: *Socket, io: std.Io, data: []const u8) std.Io.net.Stream.Writer.Error!usize {
+    assert(data.len > 0);
     const n = try io.vtable.netWrite(io.userdata, socket.handle, &.{}, &.{data}, 1);
     return n;
 }
 
+/// Receive a datagram on a connected UDP socket.
+/// Asserts that `buffer` is non-empty.
 pub fn receive(socket: *Socket, io: std.Io, buffer: []u8) std.Io.net.Stream.Reader.Error!usize {
+    assert(buffer.len > 0);
     var read_buf = [_][]u8{buffer};
     const n = try io.vtable.netRead(io.userdata, socket.handle, &read_buf);
     if (n == 0) return error.ConnectionResetByPeer;
     return n;
 }
 
+/// Join a multicast group.
+/// Asserts that `group` is non-empty.
+/// Silently returns if the group address fails to parse or is IPv6 (IPv4 only).
 pub fn joinMulticast(socket: *Socket, group: []const u8) void {
+    assert(group.len > 0);
     var addr_buf: [256]u8 = undefined;
     const addr_str = std.fmt.bufPrint(&addr_buf, "{s}:0", .{group}) catch return;
     const addr = std.Io.net.IpAddress.parseLiteral(addr_str) catch return;
@@ -131,7 +155,11 @@ pub fn joinMulticast(socket: *Socket, group: []const u8) void {
     _ = c.setsockopt(socket.handle, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, @sizeOf(IpMreq));
 }
 
+/// Leave a multicast group.
+/// Asserts that `group` is non-empty.
+/// Silently returns if the group address fails to parse or is IPv6 (IPv4 only).
 pub fn leaveMulticast(socket: *Socket, group: []const u8) void {
+    assert(group.len > 0);
     var addr_buf: [256]u8 = undefined;
     const addr_str = std.fmt.bufPrint(&addr_buf, "{s}:0", .{group}) catch return;
     const addr = std.Io.net.IpAddress.parseLiteral(addr_str) catch return;
@@ -148,6 +176,7 @@ pub fn leaveMulticast(socket: *Socket, group: []const u8) void {
     _ = c.setsockopt(socket.handle, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq, @sizeOf(IpMreq));
 }
 
+/// Close a UDP socket.
 pub fn close(socket: *Socket, io: std.Io) void {
     socket.close(io);
 }

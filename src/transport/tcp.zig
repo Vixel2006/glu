@@ -54,6 +54,8 @@ fn applySocketOpts(fd: i32, config: Config) void {
     if (config.send_timeout_ms) |ms| setTimeval(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.SNDTIMEO)), ms);
 }
 
+/// Bind and listen for TCP connections on 0.0.0.0:{port}.
+/// Returns a `Server` that can be used with `accept`.
 pub fn listen(io: std.Io, port: u16, config: Config) std.Io.net.IpAddress.ListenError!Server {
     var addr_buf: [32]u8 = undefined;
     const addr_str = std.fmt.bufPrint(&addr_buf, "0.0.0.0:{d}", .{port}) catch return error.AddressUnavailable;
@@ -72,13 +74,18 @@ pub fn listen(io: std.Io, port: u16, config: Config) std.Io.net.IpAddress.Listen
     return server;
 }
 
+/// Accept a single TCP connection and apply socket options.
 pub fn accept(server: *Server, io: std.Io, config: Config) std.Io.net.Server.AcceptError!Stream {
     const stream = try server.accept(io);
     applySocketOpts(stream.socket.handle, config);
     return stream;
 }
 
+/// Connect to a TCP server at `host:port`.
+/// Asserts that `host` is non-empty and `port` is non-zero.
 pub fn connect(io: std.Io, host: []const u8, port: u16, config: Config) std.Io.net.IpAddress.ConnectError!Stream {
+    assert(host.len > 0);
+    assert(port > 0);
     var addr_buf: [256]u8 = undefined;
     const addr_str = std.fmt.bufPrint(&addr_buf, "{s}:{d}", .{ host, port }) catch return error.AddressUnavailable;
     const addr = std.Io.net.IpAddress.parseLiteral(addr_str) catch return error.AddressUnavailable;
@@ -100,8 +107,12 @@ pub fn connect(io: std.Io, host: []const u8, port: u16, config: Config) std.Io.n
     return stream;
 }
 
+/// Send a length-prefixed message over a TCP stream.
+/// Writes a 4-byte little-endian length header followed by `data`.
+/// Asserts that `data.len` fits in a `u32`.
 pub fn send(stream: *Stream, io: std.Io, data: []const u8) std.Io.net.Stream.Writer.Error!void {
     const fd = stream.socket.handle;
+    assert(data.len <= std.math.maxInt(u32));
     const len: u32 = @intCast(data.len);
     var len_buf: [4]u8 = undefined;
     mem.writeInt(u32, &len_buf, len, .little);
@@ -118,7 +129,12 @@ pub fn send(stream: *Stream, io: std.Io, data: []const u8) std.Io.net.Stream.Wri
     }
 }
 
+/// Receive a length-prefixed message from a TCP stream.
+/// Reads a 4-byte little-endian length header, then reads the message body into `buffer`.
+/// If the message exceeds `buffer.len` the payload is discarded and `error.MessageTooLarge` is returned.
+/// Asserts that `buffer` is non-empty.
 pub fn receive(stream: *Stream, io: std.Io, buffer: []u8) (std.Io.net.Stream.Reader.Error || error{MessageTooLarge})!usize {
+    assert(buffer.len > 0);
     const fd = stream.socket.handle;
     var len_buf: [4]u8 = undefined;
 
@@ -155,10 +171,12 @@ pub fn receive(stream: *Stream, io: std.Io, buffer: []u8) (std.Io.net.Stream.Rea
     return msg_len;
 }
 
+/// Close a TCP stream.
 pub fn close(stream: *Stream, io: std.Io) void {
     stream.close(io);
 }
 
+/// Close a TCP server socket.
 pub fn closeServer(server: *Server, io: std.Io) void {
     server.deinit(io);
 }

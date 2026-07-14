@@ -3,7 +3,6 @@ const zbench = @import("zbench");
 
 const channel = @import("channel.zig");
 const api = @import("api.zig");
-const codegen = @import("codegen.zig");
 
 const StatsRecord = struct {
     name: []const u8,
@@ -71,7 +70,6 @@ pub fn main(init: std.process.Init) !void {
     try bench.add("channel read 32B", channel.benchChannelRead32, .{ .hooks = channel.read32_hooks });
     try bench.add("publisher publish", api.benchPublisherPublish, .{ .hooks = api.publish_hooks });
     try bench.add("subscriber receive", api.benchSubscriberReceive, .{ .hooks = api.receive_hooks });
-    try bench.add("generate code", codegen.benchGenerateCode, .{});
 
     try zbench.prettyPrintHeader(io, stdout, bench.max_name_len);
 
