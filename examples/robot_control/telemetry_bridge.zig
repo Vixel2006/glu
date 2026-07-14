@@ -46,11 +46,12 @@ fn runReceiver() void {
     // Give the parent a moment to set up its socket before we bind.
     sleepMs(200);
 
-    var sock = glu.udp.Socket.bind(udp_port, .{}) catch |e| {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var sock = glu.udp.bind(io, udp_port, .{}) catch |e| {
         std.debug.print("[bridge/rx] bind port {d} failed: {}\n", .{ udp_port, e });
         return;
     };
-    defer sock.deinit();
+    defer glu.udp.close(&sock, io);
 
     std.debug.print(
         "[bridge/rx] ground station listening on :{d}\n",
@@ -59,7 +60,7 @@ fn runReceiver() void {
 
     var buf: [256]u8 = undefined;
     while (true) {
-        const result = sock.receiveFrom(&buf) catch |e| {
+        const result = glu.udp.receiveFrom(&sock, io, &buf) catch |e| {
             if (e == error.WouldBlock or e == error.Interrupted) continue;
             std.debug.print("[bridge/rx] receiveFrom error: {}\n", .{e});
             break;
@@ -77,6 +78,7 @@ fn runReceiver() void {
 // -- parent process: bridge (pub/sub → UDP) ----------------------------------
 
 fn runBridge() void {
+    const io = std.Io.Threaded.global_single_threaded.io();
     const allocator = std.heap.page_allocator;
 
     var odom_sub = glu.Subscriber.init(
@@ -102,11 +104,11 @@ fn runBridge() void {
     defer bat_sub.deinit();
 
     // Sender socket (ephemeral port — OS assigns it).
-    var sender = glu.udp.Socket.bind(0, .{}) catch |e| {
+    var sender = glu.udp.bind(io, 0, .{}) catch |e| {
         std.debug.print("[bridge/tx] sender socket failed: {}\n", .{e});
         return;
     };
-    defer sender.deinit();
+    defer glu.udp.close(&sender, io);
 
     std.debug.print(
         "[bridge/tx] bridge  {s},{s} → UDP {s}:{d}\n",
@@ -126,7 +128,7 @@ fn runBridge() void {
                 "ODOM seq={d} x={d:.3} y={d:.3} theta={d:.4}\n",
                 .{ odom.seq, odom.x, odom.y, odom.theta },
             ) catch continue;
-            _ = sender.sendTo(udp_host, udp_port, line) catch {};
+            _ = glu.udp.sendTo(&sender, io, udp_host, udp_port, line) catch {};
         }
 
         // Forward all available battery status messages.
@@ -137,7 +139,7 @@ fn runBridge() void {
                 "BAT  seq={d} pct={d:.1}%\n",
                 .{ bat.seq, bat.percentage },
             ) catch continue;
-            _ = sender.sendTo(udp_host, udp_port, line) catch {};
+            _ = glu.udp.sendTo(&sender, io, udp_host, udp_port, line) catch {};
         }
 
         // Status print every 100 forwarded messages.

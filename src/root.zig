@@ -6,16 +6,14 @@ pub const read = @import("channel.zig").read;
 pub const Publisher = @import("api/publisher.zig").Publisher;
 pub const Subscriber = @import("api/subscriber.zig").Subscriber;
 pub const net = @import("transport/net.zig");
-pub const sockopt = @import("transport/sockopt.zig");
-pub const tcp = @import("api/tcp.zig");
-pub const udp = @import("api/udp.zig");
+pub const tcp = @import("transport/tcp.zig");
+pub const udp = @import("transport/udp.zig");
 
 comptime {
     _ = @import("channel.zig");
     _ = @import("api/publisher.zig");
     _ = @import("api/subscriber.zig");
     _ = @import("transport/net.zig");
-    _ = @import("transport/sockopt.zig");
-    _ = @import("api/tcp.zig");
-    _ = @import("api/udp.zig");
+    _ = @import("transport/tcp.zig");
+    _ = @import("transport/udp.zig");
 }

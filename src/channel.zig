@@ -5,11 +5,7 @@ const os = @import("std").os.linux;
 
 const isAlive = @import("registry.zig").isAlive;
 
-const ShmErr = error{
-    OutOfMemory,
-    ShmOpenFailed,
-    MmapFailed
-};
+const ShmErr = error{ OutOfMemory, ShmOpenFailed, MmapFailed };
 
 /// Magic number used to identify glu shared memory segments (`0x474C5500` = "GLU\0").
 pub const GLU_MAGIC = 0x474C5500;
@@ -175,7 +171,7 @@ pub const Channel = struct {
 ///
 /// Find the pid of the dead subscriber node and
 /// assign `maxInt(u32)` to its cursor so that it's
-/// ignored when we check for the slowest reader in the 
+/// ignored when we check for the slowest reader in the
 /// reliable connection mode of node communications.
 pub fn sweepDeadReaders(readers: *[8]u32, pids: []const u32) void {
     assert(pids.len >= 8);
@@ -279,7 +275,7 @@ test "sweepDeadReaders: no crash when all PIDs are zero" {
 }
 
 test "sweepDeadReaders: leaves unowned slots unchanged" {
-    var readers = [_]u32{ std.math.maxInt(u32) } ** MAX_READERS;
+    var readers = [_]u32{std.math.maxInt(u32)} ** MAX_READERS;
     var pids = [_]u32{ 0, 0, 0, 0, 0, 0, 0, 0 };
 
     sweepDeadReaders(&readers, &pids);
