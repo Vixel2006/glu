@@ -66,13 +66,12 @@ pub const Channel = struct {
         // POSIX shm_open requires the name to start with '/' and contain
         // no other '/' characters.  Replace inner slashes with '_' so that
         // topic names like "/farm/weather" produce a valid shm name.
-        const shm_name = try allocator.alloc(u8, name.len);
+        const shm_name = try allocator.alloc(u8, name.len + 1);
         defer allocator.free(shm_name);
         for (name, 0..) |ch, i| {
             shm_name[i] = if (i > 0 and ch == '/') '_' else ch;
         }
-        const name_z = try allocator.dupeZ(u8, shm_name);
-        defer allocator.free(name_z);
+        shm_name[name.len] = 0;
 
         // Attempt to create the segment exclusively.
         const excl_flags: c_int = @as(c_int, @bitCast(os.O{
@@ -80,7 +79,7 @@ pub const Channel = struct {
             .CREAT = true,
             .EXCL = true,
         }));
-        var fd: i32 = c.shm_open(name_z.ptr, excl_flags, 0o644);
+        var fd: i32 = c.shm_open(shm_name[0..name.len :0], excl_flags, 0o644);
         var created = true;
 
         if (fd == -1) {
@@ -89,7 +88,7 @@ pub const Channel = struct {
             const rdwr_flags: c_int = @as(c_int, @bitCast(os.O{
                 .ACCMODE = .RDWR,
             }));
-            fd = c.shm_open(name_z.ptr, rdwr_flags, 0);
+            fd = c.shm_open(shm_name[0..name.len :0], rdwr_flags, 0);
             created = false;
         }
 
@@ -243,7 +242,11 @@ test "slowestReader: skips inactive MAX_U32 readers" {
 }
 
 test "slowestReader: returns write cursor when no active readers" {
-    const readers = [_]u32{std.math.maxInt(u32)} ** MAX_READERS;
+    const readers: [MAX_READERS]u32 = comptime brk: {
+        var arr: [MAX_READERS]u32 = undefined;
+        for (&arr) |*a| a.* = std.math.maxInt(u32);
+        break :brk arr;
+    };
     try std.testing.expectEqual(@as(u32, 42), slowestReader(&readers, 42));
 }
 
@@ -275,7 +278,11 @@ test "sweepDeadReaders: no crash when all PIDs are zero" {
 }
 
 test "sweepDeadReaders: leaves unowned slots unchanged" {
-    var readers = [_]u32{std.math.maxInt(u32)} ** MAX_READERS;
+    var readers: [MAX_READERS]u32 = comptime brk: {
+        var arr: [MAX_READERS]u32 = undefined;
+        for (&arr) |*a| a.* = std.math.maxInt(u32);
+        break :brk arr;
+    };
     var pids = [_]u32{ 0, 0, 0, 0, 0, 0, 0, 0 };
 
     sweepDeadReaders(&readers, &pids);

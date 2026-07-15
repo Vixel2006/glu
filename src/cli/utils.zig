@@ -48,10 +48,12 @@ pub const Topic = struct {
     /// Validates the magic number to ensure it's a glu channel.
     pub fn open(allocator: std.mem.Allocator, name: []const u8) TopicErr!Topic {
         assert(name.len > 0);
-        const name_z = try allocator.dupeZ(u8, name);
+        const name_z = try allocator.alloc(u8, name.len + 1);
         defer allocator.free(name_z);
+        @memcpy(name_z[0..name.len], name);
+        name_z[name.len] = 0;
 
-        const fd = c.shm_open(name_z.ptr, @as(c_int, @bitCast(os.O{ .ACCMODE = .RDWR })), 0);
+        const fd = c.shm_open(name_z[0..name.len :0], @as(c_int, @bitCast(os.O{ .ACCMODE = .RDWR })), 0);
         if (fd == -1) return error.TopicNotFound;
         errdefer _ = os.close(fd);
 

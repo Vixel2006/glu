@@ -31,10 +31,6 @@ pub fn build(b: *std.Build) void {
 
     run_cmd.step.dependOn(b.getInstallStep());
 
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
-
     // ── C shared + static library ──────────────────────────────────────────
     //
     // Produces libglu.so and libglu.a in zig-out/lib/, with a C header
