@@ -218,8 +218,8 @@ public:
                                               uint32_t send_timeout_ms = 0) {
         glu_tcp_connection_t* conn;
         detail::check(glu_tcp_connect_with_config(host, port, connect_timeout_ms,
-                                                   recv_timeout_ms, send_timeout_ms,
-                                                   &conn));
+                                                    recv_timeout_ms, send_timeout_ms,
+                                                    &conn));
         return TcpConnection(conn);
     }
 
@@ -257,12 +257,6 @@ public:
     TcpConnection accept() {
         glu_tcp_connection_t* conn;
         detail::check(glu_tcp_accept(listener_, &conn));
-        return TcpConnection(conn);
-    }
-
-    static TcpConnection connect(const char* host, uint16_t port) {
-        glu_tcp_connection_t* conn;
-        detail::check(glu_tcp_connect(host, port, &conn));
         return TcpConnection(conn);
     }
 
@@ -349,6 +343,8 @@ public:
     glu_udp_socket_t* handle() noexcept { return sock_; }
 
 private:
+    explicit UdpSocket(glu_udp_socket_t* sock) : sock_(sock) {}
+
     glu_udp_socket_t* sock_ = nullptr;
 };
 

@@ -110,6 +110,7 @@ int glu_tcp_connect_with_config(const char *host, uint16_t port,
                                 uint32_t recv_timeout_ms,
                                 uint32_t send_timeout_ms,
                                 glu_tcp_connection_t **out);
+
 /* ── UDP (basic) ──────────────────────────── */
 
 int glu_udp_bind(uint16_t port, glu_udp_socket_t **out);
@@ -132,6 +133,7 @@ int glu_udp_bind_with_config(uint16_t port,
                              glu_udp_socket_t **out);
 int glu_udp_join_multicast(glu_udp_socket_t *sock, const char *group);
 int glu_udp_leave_multicast(glu_udp_socket_t *sock, const char *group);
+
 #ifdef __cplusplus
 }
 #endif

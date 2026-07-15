@@ -70,8 +70,9 @@ pub fn unregister(name: []const u8) void {
 /// OS-level existence check with no privileges required.
 pub fn isAlive(pid: u32) bool {
     var buf: [64]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&buf, "/proc/{d}/status", .{pid}) catch return false;
-    return c.access(path.ptr, 0) == 0;
+    const path_len = (std.fmt.bufPrint(&buf, "/proc/{d}/status", .{pid}) catch return false).len;
+    buf[path_len] = 0;
+    return c.access(buf[0..path_len :0], 0) == 0;
 }
 
 /// List all registered nodes and their health status.
@@ -94,9 +95,10 @@ pub fn listAlive(allocator: std.mem.Allocator) RegistryErr![]NodeEntry {
         const node_name = name[0 .. name.len - 4];
 
         var path_buf: [256]u8 = undefined;
-        const path_z = std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ REGISTRY_DIR, name }) catch continue;
+        const path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ REGISTRY_DIR, name }) catch continue;
+        path_buf[path.len] = 0;
 
-        const fd = c.open(path_z.ptr, os.O{ .ACCMODE = .RDONLY });
+        const fd = c.open(path_buf[0..path.len :0], os.O{ .ACCMODE = .RDONLY });
         if (fd == -1) continue;
         defer _ = c.close(fd);
 

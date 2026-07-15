@@ -30,9 +30,11 @@ pub const Publisher = struct {
         assert(msg_size > 0);
         assert(capacity > 0);
         assert(name.len > 0);
-        const name_z = try allocator.dupeZ(u8, name);
+        const name_z = try allocator.alloc(u8, name.len + 1);
         defer allocator.free(name_z);
-        _ = c.shm_unlink(name_z.ptr);
+        @memcpy(name_z[0..name.len], name);
+        name_z[name.len] = 0;
+        _ = c.shm_unlink(name_z[0..name.len :0]);
         return Publisher{ .channel = try Channel.open(allocator, name, msg_size, capacity, tos) };
     }
 

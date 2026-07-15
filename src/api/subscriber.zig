@@ -29,7 +29,7 @@ pub const Subscriber = struct {
         const chan = try Channel.open(allocator, name, msg_size, capacity, .reliable);
 
         var id: u32 = undefined;
-        for(0.., chan.header.read) |i, cursor| {
+        for (0.., chan.header.read) |i, cursor| {
             if (cursor == std.math.maxInt(u32)) {
                 id = @intCast(i);
                 break;

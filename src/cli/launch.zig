@@ -25,9 +25,10 @@ fn cleanupShm() void {
         if (std.mem.startsWith(u8, name, "sem.")) continue;
 
         var shm_name_buf: [256]u8 = undefined;
-        const shm_name_z = std.fmt.bufPrintZ(&shm_name_buf, "/{s}", .{name}) catch continue;
+        const shm_name = std.fmt.bufPrint(&shm_name_buf, "/{s}", .{name}) catch continue;
+        shm_name_buf[shm_name.len] = 0;
 
-        const fd = c.shm_open(shm_name_z.ptr, 0, 0);
+        const fd = c.shm_open(shm_name_buf[0..shm_name.len :0], 0, 0);
         if (fd == -1) continue;
         defer _ = c.close(fd);
 
@@ -39,7 +40,7 @@ fn cleanupShm() void {
         const is_glu = hdr.magic == GLU_MAGIC;
         _ = os.munmap(@ptrFromInt(mapped), @sizeOf(Header));
 
-        if (is_glu) _ = c.shm_unlink(shm_name_z.ptr);
+        if (is_glu) _ = c.shm_unlink(shm_name_buf[0..shm_name.len :0]);
     }
 }
 
