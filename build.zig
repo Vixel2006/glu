@@ -4,9 +4,15 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const zio_dep = b.dependency("zio", .{ .target = target, .optimize = optimize });
+    const zio_mod = zio_dep.module("zio");
+
     const mod = b.addModule("glu", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
+        .imports = &.{
+            .{ .name = "zio", .module = zio_mod },
+        },
     });
 
     const exe = b.addExecutable(.{
@@ -85,6 +91,9 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .link_libc = true,
+        .imports = &.{
+            .{ .name = "zio", .module = zio_mod },
+        },
     });
 
     const lib_tests = b.addTest(.{
@@ -137,33 +146,17 @@ pub fn build(b: *std.Build) void {
     // Usage:
     //   const examples_step = b.step("examples", "Build all example executables");
     //   addExample(b, target, optimize, mod, examples_step,
-    //              "glu-telemetry-sensor", "examples/telemetry/sensor.zig");
+    //              "glu-canonical-sensor", "examples/canonical/sensor.zig");
 
     const examples_step = b.step("examples", "Build all example executables");
 
-    // -- telemetry -----------------------------------------------------------
+    // -- canonical temperature monitoring ------------------------------------
     addExample(b, target, optimize, mod, examples_step,
-        "glu-telemetry-sensor", "examples/telemetry/sensor.zig");
+        "glu-canonical-sensor", "examples/canonical/sensor.zig");
     addExample(b, target, optimize, mod, examples_step,
-        "glu-telemetry-controller", "examples/telemetry/controller.zig");
+        "glu-canonical-processor", "examples/canonical/processor.zig");
     addExample(b, target, optimize, mod, examples_step,
-        "glu-telemetry-monitor", "examples/telemetry/monitor.zig");
-
-    // -- pipeline ------------------------------------------------------------
-    addExample(b, target, optimize, mod, examples_step,
-        "glu-pipeline-imu-sensor", "examples/pipeline/imu_sensor.zig");
-    addExample(b, target, optimize, mod, examples_step,
-        "glu-pipeline-filter", "examples/pipeline/filter.zig");
-    addExample(b, target, optimize, mod, examples_step,
-        "glu-pipeline-actuator", "examples/pipeline/actuator.zig");
-
-    // -- robot_control -------------------------------------------------------
-    addExample(b, target, optimize, mod, examples_step,
-        "glu-robot-cmd", "examples/robot_control/cmd_publisher.zig");
-    addExample(b, target, optimize, mod, examples_step,
-        "glu-robot-sim", "examples/robot_control/robot_sim.zig");
-    addExample(b, target, optimize, mod, examples_step,
-        "glu-robot-bridge", "examples/robot_control/telemetry_bridge.zig");
+        "glu-canonical-dashboard", "examples/canonical/dashboard.zig");
 }
 
 /// Build and install a single example executable.

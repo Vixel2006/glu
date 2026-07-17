@@ -8,6 +8,10 @@
             .url = "https://github.com/hendriknielaender/zbench/archive/refs/tags/v0.13.0.tar.gz",
             .hash = "zbench-0.13.0-YTdc7xVBAQCCMC-IdLLuotBeiNNNm8k9Pi2V4VYqrwfI",
         },
+        .zio = .{
+            .url = "git+https://github.com/lalinsky/zio?ref=zig-0.17#316161e6da288c0f0432709767aa2f02ba00ecce",
+            .hash = "zio-0.13.0-xHbVVIxtHQD1mhkK4SSuEtoPdJiFj5keaBqAMBxuLJbm",
+        },
     },
     .paths = .{
         "build.zig",

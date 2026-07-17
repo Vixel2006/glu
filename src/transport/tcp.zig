@@ -2,9 +2,10 @@ const std = @import("std");
 const assert = std.debug.assert;
 const c = std.c;
 const mem = std.mem;
+const zio = @import("zio");
 
-pub const Server = std.Io.net.Server;
-pub const Stream = std.Io.net.Stream;
+pub const Server = zio.net.Server;
+pub const Stream = zio.net.Stream;
 
 pub const Config = struct {
     nodelay: bool = true,
@@ -41,7 +42,7 @@ fn setTimeval(fd: i32, level: c_int, opt: u32, ms: u32) void {
     _ = c.setsockopt(fd, level, opt, &tv, @sizeOf(std.c.timeval));
 }
 
-fn applySocketOpts(fd: i32, config: Config) void {
+pub fn applySocketOpts(fd: i32, config: Config) void {
     if (config.nodelay) setInt(fd, IPPROTO_TCP, TCP_NODELAY, 1);
     if (config.quickack) setInt(fd, IPPROTO_TCP, TCP_QUICKACK, 1);
     setInt(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.KEEPALIVE)), @as(c_int, @intFromBool(config.keepalive)));
@@ -54,17 +55,13 @@ fn applySocketOpts(fd: i32, config: Config) void {
     if (config.send_timeout_ms) |ms| setTimeval(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.SNDTIMEO)), ms);
 }
 
-/// Bind and listen for TCP connections on 0.0.0.0:{port}.
-/// Returns a `Server` that can be used with `accept`.
-pub fn listen(io: std.Io, port: u16, config: Config) std.Io.net.IpAddress.ListenError!Server {
+pub fn listen(port: u16, config: Config) !Server {
     var addr_buf: [32]u8 = undefined;
-    const addr_str = std.fmt.bufPrint(&addr_buf, "0.0.0.0:{d}", .{port}) catch return error.AddressUnavailable;
-    const addr = std.Io.net.IpAddress.parseLiteral(addr_str) catch return error.AddressUnavailable;
+    const addr_str = try std.fmt.bufPrint(&addr_buf, "0.0.0.0:{d}", .{port});
+    const addr = try zio.net.IpAddress.parseIpAndPort(addr_str);
 
-    const server = try std.Io.net.IpAddress.listen(&addr, io, .{
+    const server = try addr.listen(.{
         .reuse_address = true,
-        .mode = .stream,
-        .protocol = .tcp,
     });
 
     if (config.recv_buf) |buf| {
@@ -74,25 +71,21 @@ pub fn listen(io: std.Io, port: u16, config: Config) std.Io.net.IpAddress.Listen
     return server;
 }
 
-/// Accept a single TCP connection and apply socket options.
-pub fn accept(server: *Server, io: std.Io, config: Config) std.Io.net.Server.AcceptError!Stream {
-    const stream = try server.accept(io);
+pub fn accept(server: *Server, config: Config) !Stream {
+    const stream = try server.accept(.{ .timeout = .none });
     applySocketOpts(stream.socket.handle, config);
     return stream;
 }
 
-/// Connect to a TCP server at `host:port`.
-/// Asserts that `host` is non-empty and `port` is non-zero.
-pub fn connect(io: std.Io, host: []const u8, port: u16, config: Config) std.Io.net.IpAddress.ConnectError!Stream {
+pub fn connect(host: []const u8, port: u16, config: Config) !Stream {
     assert(host.len > 0);
     assert(port > 0);
     var addr_buf: [256]u8 = undefined;
-    const addr_str = std.fmt.bufPrint(&addr_buf, "{s}:{d}", .{ host, port }) catch return error.AddressUnavailable;
-    const addr = std.Io.net.IpAddress.parseLiteral(addr_str) catch return error.AddressUnavailable;
+    const addr_str = try std.fmt.bufPrint(&addr_buf, "{s}:{d}", .{ host, port });
+    const addr = try zio.net.IpAddress.parseIpAndPort(addr_str);
 
-    const stream = try std.Io.net.IpAddress.connect(&addr, io, .{
-        .mode = .stream,
-        .protocol = .tcp,
+    const stream = try addr.connect(.{
+        .timeout = if (config.connect_timeout_ms > 0) zio.Timeout.fromMilliseconds(config.connect_timeout_ms) else .none,
     });
 
     if (config.recv_buf) |buf| {
@@ -107,43 +100,34 @@ pub fn connect(io: std.Io, host: []const u8, port: u16, config: Config) std.Io.n
     return stream;
 }
 
-/// Send a length-prefixed message over a TCP stream.
-/// Writes a 4-byte little-endian length header followed by `data`.
-/// Asserts that `data.len` fits in a `u32`.
-pub fn send(stream: *Stream, io: std.Io, data: []const u8) std.Io.net.Stream.Writer.Error!void {
-    const fd = stream.socket.handle;
+pub fn send(stream: *Stream, data: []const u8) !void {
     assert(data.len <= std.math.maxInt(u32));
     const len: u32 = @intCast(data.len);
     var len_buf: [4]u8 = undefined;
     mem.writeInt(u32, &len_buf, len, .little);
 
-    var parts = [_][]const u8{ len_buf[0..], data };
-    var part_idx: usize = 0;
-    while (part_idx < 2) {
-        const n = try io.vtable.netWrite(io.userdata, fd, &.{}, &.{parts[part_idx]}, 1);
-        if (n >= parts[part_idx].len) {
-            part_idx += 1;
-        } else {
-            parts[part_idx] = parts[part_idx][n..];
-        }
+    var buf: []const u8 = &len_buf;
+    while (buf.len > 0) {
+        const n = try stream.write(buf, .none);
+        buf = buf[n..];
+    }
+
+    buf = data;
+    while (buf.len > 0) {
+        const n = try stream.write(buf, .none);
+        buf = buf[n..];
     }
 }
 
-/// Receive a length-prefixed message from a TCP stream.
-/// Reads a 4-byte little-endian length header, then reads the message body into `buffer`.
-/// If the message exceeds `buffer.len` the payload is discarded and `error.MessageTooLarge` is returned.
-/// Asserts that `buffer` is non-empty.
-pub fn receive(stream: *Stream, io: std.Io, buffer: []u8) (std.Io.net.Stream.Reader.Error || error{MessageTooLarge})!usize {
+pub fn receive(stream: *Stream, buffer: []u8) !usize {
     assert(buffer.len > 0);
-    const fd = stream.socket.handle;
     var len_buf: [4]u8 = undefined;
 
-    var offset: usize = 0;
-    while (offset < 4) {
-        var read_buf = [_][]u8{len_buf[offset..4]};
-        const n = try io.vtable.netRead(io.userdata, fd, &read_buf);
+    var buf: []u8 = &len_buf;
+    while (buf.len > 0) {
+        const n = try stream.read(buf, .none);
         if (n == 0) return error.ConnectionResetByPeer;
-        offset += n;
+        buf = buf[n..];
     }
 
     const msg_len = mem.readInt(u32, &len_buf, .little);
@@ -153,32 +137,28 @@ pub fn receive(stream: *Stream, io: std.Io, buffer: []u8) (std.Io.net.Stream.Rea
         var remaining = msg_len;
         while (remaining > 0) {
             const chunk = @min(remaining, @as(u32, @intCast(discard.len)));
-            var read_buf = [_][]u8{discard[0..chunk]};
-            const n = try io.vtable.netRead(io.userdata, fd, &read_buf);
+            const n = try stream.read(discard[0..chunk], .none);
             if (n == 0) return error.ConnectionResetByPeer;
             remaining -= @as(u32, @intCast(n));
         }
         return error.MessageTooLarge;
     }
 
-    offset = 0;
-    while (offset < msg_len) {
-        var read_buf = [_][]u8{buffer[offset..msg_len]};
-        const n = try io.vtable.netRead(io.userdata, fd, &read_buf);
+    buf = buffer[0..msg_len];
+    while (buf.len > 0) {
+        const n = try stream.read(buf, .none);
         if (n == 0) return error.ConnectionResetByPeer;
-        offset += n;
+        buf = buf[n..];
     }
     return msg_len;
 }
 
-/// Close a TCP stream.
-pub fn close(stream: *Stream, io: std.Io) void {
-    stream.close(io);
+pub fn close(stream: *Stream) void {
+    stream.close();
 }
 
-/// Close a TCP server socket.
-pub fn closeServer(server: *Server, io: std.Io) void {
-    server.deinit(io);
+pub fn closeServer(server: *Server) void {
+    server.close();
 }
 
 fn getPort(fd: i32) u16 {
@@ -190,93 +170,93 @@ fn getPort(fd: i32) u16 {
 }
 
 test "listen: bind and close cleanly" {
-    const io = std.Io.Threaded.global_single_threaded.io();
-    var server = try listen(io, 0, .{});
-    defer closeServer(&server, io);
-}
-
-test "connect: refused returns ConnectFailed" {
-    const io = std.Io.Threaded.global_single_threaded.io();
-    try std.testing.expectError(error.ConnectionRefused, connect(io, "127.0.0.1", 1, .{}));
+    var rt = try zio.Runtime.init(std.testing.allocator, .{});
+    defer rt.deinit();
+    var server = try listen(0, .{});
+    defer closeServer(&server);
 }
 
 test "listen + connect + accept round-trip" {
-    const io = std.Io.Threaded.global_single_threaded.io();
-    var server = try listen(io, 0, .{});
-    defer closeServer(&server, io);
+    var rt = try zio.Runtime.init(std.testing.allocator, .{});
+    defer rt.deinit();
+
+    var server = try listen(0, .{});
+    defer closeServer(&server);
 
     const port = getPort(server.socket.handle);
 
-    var thread = try std.Thread.spawn(.{}, struct {
+    var handle = try rt.spawn(struct {
         fn run(p: u16) void {
-            const tio = std.Io.Threaded.global_single_threaded.io();
-            var s = connect(tio, "127.0.0.1", p, .{}) catch @panic("connect failed");
-            close(&s, tio);
+            var s = connect("127.0.0.1", p, .{}) catch @panic("connect failed");
+            close(&s);
         }
     }.run, .{port});
 
-    var stream = try accept(&server, io, .{});
-    defer close(&stream, io);
+    var stream = try accept(&server, .{});
+    defer close(&stream);
 
-    thread.join();
+    handle.join();
 }
 
 test "send and receive data" {
-    const io = std.Io.Threaded.global_single_threaded.io();
-    var server = try listen(io, 0, .{});
-    defer closeServer(&server, io);
+    var rt = try zio.Runtime.init(std.testing.allocator, .{});
+    defer rt.deinit();
+
+    var server = try listen(0, .{});
+    defer closeServer(&server);
 
     const port = getPort(server.socket.handle);
 
     const msg = "hello glu!";
-    var thread = try std.Thread.spawn(.{}, struct {
+    var handle = try rt.spawn(struct {
         fn run(p: u16, m: []const u8) void {
-            const tio = std.Io.Threaded.global_single_threaded.io();
-            var s = connect(tio, "127.0.0.1", p, .{}) catch @panic("connect failed");
-            send(&s, tio, m) catch @panic("send failed");
-            close(&s, tio);
+            var s = connect("127.0.0.1", p, .{}) catch @panic("connect failed");
+            send(&s, m) catch @panic("send failed");
+            close(&s);
         }
     }.run, .{ port, msg });
 
-    var stream = try accept(&server, io, .{});
-    defer close(&stream, io);
+    var stream = try accept(&server, .{});
+    defer close(&stream);
 
     var buf: [64]u8 = undefined;
-    const n = try receive(&stream, io, &buf);
+    const n = try receive(&stream, &buf);
     try std.testing.expectEqual(@as(usize, msg.len), n);
     try std.testing.expect(std.mem.eql(u8, msg, buf[0..n]));
 
-    thread.join();
+    handle.join();
 }
 
 test "empty message round-trip" {
-    const io = std.Io.Threaded.global_single_threaded.io();
-    var server = try listen(io, 0, .{});
-    defer closeServer(&server, io);
+    var rt = try zio.Runtime.init(std.testing.allocator, .{});
+    defer rt.deinit();
+
+    var server = try listen(0, .{});
+    defer closeServer(&server);
 
     const port = getPort(server.socket.handle);
 
-    var thread = try std.Thread.spawn(.{}, struct {
+    var handle = try rt.spawn(struct {
         fn run(p: u16) void {
-            const tio = std.Io.Threaded.global_single_threaded.io();
-            var s = connect(tio, "127.0.0.1", p, .{}) catch @panic("connect failed");
-            send(&s, tio, "") catch @panic("send failed");
-            close(&s, tio);
+            var s = connect("127.0.0.1", p, .{}) catch @panic("connect failed");
+            send(&s, "") catch @panic("send failed");
+            close(&s);
         }
     }.run, .{port});
 
-    var stream = try accept(&server, io, .{});
-    defer close(&stream, io);
+    var stream = try accept(&server, .{});
+    defer close(&stream);
 
     var buf: [1]u8 = undefined;
-    const n = try receive(&stream, io, &buf);
+    const n = try receive(&stream, &buf);
     try std.testing.expectEqual(@as(usize, 0), n);
 
-    thread.join();
+    handle.join();
 }
 
 test "socket options apply on a real socket" {
-    const io = std.Io.Threaded.global_single_threaded.io();
-    var server = try listen(io, 0, .{});
-    defer closeServer(&server, io);
+    var rt = try zio.Runtime.init(std.testing.allocator, .{});
+    defer rt.deinit();
+    var server = try listen(0, .{});
+    defer closeServer(&server);
 }

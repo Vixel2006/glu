@@ -5,9 +5,16 @@ pub const write = @import("channel.zig").write;
 pub const read = @import("channel.zig").read;
 pub const Publisher = @import("api/publisher.zig").Publisher;
 pub const Subscriber = @import("api/subscriber.zig").Subscriber;
+pub const registry = @import("registry.zig");
 pub const net = @import("transport/net.zig");
 pub const tcp = @import("transport/tcp.zig");
 pub const udp = @import("transport/udp.zig");
+
+const zio = @import("zio");
+pub const Runtime = zio.Runtime;
+pub const RuntimeOptions = zio.RuntimeOptions;
+pub const Duration = zio.Duration;
+pub const sleep = zio.sleep;
 
 comptime {
     _ = @import("channel.zig");
