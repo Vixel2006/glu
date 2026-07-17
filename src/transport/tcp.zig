@@ -2,6 +2,10 @@ const std = @import("std");
 const assert = std.debug.assert;
 const c = std.c;
 const mem = std.mem;
+const io_mod = @import("../io.zig");
+const net = @import("net.zig");
+const linux = std.os.linux;
+const posix = std.posix;
 
 pub const Server = std.Io.net.Server;
 pub const Stream = std.Io.net.Stream;
@@ -41,7 +45,7 @@ fn setTimeval(fd: i32, level: c_int, opt: u32, ms: u32) void {
     _ = c.setsockopt(fd, level, opt, &tv, @sizeOf(std.c.timeval));
 }
 
-fn applySocketOpts(fd: i32, config: Config) void {
+pub fn applySocketOpts(fd: i32, config: Config) void {
     if (config.nodelay) setInt(fd, IPPROTO_TCP, TCP_NODELAY, 1);
     if (config.quickack) setInt(fd, IPPROTO_TCP, TCP_QUICKACK, 1);
     setInt(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.KEEPALIVE)), @as(c_int, @intFromBool(config.keepalive)));
@@ -135,13 +139,12 @@ pub fn send(stream: *Stream, io: std.Io, data: []const u8) std.Io.net.Stream.Wri
 /// Asserts that `buffer` is non-empty.
 pub fn receive(stream: *Stream, io: std.Io, buffer: []u8) (std.Io.net.Stream.Reader.Error || error{MessageTooLarge})!usize {
     assert(buffer.len > 0);
-    const fd = stream.socket.handle;
     var len_buf: [4]u8 = undefined;
 
     var offset: usize = 0;
     while (offset < 4) {
         var read_buf = [_][]u8{len_buf[offset..4]};
-        const n = try io.vtable.netRead(io.userdata, fd, &read_buf);
+        const n = try stream.read(io, &read_buf);
         if (n == 0) return error.ConnectionResetByPeer;
         offset += n;
     }
@@ -154,7 +157,7 @@ pub fn receive(stream: *Stream, io: std.Io, buffer: []u8) (std.Io.net.Stream.Rea
         while (remaining > 0) {
             const chunk = @min(remaining, @as(u32, @intCast(discard.len)));
             var read_buf = [_][]u8{discard[0..chunk]};
-            const n = try io.vtable.netRead(io.userdata, fd, &read_buf);
+            const n = try stream.read(io, &read_buf);
             if (n == 0) return error.ConnectionResetByPeer;
             remaining -= @as(u32, @intCast(n));
         }
@@ -164,7 +167,7 @@ pub fn receive(stream: *Stream, io: std.Io, buffer: []u8) (std.Io.net.Stream.Rea
     offset = 0;
     while (offset < msg_len) {
         var read_buf = [_][]u8{buffer[offset..msg_len]};
-        const n = try io.vtable.netRead(io.userdata, fd, &read_buf);
+        const n = try stream.read(io, &read_buf);
         if (n == 0) return error.ConnectionResetByPeer;
         offset += n;
     }
@@ -188,6 +191,8 @@ fn getPort(fd: i32) u16 {
         return mem.bigToNative(u16, sockname.port);
     return 0;
 }
+
+// ── Synchronous API tests ───────────────────────────────────────────────────
 
 test "listen: bind and close cleanly" {
     const io = std.Io.Threaded.global_single_threaded.io();
@@ -279,4 +284,190 @@ test "socket options apply on a real socket" {
     const io = std.Io.Threaded.global_single_threaded.io();
     var server = try listen(io, 0, .{});
     defer closeServer(&server, io);
+}
+
+// ── Async API tests (using raw AsyncIo + Future(T) directly) ────────────────
+
+test "async connect + accept + send + receive round-trip" {
+    var aio = try io_mod.AsyncIo.init_flags(32, 0);
+    defer aio.deinit();
+
+    const sys_io = std.Io.Threaded.global_single_threaded.io();
+    var server = try listen(sys_io, 0, .{});
+    defer closeServer(&server, sys_io);
+
+    const port = getPort(server.socket.handle);
+    const msg = "hello async tcp!";
+
+    // Create client socket
+    const client_socket_rc = linux.socket(linux.AF.INET, linux.SOCK.STREAM, 0);
+    try std.testing.expect(linux.errno(client_socket_rc) == .SUCCESS);
+    const client_fd: linux.fd_t = @intCast(client_socket_rc);
+    defer _ = linux.close(client_fd);
+
+    var client_ip_buf: [256]u8 = undefined;
+    const client_ip_str = try std.fmt.bufPrint(&client_ip_buf, "127.0.0.1:{d}", .{port});
+    const client_ip = try std.Io.net.IpAddress.parseLiteral(client_ip_str);
+    const client_addr = try net.socketAddrFromIp(client_ip);
+
+    // Accept setup
+    var client_sockaddr: posix.sockaddr.in = undefined;
+    var client_sockaddr_len: posix.socklen_t = @sizeOf(posix.sockaddr.in);
+    var accept_fut: io_mod.Future(linux.fd_t) = .{};
+    _ = try aio.accept(server.socket.handle, @ptrCast(&client_sockaddr), &client_sockaddr_len, &accept_fut.completion, 0);
+
+    // Connect setup
+    var connect_fut: io_mod.Future(void) = .{ .value = {} };
+    _ = try aio.connect(client_fd, client_addr.ptr(), client_addr.len(), &connect_fut.completion);
+
+    _ = try aio.submit();
+
+    const accepted_fd = try accept_fut.wait(&aio);
+    defer _ = linux.close(accepted_fd);
+
+    try connect_fut.wait(&aio);
+
+    // Send msg
+    var send_fut: io_mod.Future(usize) = .{};
+    _ = try aio.send(client_fd, msg, &send_fut.completion, 0);
+    const sent = try send_fut.wait(&aio);
+    try std.testing.expectEqual(msg.len, sent);
+
+    // Recv msg
+    var recv_buf: [64]u8 = undefined;
+    var recv_fut: io_mod.Future(usize) = .{};
+    _ = try aio.recv(accepted_fd, &recv_buf, &recv_fut.completion, 0);
+    const received = try recv_fut.wait(&aio);
+
+    try std.testing.expectEqual(msg.len, received);
+    try std.testing.expectEqualSlices(u8, msg, recv_buf[0..received]);
+}
+
+test "async empty message round-trip" {
+    var aio = try io_mod.AsyncIo.init_flags(32, 0);
+    defer aio.deinit();
+
+    const sys_io = std.Io.Threaded.global_single_threaded.io();
+    var server = try listen(sys_io, 0, .{});
+    defer closeServer(&server, sys_io);
+
+    const port = getPort(server.socket.handle);
+
+    // Create client socket
+    const client_socket_rc = linux.socket(linux.AF.INET, linux.SOCK.STREAM, 0);
+    try std.testing.expect(linux.errno(client_socket_rc) == .SUCCESS);
+    const client_fd: linux.fd_t = @intCast(client_socket_rc);
+    defer _ = linux.close(client_fd);
+
+    var client_ip_buf: [256]u8 = undefined;
+    const client_ip_str = try std.fmt.bufPrint(&client_ip_buf, "127.0.0.1:{d}", .{port});
+    const client_ip = try std.Io.net.IpAddress.parseLiteral(client_ip_str);
+    const client_addr = try net.socketAddrFromIp(client_ip);
+
+    // Accept setup
+    var client_sockaddr: posix.sockaddr.in = undefined;
+    var client_sockaddr_len: posix.socklen_t = @sizeOf(posix.sockaddr.in);
+    var accept_fut: io_mod.Future(linux.fd_t) = .{};
+    _ = try aio.accept(server.socket.handle, @ptrCast(&client_sockaddr), &client_sockaddr_len, &accept_fut.completion, 0);
+
+    // Connect setup
+    var connect_fut: io_mod.Future(void) = .{ .value = {} };
+    _ = try aio.connect(client_fd, client_addr.ptr(), client_addr.len(), &connect_fut.completion);
+
+    _ = try aio.submit();
+
+    const accepted_fd = try accept_fut.wait(&aio);
+    defer _ = linux.close(accepted_fd);
+
+    try connect_fut.wait(&aio);
+
+    // Send empty msg
+    var header: [4]u8 = std.mem.zeroes([4]u8);
+    var send_fut: io_mod.Future(usize) = .{};
+    _ = try aio.send(client_fd, &header, &send_fut.completion, 0);
+    const sent = try send_fut.wait(&aio);
+    try std.testing.expectEqual(@as(usize, 4), sent);
+
+    // Recv length header
+    var recv_buf: [4]u8 = undefined;
+    var recv_fut: io_mod.Future(usize) = .{};
+    _ = try aio.recv(accepted_fd, &recv_buf, &recv_fut.completion, 0);
+    const received = try recv_fut.wait(&aio);
+    try std.testing.expectEqual(@as(usize, 4), received);
+    try std.testing.expectEqual(@as(u32, 0), std.mem.readInt(u32, &recv_buf, .little));
+}
+
+test "async connect refused returns error" {
+    var aio = try io_mod.AsyncIo.init_flags(16, 0);
+    defer aio.deinit();
+
+    const client_socket_rc = linux.socket(linux.AF.INET, linux.SOCK.STREAM, 0);
+    const client_fd: linux.fd_t = @intCast(client_socket_rc);
+    defer _ = linux.close(client_fd);
+
+    const dest_ip = try std.Io.net.IpAddress.parseLiteral("127.0.0.1:1");
+    const dest_addr = try net.socketAddrFromIp(dest_ip);
+
+    var connect_fut: io_mod.Future(void) = .{ .value = {} };
+    _ = try aio.connect(client_fd, dest_addr.ptr(), dest_addr.len(), &connect_fut.completion);
+
+    _ = try aio.submit();
+    try std.testing.expectError(error.ConnectionRefused, connect_fut.wait(&aio));
+}
+
+test "async connect + accept with poll" {
+    var aio = try io_mod.AsyncIo.init_flags(32, 0);
+    defer aio.deinit();
+
+    const sys_io = std.Io.Threaded.global_single_threaded.io();
+    var server = try listen(sys_io, 0, .{});
+    defer closeServer(&server, sys_io);
+
+    const port = getPort(server.socket.handle);
+
+    // Create client socket
+    const client_socket_rc = linux.socket(linux.AF.INET, linux.SOCK.STREAM, 0);
+    const client_fd: linux.fd_t = @intCast(client_socket_rc);
+    defer _ = linux.close(client_fd);
+
+    var client_ip_buf: [256]u8 = undefined;
+    const client_ip_str = try std.fmt.bufPrint(&client_ip_buf, "127.0.0.1:{d}", .{port});
+    const client_ip = try std.Io.net.IpAddress.parseLiteral(client_ip_str);
+    const client_addr = try net.socketAddrFromIp(client_ip);
+
+    // Accept setup
+    var client_sockaddr: posix.sockaddr.in = undefined;
+    var client_sockaddr_len: posix.socklen_t = @sizeOf(posix.sockaddr.in);
+    var accept_fut: io_mod.Future(linux.fd_t) = .{};
+    _ = try aio.accept(server.socket.handle, @ptrCast(&client_sockaddr), &client_sockaddr_len, &accept_fut.completion, 0);
+
+    // Connect setup
+    var connect_fut: io_mod.Future(void) = .{ .value = {} };
+    _ = try aio.connect(client_fd, client_addr.ptr(), client_addr.len(), &connect_fut.completion);
+
+    _ = try aio.submit();
+
+    var accepted_fd: ?linux.fd_t = null;
+    var connected = false;
+
+    while (accepted_fd == null or !connected) {
+        _ = try aio.flush(1);
+        if (accepted_fd == null) {
+            if (accept_fut.poll()) |res| switch (res) {
+                .ok => |fd| accepted_fd = fd,
+                .err => |e| return e,
+            };
+        }
+        if (!connected) {
+            if (connect_fut.poll()) |res| switch (res) {
+                .ok => connected = true,
+                .err => |e| return e,
+            };
+        }
+    }
+
+    defer _ = linux.close(accepted_fd.?);
+
+    try std.testing.expect(accepted_fd.? > 0);
+    try std.testing.expect(connected);
 }

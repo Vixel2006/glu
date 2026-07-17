@@ -70,6 +70,38 @@ test "sockaddrToEndpoint produces correct string" {
     try std.testing.expectEqual(@as(u16, 8080), ep.port);
 }
 
+/// A posix sockaddr tagged union (IPv4 or IPv6), ready for io_uring operations.
+pub const SocketAddr = union(enum) {
+    ip4: posix.sockaddr.in,
+    ip6: posix.sockaddr.in6,
+
+    pub fn ptr(self: *const SocketAddr) *const posix.sockaddr {
+        return switch (self.*) {
+            .ip4 => @ptrCast(&self.ip4),
+            .ip6 => @ptrCast(&self.ip6),
+        };
+    }
+
+    pub fn len(self: SocketAddr) posix.socklen_t {
+        return switch (self) {
+            .ip4 => @sizeOf(posix.sockaddr.in),
+            .ip6 => @sizeOf(posix.sockaddr.in6),
+        };
+    }
+};
+
+/// Convert an `std.Io.net.IpAddress` to a `SocketAddr`.
+pub fn socketAddrFromIp(ip: std.Io.net.IpAddress) !SocketAddr {
+    return switch (ip) {
+        .ip4 => |ip4| .{ .ip4 = .{
+            .family = c.AF.INET,
+            .port = mem.nativeToBig(u16, ip4.port),
+            .addr = @bitCast(ip4.bytes),
+        } },
+        .ip6 => error.AddressFamilyUnsupported,
+    };
+}
+
 test "ipAddressToEndpoint from Ip4Address" {
     const addr = std.Io.net.Ip4Address{ .bytes = .{ 127, 0, 0, 1 }, .port = 8080 };
     const ep = ipAddressToEndpoint(.{ .ip4 = addr });

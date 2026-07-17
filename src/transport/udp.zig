@@ -1,9 +1,11 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const c = std.c;
+const linux = std.os.linux;
 const posix = std.posix;
 const mem = std.mem;
 const net = @import("net.zig");
+const io_mod = @import("../io.zig");
 
 pub const Socket = std.Io.net.Socket;
 
@@ -126,10 +128,13 @@ pub fn send(socket: *Socket, io: std.Io, data: []const u8) std.Io.net.Stream.Wri
 
 /// Receive a datagram on a connected UDP socket.
 /// Asserts that `buffer` is non-empty.
-pub fn receive(socket: *Socket, io: std.Io, buffer: []u8) std.Io.net.Stream.Reader.Error!usize {
+pub fn receive(socket: *Socket, io: std.Io, buffer: []u8) anyerror!usize {
     assert(buffer.len > 0);
     var read_buf = [_][]u8{buffer};
-    const n = try io.vtable.netRead(io.userdata, socket.handle, &read_buf);
+    const n = try (try io.operate(.{ .net_read = .{
+        .socket_handle = socket.handle,
+        .data = &read_buf,
+    } })).net_read;
     if (n == 0) return error.ConnectionResetByPeer;
     return n;
 }
@@ -312,4 +317,164 @@ test "socket options apply on a real socket" {
     const io = std.Io.Threaded.global_single_threaded.io();
     var s = try bind(io, 0, .{});
     defer close(&s, io);
+}
+
+test "async sendTo and receiveFrom exchange data" {
+    var aio = try io_mod.AsyncIo.init_flags(32, 0);
+    defer aio.deinit();
+
+    const sys_io = std.Io.Threaded.global_single_threaded.io();
+    var receiver = try bind(sys_io, 0, .{});
+    defer close(&receiver, sys_io);
+    const recv_port = getPort(receiver.handle);
+
+    var sender = try bind(sys_io, 0, .{});
+    defer close(&sender, sys_io);
+
+    const msg = "hello async udp!";
+
+    var receiver_addr_buf: [256]u8 = undefined;
+    const receiver_addr_str = try std.fmt.bufPrint(&receiver_addr_buf, "127.0.0.1:{d}", .{recv_port});
+    const receiver_ip = try std.Io.net.IpAddress.parseLiteral(receiver_addr_str);
+    const receiver_addr = try net.socketAddrFromIp(receiver_ip);
+
+    // SendTo setup
+    var send_fut: io_mod.Future(usize) = .{};
+    var send_iov = [1]posix.iovec_const{.{ .base = msg.ptr, .len = msg.len }};
+    var send_msg = linux.msghdr_const{
+        .name = receiver_addr.ptr(),
+        .namelen = receiver_addr.len(),
+        .iov = &send_iov,
+        .iovlen = 1,
+        .control = null,
+        .controllen = 0,
+        .flags = 0,
+    };
+    _ = try aio.sendmsg(sender.handle, &send_msg, &send_fut.completion, 0);
+    const sent = try send_fut.wait(&aio);
+    try std.testing.expectEqual(msg.len, sent);
+
+    // RecvFrom setup
+    var recv_fut: io_mod.Future(usize) = .{};
+    var recv_buf: [64]u8 = undefined;
+    var from_addr: posix.sockaddr.in = undefined;
+    var recv_iov = [1]posix.iovec{.{ .base = &recv_buf, .len = recv_buf.len }};
+    var recv_msg = linux.msghdr{
+        .name = @ptrCast(&from_addr),
+        .namelen = @sizeOf(posix.sockaddr.in),
+        .iov = &recv_iov,
+        .iovlen = 1,
+        .control = null,
+        .controllen = 0,
+        .flags = 0,
+    };
+    _ = try aio.recvmsg(receiver.handle, &recv_msg, &recv_fut.completion, 0);
+    const received = try recv_fut.wait(&aio);
+
+    try std.testing.expectEqual(msg.len, received);
+    try std.testing.expectEqualSlices(u8, msg, recv_buf[0..received]);
+}
+
+test "async connected send and receive" {
+    var aio = try io_mod.AsyncIo.init_flags(32, 0);
+    defer aio.deinit();
+
+    const sys_io = std.Io.Threaded.global_single_threaded.io();
+    var receiver = try bind(sys_io, 0, .{});
+    defer close(&receiver, sys_io);
+    const recv_port = getPort(receiver.handle);
+
+    var sender = try bind(sys_io, 0, .{});
+    defer close(&sender, sys_io);
+    const send_port = getPort(sender.handle);
+
+    connect(&sender, "127.0.0.1", recv_port);
+    connect(&receiver, "127.0.0.1", send_port);
+
+    const msg = "hello connected async!";
+
+    // Send setup
+    var send_fut: io_mod.Future(usize) = .{};
+    _ = try aio.send(sender.handle, msg, &send_fut.completion, 0);
+    const sent = try send_fut.wait(&aio);
+    try std.testing.expectEqual(msg.len, sent);
+
+    // Recv setup
+    var recv_buf: [64]u8 = undefined;
+    var recv_fut: io_mod.Future(usize) = .{};
+    _ = try aio.recv(receiver.handle, &recv_buf, &recv_fut.completion, 0);
+    const received = try recv_fut.wait(&aio);
+
+    try std.testing.expectEqual(msg.len, received);
+    try std.testing.expectEqualSlices(u8, msg, recv_buf[0..received]);
+}
+
+test "async sendTo and receiveFrom with poll" {
+    var aio = try io_mod.AsyncIo.init_flags(32, 0);
+    defer aio.deinit();
+
+    const sys_io = std.Io.Threaded.global_single_threaded.io();
+    var receiver = try bind(sys_io, 0, .{});
+    defer close(&receiver, sys_io);
+    const recv_port = getPort(receiver.handle);
+
+    var sender = try bind(sys_io, 0, .{});
+    defer close(&sender, sys_io);
+
+    const msg = "poll test!";
+
+    var receiver_addr_buf: [256]u8 = undefined;
+    const receiver_addr_str = try std.fmt.bufPrint(&receiver_addr_buf, "127.0.0.1:{d}", .{recv_port});
+    const receiver_ip = try std.Io.net.IpAddress.parseLiteral(receiver_addr_str);
+    const receiver_addr = try net.socketAddrFromIp(receiver_ip);
+
+    // SendTo setup
+    var send_fut: io_mod.Future(usize) = .{};
+    var send_iov = [1]posix.iovec_const{.{ .base = msg.ptr, .len = msg.len }};
+    var send_msg = linux.msghdr_const{
+        .name = receiver_addr.ptr(),
+        .namelen = receiver_addr.len(),
+        .iov = &send_iov,
+        .iovlen = 1,
+        .control = null,
+        .controllen = 0,
+        .flags = 0,
+    };
+    _ = try aio.sendmsg(sender.handle, &send_msg, &send_fut.completion, 0);
+    _ = try aio.submit();
+
+    // Wait for send via poll loop
+    while (true) {
+        _ = try aio.flush(1);
+        if (send_fut.poll()) |_| break;
+    }
+
+    // RecvFrom setup
+    var recv_fut: io_mod.Future(usize) = .{};
+    var recv_buf: [64]u8 = undefined;
+    var from_addr: posix.sockaddr.in = undefined;
+    var recv_iov = [1]posix.iovec{.{ .base = &recv_buf, .len = recv_buf.len }};
+    var recv_msg = linux.msghdr{
+        .name = @ptrCast(&from_addr),
+        .namelen = @sizeOf(posix.sockaddr.in),
+        .iov = &recv_iov,
+        .iovlen = 1,
+        .control = null,
+        .controllen = 0,
+        .flags = 0,
+    };
+    _ = try aio.recvmsg(receiver.handle, &recv_msg, &recv_fut.completion, 0);
+    _ = try aio.submit();
+
+    var received: ?usize = null;
+    while (received == null) {
+        _ = try aio.flush(1);
+        if (recv_fut.poll()) |res| switch (res) {
+            .ok => |n| received = n,
+            .err => |e| return e,
+        };
+    }
+
+    try std.testing.expectEqual(msg.len, received.?);
+    try std.testing.expectEqualSlices(u8, msg, recv_buf[0..received.?]);
 }

@@ -160,12 +160,12 @@ export fn glu_subscriber_receive(sub: *glu.Subscriber) ?*anyopaque {
 // ─────────────────────────────────────────────
 
 export fn glu_tcp_listen(port: u16, out: *?*glu.tcp.Server) c_int {
-    const io = std.Io.Threaded.global_single_threaded.io();
+    const io = glu.io();
     return allocWrap(glu.tcp.Server, glu.tcp.listen(io, port, .{}), out);
 }
 
 export fn glu_tcp_listener_deinit(listener: *glu.tcp.Server) void {
-    const io = std.Io.Threaded.global_single_threaded.io();
+    const io = glu.io();
     listener.deinit(io);
     alloc.destroy(listener);
 }
@@ -179,29 +179,29 @@ export fn glu_tcp_listener_port(listener: *const glu.tcp.Server) u16 {
 }
 
 export fn glu_tcp_accept(listener: *glu.tcp.Server, out: *?*glu.tcp.Stream) c_int {
-    const io = std.Io.Threaded.global_single_threaded.io();
+    const io = glu.io();
     return allocWrap(glu.tcp.Stream, glu.tcp.accept(listener, io, .{}), out);
 }
 
 export fn glu_tcp_connect(host: [*:0]const u8, port: u16, out: *?*glu.tcp.Stream) c_int {
-    const io = std.Io.Threaded.global_single_threaded.io();
+    const io = glu.io();
     return allocWrap(glu.tcp.Stream, glu.tcp.connect(io, std.mem.sliceTo(host, 0), port, .{}), out);
 }
 
 export fn glu_tcp_send(conn: *glu.tcp.Stream, data: [*]const u8, len: u32) c_int {
-    const io = std.Io.Threaded.global_single_threaded.io();
+    const io = glu.io();
     glu.tcp.send(conn, io, data[0..len]) catch |err| return mapErr(err);
     return GLU_OK;
 }
 
 export fn glu_tcp_receive(conn: *glu.tcp.Stream, buffer: [*]u8, len: u32) c_int {
-    const io = std.Io.Threaded.global_single_threaded.io();
+    const io = glu.io();
     const bytes = glu.tcp.receive(conn, io, buffer[0..len]) catch |err| return mapErr(err);
     return @intCast(bytes);
 }
 
 export fn glu_tcp_connection_deinit(conn: *glu.tcp.Stream) void {
-    const io = std.Io.Threaded.global_single_threaded.io();
+    const io = glu.io();
     conn.close(io);
     alloc.destroy(conn);
 }
@@ -209,7 +209,7 @@ export fn glu_tcp_connection_deinit(conn: *glu.tcp.Stream) void {
 // ── TCP extended API ──
 
 export fn glu_tcp_listen_with_config(port: u16, nodelay: bool, quickack: bool, keepalive: bool, keepalive_idle: u32, keepalive_interval: u32, keepalive_count: u32, recv_buf: i32, send_buf: i32, defer_accept: bool, connect_timeout_ms: u32, recv_timeout_ms: u32, send_timeout_ms: u32, out: *?*glu.tcp.Server) c_int {
-    const io = std.Io.Threaded.global_single_threaded.io();
+    const io = glu.io();
     return allocWrap(glu.tcp.Server, glu.tcp.listen(io, port, .{
         .nodelay = nodelay,
         .quickack = quickack,
@@ -227,7 +227,7 @@ export fn glu_tcp_listen_with_config(port: u16, nodelay: bool, quickack: bool, k
 }
 
 export fn glu_tcp_connect_with_config(host: [*:0]const u8, port: u16, connect_timeout_ms: u32, recv_timeout_ms: u32, send_timeout_ms: u32, out: *?*glu.tcp.Stream) c_int {
-    const io = std.Io.Threaded.global_single_threaded.io();
+    const io = glu.io();
     return allocWrap(glu.tcp.Stream, glu.tcp.connect(io, std.mem.sliceTo(host, 0), port, .{
         .connect_timeout_ms = connect_timeout_ms,
         .recv_timeout_ms = if (recv_timeout_ms > 0) @as(?u32, recv_timeout_ms) else null,
@@ -240,18 +240,18 @@ export fn glu_tcp_connect_with_config(host: [*:0]const u8, port: u16, connect_ti
 // ─────────────────────────────────────────────
 
 export fn glu_udp_bind(port: u16, out: *?*glu.udp.Socket) c_int {
-    const io = std.Io.Threaded.global_single_threaded.io();
+    const io = glu.io();
     return allocWrap(glu.udp.Socket, glu.udp.bind(io, port, .{}), out);
 }
 
 export fn glu_udp_deinit(sock: *glu.udp.Socket) void {
-    const io = std.Io.Threaded.global_single_threaded.io();
+    const io = glu.io();
     sock.close(io);
     alloc.destroy(sock);
 }
 
 export fn glu_udp_send_to(sock: *glu.udp.Socket, host: [*:0]const u8, port: u16, data: [*]const u8, len: u32) c_int {
-    const io = std.Io.Threaded.global_single_threaded.io();
+    const io = glu.io();
     const bytes = glu.udp.sendTo(sock, io, std.mem.sliceTo(host, 0), port, data[0..len]) catch |err| return mapErr(err);
     return @intCast(bytes);
 }
@@ -262,19 +262,19 @@ export fn glu_udp_socket_connect(sock: *glu.udp.Socket, host: [*:0]const u8, por
 }
 
 export fn glu_udp_send(sock: *glu.udp.Socket, data: [*]const u8, len: u32) c_int {
-    const io = std.Io.Threaded.global_single_threaded.io();
+    const io = glu.io();
     const bytes = glu.udp.send(sock, io, data[0..len]) catch |err| return mapErr(err);
     return @intCast(bytes);
 }
 
 export fn glu_udp_receive(sock: *glu.udp.Socket, buffer: [*]u8, len: u32) c_int {
-    const io = std.Io.Threaded.global_single_threaded.io();
+    const io = glu.io();
     const bytes = glu.udp.receive(sock, io, buffer[0..len]) catch |err| return mapErr(err);
     return @intCast(bytes);
 }
 
 export fn glu_udp_receive_from(sock: *glu.udp.Socket, buffer: [*]u8, len: u32, out_bytes: *u32, out_endpoint: *GluUdpEndpoint) c_int {
-    const io = std.Io.Threaded.global_single_threaded.io();
+    const io = glu.io();
     const result = glu.udp.receiveFrom(sock, io, buffer[0..len]) catch |err| return mapErr(err);
     out_bytes.* = @intCast(result.data.len);
     out_endpoint.* = GluUdpEndpoint{
@@ -288,7 +288,7 @@ export fn glu_udp_receive_from(sock: *glu.udp.Socket, buffer: [*]u8, len: u32, o
 // ── UDP extended API ──
 
 export fn glu_udp_bind_with_config(port: u16, recv_buf: i32, send_buf: i32, broadcast: bool, recv_timeout_ms: u32, send_timeout_ms: u32, out: *?*glu.udp.Socket) c_int {
-    const io = std.Io.Threaded.global_single_threaded.io();
+    const io = glu.io();
     return allocWrap(glu.udp.Socket, glu.udp.bind(io, port, .{
         .recv_buf = if (recv_buf >= 0) @as(?i32, recv_buf) else null,
         .send_buf = if (send_buf >= 0) @as(?i32, send_buf) else null,

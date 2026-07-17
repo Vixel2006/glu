@@ -1,0 +1,23 @@
+# glu launch configuration for the canonical temperature monitoring example
+#
+# Run with:   glu launch -f examples/canonical/launch.toml
+#
+# Nodes launch in order. The dashboard starts first so the TCP
+# server is ready when the processor connects.
+#
+# Topics:
+#   /temperature    — raw sensor readings     (TemperatureReading, 50 Hz)
+#   /sensor_status  — sensor health info      (SensorStatus,        1 Hz)
+#   /filtered_temp  — moving-average output   (FilteredTemperature,  50 Hz)
+
+[[node]]
+name = "temperature_dashboard"
+bin  = "zig-out/bin/glu-canonical-dashboard"
+
+[[node]]
+name = "temperature_processor"
+bin  = "zig-out/bin/glu-canonical-processor"
+
+[[node]]
+name = "temperature_sensor"
+bin  = "zig-out/bin/glu-canonical-sensor"
