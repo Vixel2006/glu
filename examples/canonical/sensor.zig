@@ -15,17 +15,14 @@ fn milliTimestamp() i64 {
         @divTrunc(@as(i64, @intCast(ts.nsec)), std.time.ns_per_ms);
 }
 
-fn sleepMs(ms: u64) void {
-    var ts = std.os.linux.timespec{
-        .sec = @intCast(ms / 1000),
-        .nsec = @intCast((ms % 1000) * std.time.ns_per_ms),
-    };
-    _ = std.os.linux.nanosleep(&ts, null);
-}
-
 pub fn main() void {
     const allocator = std.heap.page_allocator;
-    const io = std.Io.Threaded.global_single_threaded.io();
+
+    var rt = glu.Runtime.init(allocator, .{}) catch |e| {
+        std.debug.print("[sensor] Runtime init failed: {}\n", .{e});
+        return;
+    };
+    defer rt.deinit();
 
     var temp_pub = glu.Publisher.init(allocator, topic_temp, @sizeOf(msgs.TemperatureReading), capacity, .reliable) catch |e| {
         std.debug.print("[sensor] publisher init failed: {}\n", .{e});
@@ -42,25 +39,14 @@ pub fn main() void {
     glu.registry.register(node_name) catch {};
     defer glu.registry.unregister(node_name);
 
-    var udp_sock = glu.udp.bind(io, 0, .{}) catch |e| {
+    var udp_sock = glu.udp.bind(0, .{}) catch |e| {
         std.debug.print("[sensor] UDP bind failed: {}\n", .{e});
         return;
     };
-    defer glu.udp.close(&udp_sock, io);
-
-    // Initialize the high-performance AsyncIo engine for networking
-    var aio = glu.io_mod.AsyncIo.init(16) catch |e| {
-        std.debug.print("[sensor] AsyncIo init failed: {}\n", .{e});
-        return;
-    };
-    defer aio.deinit();
-
-    // Prepare destination endpoint for status heartbeat
-    const dest_ip = std.Io.net.IpAddress.parseLiteral("127.0.0.1:9997") catch unreachable;
-    const dest_addr = glu.net.socketAddrFromIp(dest_ip) catch unreachable;
+    defer glu.udp.close(&udp_sock);
 
     std.debug.print(
-        "[sensor] temperature sensor node (async I/O status)\n" ++
+        "[sensor] temperature sensor node (zio)\n" ++
         "[sensor]   {s} @ {d} Hz  (zero-copy)\n" ++
         "[sensor]   {s} @  1 Hz  (publish)\n" ++
         "[sensor]   Ctrl-C to stop\n",
@@ -111,21 +97,7 @@ pub fn main() void {
             status_pub.publish(@ptrCast(&status));
             seq_status += 1;
 
-            // Send heartbeat asynchronously with zero wrappers
-            const heartbeat = "sensor_alive";
-            var send_fut: glu.io_mod.Future(usize) = .{};
-            var send_iov = [1]std.posix.iovec_const{ .{ .base = heartbeat.ptr, .len = heartbeat.len } };
-            var send_msg = std.os.linux.msghdr_const{
-                .name = dest_addr.ptr(),
-                .namelen = dest_addr.len(),
-                .iov = &send_iov,
-                .iovlen = 1,
-                .control = null,
-                .controllen = 0,
-                .flags = 0,
-            };
-            _ = aio.sendmsg(udp_sock.handle, &send_msg, &send_fut.completion, 0) catch {};
-            _ = send_fut.wait(&aio) catch {};
+            _ = glu.udp.sendTo(&udp_sock, "127.0.0.1", 9997, "sensor_alive") catch {};
         }
 
         if (seq_temp > 0 and seq_temp % (rate_hz * 5) == 0) {
@@ -135,6 +107,6 @@ pub fn main() void {
             );
         }
 
-        sleepMs(interval_ms);
+        rt.sleep(glu.Duration.fromMilliseconds(interval_ms)) catch {};
     }
 }

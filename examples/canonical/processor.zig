@@ -17,16 +17,14 @@ fn milliTimestamp() i64 {
         @divTrunc(@as(i64, @intCast(ts.nsec)), std.time.ns_per_ms);
 }
 
-fn sleepMs(ms: u64) void {
-    var ts = std.os.linux.timespec{
-        .sec = @intCast(ms / 1000),
-        .nsec = @intCast((ms % 1000) * std.time.ns_per_ms),
-    };
-    _ = std.os.linux.nanosleep(&ts, null);
-}
-
 pub fn main() void {
     const allocator = std.heap.page_allocator;
+
+    var rt = glu.Runtime.init(allocator, .{}) catch |e| {
+        std.debug.print("[processor] Runtime init failed: {}\n", .{e});
+        return;
+    };
+    defer rt.deinit();
 
     var raw_sub = glu.Subscriber.init(allocator, topic_raw, @sizeOf(msgs.TemperatureReading), capacity) catch |e| {
         std.debug.print("[processor] subscriber init failed: {}\n", .{e});
@@ -43,15 +41,8 @@ pub fn main() void {
     glu.registry.register(node_name) catch {};
     defer glu.registry.unregister(node_name);
 
-    // Initialize AsyncIo for high-performance networking alerts
-    var aio = glu.io_mod.AsyncIo.init(16) catch |e| {
-        std.debug.print("[processor] AsyncIo init failed: {}\n", .{e});
-        return;
-    };
-    defer aio.deinit();
-
     std.debug.print(
-        "[processor] temperature filter node (async alerts)\n" ++
+        "[processor] temperature filter node (zio alerts)\n" ++
         "[processor]   {s} → (moving avg {d}) → {s}\n" ++
         "[processor]   Ctrl-C to stop\n",
         .{ topic_raw, window_size, topic_filtered },
@@ -98,7 +89,7 @@ pub fn main() void {
                     "\x1b[31m[processor] ALERT  {d:.1}°C exceeds {d:.0}°C threshold\x1b[0m\n",
                     .{ msg.temperature, alert_threshold },
                 );
-                send_tcp_alert(&aio, msg.temperature, msg.seq);
+                send_tcp_alert(msg.temperature, msg.seq);
                 alert_cooldown = rate_hz * 10;
             }
 
@@ -112,30 +103,15 @@ pub fn main() void {
 
         if (alert_cooldown > 0) alert_cooldown -= 1;
 
-        sleepMs(1000 / rate_hz);
+        rt.sleep(glu.Duration.fromMilliseconds(1000 / rate_hz)) catch {};
     }
 }
 
-fn send_tcp_alert(aio: *glu.io_mod.AsyncIo, temp: f32, seq: u32) void {
+fn send_tcp_alert(temp: f32, seq_in: u32) void {
     var buf: [128]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "ALERT seq={d} temp={d:.1}°C\n", .{ seq, temp }) catch return;
+    const msg = std.fmt.bufPrint(&buf, "ALERT seq={d} temp={d:.1}°C\n", .{ seq_in, temp }) catch return;
 
-    // Create client socket descriptor manually
-    const socket_rc = std.os.linux.socket(std.os.linux.AF.INET, std.os.linux.SOCK.STREAM, 0);
-    if (std.os.linux.errno(socket_rc) != .SUCCESS) return;
-    const fd: std.os.linux.fd_t = @intCast(socket_rc);
-    defer _ = std.os.linux.close(fd);
-
-    const dest_ip = std.Io.net.IpAddress.parseLiteral("127.0.0.1:9998") catch return;
-    const dest_addr = glu.net.socketAddrFromIp(dest_ip) catch return;
-
-    // Async TCP Connect
-    var connect_fut: glu.io_mod.Future(void) = .{ .value = {} };
-    _ = aio.connect(fd, dest_addr.ptr(), dest_addr.len(), &connect_fut.completion) catch return;
-    _ = connect_fut.wait(aio) catch return;
-
-    // Async TCP Send
-    var send_fut: glu.io_mod.Future(usize) = .{};
-    _ = aio.send(fd, msg, &send_fut.completion, 0) catch return;
-    _ = send_fut.wait(aio) catch return;
+    var stream = glu.tcp.connect("127.0.0.1", 9998, .{}) catch return;
+    defer glu.tcp.close(&stream);
+    glu.tcp.send(&stream, msg) catch {};
 }

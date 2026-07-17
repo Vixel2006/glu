@@ -17,16 +17,12 @@ fn milliTimestamp() i64 {
         @divTrunc(@as(i64, @intCast(ts.nsec)), std.time.ns_per_ms);
 }
 
-fn sleepMs(ms: u64) void {
-    var ts = std.os.linux.timespec{
-        .sec = @intCast(ms / 1000),
-        .nsec = @intCast((ms % 1000) * std.time.ns_per_ms),
-    };
-    _ = std.os.linux.nanosleep(&ts, null);
-}
-
 fn runDisplay(allocator: std.mem.Allocator) void {
-    const io = std.Io.Threaded.global_single_threaded.io();
+    var rt = glu.Runtime.init(allocator, .{}) catch |e| {
+        std.debug.print("[dashboard/tx] Runtime init failed: {}\n", .{e});
+        return;
+    };
+    defer rt.deinit();
 
     var filtered_sub = glu.Subscriber.init(allocator, topic_filtered, @sizeOf(msgs.FilteredTemperature), capacity) catch |e| {
         std.debug.print("[dashboard/tx] subscriber init failed: {}\n", .{e});
@@ -40,24 +36,14 @@ fn runDisplay(allocator: std.mem.Allocator) void {
     };
     defer status_sub.deinit();
 
-    var udp_sock = glu.udp.bind(io, 0, .{}) catch |e| {
+    var udp_sock = glu.udp.bind(0, .{}) catch |e| {
         std.debug.print("[dashboard/tx] UDP bind failed: {}\n", .{e});
         return;
     };
-    defer glu.udp.close(&udp_sock, io);
-
-    // Initialize AsyncIo for display heartbeat sending
-    var aio = glu.io_mod.AsyncIo.init(16) catch |e| {
-        std.debug.print("[dashboard/tx] AsyncIo init failed: {}\n", .{e});
-        return;
-    };
-    defer aio.deinit();
-
-    const dest_ip = std.Io.net.IpAddress.parseLiteral("127.0.0.1:9997") catch unreachable;
-    const dest_addr = glu.net.socketAddrFromIp(dest_ip) catch unreachable;
+    defer glu.udp.close(&udp_sock);
 
     std.debug.print(
-        "[dashboard/tx] display + registry monitor (async UDP)\n" ++
+        "[dashboard/tx] display + registry monitor (zio)\n" ++
         "[dashboard/tx]   Ctrl-C to stop\n",
         .{},
     );
@@ -100,30 +86,21 @@ fn runDisplay(allocator: std.mem.Allocator) void {
                 allocator.free(entries);
             } else |_| {}
 
-            // Send heartbeat asynchronously
-            const heartbeat = "dashboard_alive";
-            var send_fut: glu.io_mod.Future(usize) = .{};
-            var send_iov = [1]std.posix.iovec_const{ .{ .base = heartbeat.ptr, .len = heartbeat.len } };
-            var send_msg = std.os.linux.msghdr_const{
-                .name = dest_addr.ptr(),
-                .namelen = dest_addr.len(),
-                .iov = &send_iov,
-                .iovlen = 1,
-                .control = null,
-                .controllen = 0,
-                .flags = 0,
-            };
-            _ = aio.sendmsg(udp_sock.handle, &send_msg, &send_fut.completion, 0) catch {};
-            _ = send_fut.wait(&aio) catch {};
+            _ = glu.udp.sendTo(&udp_sock, "127.0.0.1", 9997, "dashboard_alive") catch {};
         }
 
-        sleepMs(1000 / tick_rate_hz);
+        rt.sleep(glu.Duration.fromMilliseconds(1000 / tick_rate_hz)) catch {};
     }
 }
 
 fn runTcpServer() void {
-    const io = std.Io.Threaded.global_single_threaded.io();
     const allocator = std.heap.page_allocator;
+
+    var rt = glu.Runtime.init(allocator, .{}) catch |e| {
+        std.debug.print("[dashboard/tcp] Runtime init failed: {}\n", .{e});
+        return;
+    };
+    defer rt.deinit();
 
     var sub = glu.Subscriber.init(allocator, topic_filtered, @sizeOf(msgs.FilteredTemperature), capacity) catch |e| {
         std.debug.print("[dashboard/tcp] subscriber init failed: {}\n", .{e});
@@ -131,46 +108,24 @@ fn runTcpServer() void {
     };
     defer sub.deinit();
 
-    var server = glu.tcp.listen(io, tcp_port, .{}) catch |e| {
+    var server = glu.tcp.listen(tcp_port, .{}) catch |e| {
         std.debug.print("[dashboard/tcp] listen on {d} failed: {}\n", .{ tcp_port, e });
         return;
     };
-    defer glu.tcp.closeServer(&server, io);
-
-    // Initialize AsyncIo for async connections and data streaming
-    var aio = glu.io_mod.AsyncIo.init(32) catch |e| {
-        std.debug.print("[dashboard/tcp] AsyncIo init failed: {}\n", .{e});
-        return;
-    };
-    defer aio.deinit();
+    defer glu.tcp.closeServer(&server);
 
     std.debug.print(
-        "[dashboard/tcp] listening on :{d} (async accept + stream)\n",
+        "[dashboard/tcp] listening on :{d} (zio)\n",
         .{tcp_port},
     );
 
     while (true) {
-        // Accept incoming client connection asynchronously
-        var client_sockaddr: std.posix.sockaddr.in = undefined;
-        var client_sockaddr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.in);
-        var accept_fut: glu.io_mod.Future(std.os.linux.fd_t) = .{};
-
-        _ = aio.accept(server.socket.handle, @ptrCast(&client_sockaddr), &client_sockaddr_len, &accept_fut.completion, 0) catch |e| {
-            std.debug.print("[dashboard/tcp] accept queue error: {}\n", .{e});
-            sleepMs(100);
+        var stream = glu.tcp.accept(&server, .{}) catch |e| {
+            std.debug.print("[dashboard/tcp] accept error: {}\n", .{e});
+            rt.sleep(glu.Duration.fromMilliseconds(100)) catch {};
             continue;
         };
-
-        _ = aio.submit() catch {};
-        const client_fd = accept_fut.wait(&aio) catch |e| {
-            std.debug.print("[dashboard/tcp] accept wait error: {}\n", .{e});
-            sleepMs(100);
-            continue;
-        };
-        defer _ = std.os.linux.close(client_fd);
-
-        // Apply TCP socket options manually
-        glu.tcp.applySocketOpts(client_fd, .{});
+        defer glu.tcp.close(&stream);
 
         std.debug.print("[dashboard/tcp] client connected\n", .{});
 
@@ -183,18 +138,10 @@ fn runTcpServer() void {
 
             if (latest) |data| {
                 const bytes = std.mem.asBytes(&data);
-                
-                // Stream data to client asynchronously
-                var send_fut: glu.io_mod.Future(usize) = .{};
-                _ = aio.send(client_fd, bytes, &send_fut.completion, 0) catch {
-                    break;
-                };
-                _ = send_fut.wait(&aio) catch {
-                    break;
-                };
+                glu.tcp.send(&stream, bytes) catch break;
             }
 
-            sleepMs(1000 / tick_rate_hz);
+            rt.sleep(glu.Duration.fromMilliseconds(1000 / tick_rate_hz)) catch {};
         }
     }
 }

@@ -48,111 +48,150 @@ fn mapErr(err: anyerror) c_int {
         error.ConnectionResetByPeer => GLU_ERR_CONN_RESET,
         error.HostUnreachable => GLU_ERR_CONNECT,
         error.NetworkUnreachable => GLU_ERR_SEND,
-        error.NetworkDown => GLU_ERR_SOCKET,
-        error.OptionUnsupported => GLU_ERR_SETSOCKOPT,
-        error.ProcessFdQuotaExceeded => GLU_ERR_SOCKET,
-        error.SystemFdQuotaExceeded => GLU_ERR_SOCKET,
-        error.ProtocolUnsupportedBySystem => GLU_ERR_SOCKET,
-        error.ProtocolUnsupportedByAddressFamily => GLU_ERR_SOCKET,
-        error.SocketModeUnsupported => GLU_ERR_SOCKET,
-        error.WouldBlock => GLU_ERR_WOULD_BLOCK,
-        error.SystemResources => GLU_ERR_SOCKET,
+        error.AlreadyConnected => GLU_ERR_CONNECT,
+        error.AlreadyInProgress => GLU_ERR_CONNECT,
         error.SocketUnconnected => GLU_ERR_NOT_CONNECTED,
-        error.MessageOversize => GLU_ERR_SEND,
+        error.DestinationAddressRequired => GLU_ERR_NOT_CONNECTED,
         error.MessageTooLarge => GLU_ERR_MESSAGE_TOO_LARGE,
-        error.PortUnreachable => GLU_ERR_SEND,
-        error.Timeout => GLU_ERR_CONNECT,
-        error.Canceled => GLU_ERR_INTERRUPTED,
+        error.BadAddress => GLU_ERR_SOCKET,
+        error.AddressNotAvailable => GLU_ERR_BIND,
+        error.ProcessFdQuotaExceeded => GLU_ERR_NO_SPACE,
+        error.SystemFdQuotaExceeded => GLU_ERR_NO_SPACE,
+        error.SystemResources => GLU_ERR_NO_SPACE,
+        error.OperationNotSupported => GLU_ERR_SOCKET,
+        error.BadFileDescriptor => GLU_ERR_SOCKET,
+        error.Interrupted => GLU_ERR_INTERRUPTED,
+        error.WouldBlock => GLU_ERR_WOULD_BLOCK,
+        error.ConnectionAborted => GLU_ERR_CONN_RESET,
+        error.ConnectionTimedOut => GLU_ERR_CONNECT,
+        error.PermissionDenied => GLU_ERR_SOCKET,
+        error.BrokenPipe => GLU_ERR_SEND,
         error.Unexpected => GLU_ERR_SOCKET,
-        else => GLU_ERR_OUT_OF_MEM,
+        else => |e| {
+            std.debug.print("[glu] unhandled error: {}\n", .{e});
+            return GLU_ERR_SOCKET;
+        },
     };
 }
 
-fn allocWrap(comptime T: type, val: anytype, out: *?*T) c_int {
+fn allocWrap(comptime T: type, result: !T, out: *?*T) c_int {
+    const val = result catch |err| return mapErr(err);
     const ptr = alloc.create(T) catch return GLU_ERR_OUT_OF_MEM;
-    ptr.* = val catch |err| {
-        alloc.destroy(ptr);
-        return mapErr(err);
-    };
+    ptr.* = val;
     out.* = ptr;
     return GLU_OK;
 }
 
-fn destroy(ptr: anytype) void {
-    ptr.deinit();
-    alloc.destroy(ptr);
-}
-
 // ─────────────────────────────────────────────
-//  Channel
+//  Shared-memory Channel
 // ─────────────────────────────────────────────
 
-export fn glu_channel_open(name: [*:0]const u8, msg_size: u32, capacity: u32, tos: u32, out: *?*glu.Channel) c_int {
-    return allocWrap(glu.Channel, glu.Channel.open(alloc, std.mem.sliceTo(name, 0), msg_size, capacity, @as(glu.ToS, @enumFromInt(tos))), out);
+export fn glu_channel_create(path: [*:0]const u8, size: u32, tos: u8) c_int {
+    return glu.Channel.create(std.mem.sliceTo(path, 0), size, @enumFromInt(tos)) catch |err| mapErr(err);
 }
 
-export fn glu_channel_close(chan: *glu.Channel) void {
-    destroy(chan);
+export fn glu_channel_open(path: [*:0]const u8, out: *?*glu.Channel) c_int {
+    return allocWrap(glu.Channel, glu.Channel.open(std.mem.sliceTo(path, 0)), out);
 }
 
-export fn glu_channel_write(chan: *glu.Channel, msg: *const anyopaque) void {
-    glu.write(chan, msg);
+export fn glu_channel_close(ch: *glu.Channel) void {
+    ch.close();
 }
 
-export fn glu_channel_read(chan: *glu.Channel, sub_id: u32) *anyopaque {
-    return glu.read(chan, sub_id);
+export fn glu_channel_reserve(ch: *glu.Channel, out: *?*anyopaque) c_int {
+    const ptr = ch.reserve() orelse return GLU_ERR_NO_SPACE;
+    out.* = @ptrCast(ptr);
+    return GLU_OK;
 }
 
-export fn glu_channel_msg_size(chan: *const glu.Channel) u32 {
-    return chan.header.msg_size;
+export fn glu_channel_commit(ch: *glu.Channel) void {
+    ch.commit();
 }
 
-export fn glu_channel_capacity(chan: *const glu.Channel) u32 {
-    return chan.header.capacity;
+export fn glu_channel_write(ch: *glu.Channel, data: *const anyopaque, len: u32) c_int {
+    ch.write(@ptrCast(@alignCast(data))[0..len]) catch |err| return mapErr(err);
+    return GLU_OK;
 }
 
-export fn glu_channel_write_cursor(chan: *const glu.Channel) u32 {
-    return chan.header.write;
+export fn glu_channel_read(ch: *glu.Channel, out: *?*const anyopaque) c_int {
+    const ptr = ch.read() orelse return GLU_ERR_NO_SPACE;
+    out.* = @ptrCast(ptr);
+    return GLU_OK;
+}
+
+export fn glu_channel_release(ch: *glu.Channel) void {
+    ch.release();
 }
 
 // ─────────────────────────────────────────────
 //  Publisher
 // ─────────────────────────────────────────────
 
-export fn glu_publisher_init(name: [*:0]const u8, msg_size: u32, capacity: u32, tos: u32, out: *?*glu.Publisher) c_int {
-    return allocWrap(glu.Publisher, glu.Publisher.init(alloc, std.mem.sliceTo(name, 0), msg_size, capacity, @as(glu.ToS, @enumFromInt(tos))), out);
+export fn glu_publisher_init(allocator: std.mem.Allocator, topic: [*:0]const u8, msg_size: u32, capacity: u32, tos: u8, out: *?*glu.Publisher) c_int {
+    return allocWrap(glu.Publisher, glu.Publisher.init(allocator, std.mem.sliceTo(topic, 0), msg_size, capacity, @enumFromInt(tos)), out);
 }
 
-export fn glu_publisher_deinit(p: *glu.Publisher) void {
-    destroy(p);
+export fn glu_publisher_deinit(pub: *glu.Publisher) void {
+    pub.deinit();
 }
 
-export fn glu_publisher_reserve(p: *glu.Publisher) *anyopaque {
-    return p.reserve();
+export fn glu_publisher_reserve(pub: *glu.Publisher, out: *?*anyopaque) c_int {
+    const ptr = pub.reserve() orelse return GLU_ERR_NO_SPACE;
+    out.* = @ptrCast(ptr);
+    return GLU_OK;
 }
 
-export fn glu_publisher_commit(p: *glu.Publisher) void {
-    p.commit();
+export fn glu_publisher_commit(pub: *glu.Publisher) void {
+    pub.commit();
 }
 
-export fn glu_publisher_publish(p: *glu.Publisher, msg: *const anyopaque) void {
-    p.publish(msg);
+export fn glu_publisher_publish(pub: *glu.Publisher, data: *const anyopaque) void {
+    pub.publish(@ptrCast(@alignCast(data)));
 }
 
 // ─────────────────────────────────────────────
 //  Subscriber
 // ─────────────────────────────────────────────
 
-export fn glu_subscriber_init(name: [*:0]const u8, msg_size: u32, capacity: u32, out: *?*glu.Subscriber) c_int {
-    return allocWrap(glu.Subscriber, glu.Subscriber.init(alloc, std.mem.sliceTo(name, 0), msg_size, capacity), out);
+export fn glu_subscriber_init(allocator: std.mem.Allocator, topic: [*:0]const u8, msg_size: u32, capacity: u32, out: *?*glu.Subscriber) c_int {
+    return allocWrap(glu.Subscriber, glu.Subscriber.init(allocator, std.mem.sliceTo(topic, 0), msg_size, capacity), out);
 }
 
 export fn glu_subscriber_deinit(sub: *glu.Subscriber) void {
-    destroy(sub);
+    sub.deinit();
 }
 
-export fn glu_subscriber_receive(sub: *glu.Subscriber) ?*anyopaque {
-    return sub.receive();
+export fn glu_subscriber_receive(sub: *glu.Subscriber, out: *?*const anyopaque) c_int {
+    const ptr = sub.receive() orelse return GLU_ERR_NO_SPACE;
+    out.* = @ptrCast(ptr);
+    return GLU_OK;
+}
+
+// ─────────────────────────────────────────────
+//  Registry
+// ─────────────────────────────────────────────
+
+export fn glu_registry_register(name: [*:0]const u8) c_int {
+    glu.registry.register(std.mem.sliceTo(name, 0)) catch |err| return mapErr(err);
+    return GLU_OK;
+}
+
+export fn glu_registry_unregister(name: [*:0]const u8) void {
+    glu.registry.unregister(std.mem.sliceTo(name, 0));
+}
+
+export fn glu_registry_list_alive(allocator: std.mem.Allocator, out: *?*glu.registry.Entry, out_len: *usize) c_int {
+    const entries = glu.registry.listAlive(allocator) catch |err| return mapErr(err);
+    const slice = alloc.alloc(glu.registry.Entry, entries.len) catch return GLU_ERR_OUT_OF_MEM;
+    @memcpy(slice, entries);
+    allocator.free(entries);
+    out.* = slice.ptr;
+    out_len.* = slice.len;
+    return GLU_OK;
+}
+
+export fn glu_registry_entry_deinit(allocator: std.mem.Allocator, entry: *glu.registry.Entry) void {
+    allocator.free(entry.name);
 }
 
 // ─────────────────────────────────────────────
@@ -160,13 +199,11 @@ export fn glu_subscriber_receive(sub: *glu.Subscriber) ?*anyopaque {
 // ─────────────────────────────────────────────
 
 export fn glu_tcp_listen(port: u16, out: *?*glu.tcp.Server) c_int {
-    const io = glu.io();
-    return allocWrap(glu.tcp.Server, glu.tcp.listen(io, port, .{}), out);
+    return allocWrap(glu.tcp.Server, glu.tcp.listen(port, .{}), out);
 }
 
 export fn glu_tcp_listener_deinit(listener: *glu.tcp.Server) void {
-    const io = glu.io();
-    listener.deinit(io);
+    glu.tcp.closeServer(listener);
     alloc.destroy(listener);
 }
 
@@ -179,38 +216,31 @@ export fn glu_tcp_listener_port(listener: *const glu.tcp.Server) u16 {
 }
 
 export fn glu_tcp_accept(listener: *glu.tcp.Server, out: *?*glu.tcp.Stream) c_int {
-    const io = glu.io();
-    return allocWrap(glu.tcp.Stream, glu.tcp.accept(listener, io, .{}), out);
+    return allocWrap(glu.tcp.Stream, glu.tcp.accept(listener, .{}), out);
 }
 
 export fn glu_tcp_connect(host: [*:0]const u8, port: u16, out: *?*glu.tcp.Stream) c_int {
-    const io = glu.io();
-    return allocWrap(glu.tcp.Stream, glu.tcp.connect(io, std.mem.sliceTo(host, 0), port, .{}), out);
+    return allocWrap(glu.tcp.Stream, glu.tcp.connect(std.mem.sliceTo(host, 0), port, .{}), out);
 }
 
-export fn glu_tcp_send(conn: *glu.tcp.Stream, data: [*]const u8, len: u32) c_int {
-    const io = glu.io();
-    glu.tcp.send(conn, io, data[0..len]) catch |err| return mapErr(err);
+export fn glu_tcp_send(stream: *glu.tcp.Stream, data: [*]const u8, len: u32) c_int {
+    glu.tcp.send(stream, data[0..len]) catch |err| return mapErr(err);
     return GLU_OK;
 }
 
-export fn glu_tcp_receive(conn: *glu.tcp.Stream, buffer: [*]u8, len: u32) c_int {
-    const io = glu.io();
-    const bytes = glu.tcp.receive(conn, io, buffer[0..len]) catch |err| return mapErr(err);
-    return @intCast(bytes);
+export fn glu_tcp_receive(stream: *glu.tcp.Stream, buffer: [*]u8, len: u32, out_bytes: *u32) c_int {
+    const bytes = glu.tcp.receive(stream, buffer[0..len]) catch |err| return mapErr(err);
+    out_bytes.* = @intCast(bytes);
+    return GLU_OK;
 }
 
-export fn glu_tcp_connection_deinit(conn: *glu.tcp.Stream) void {
-    const io = glu.io();
-    conn.close(io);
-    alloc.destroy(conn);
+export fn glu_tcp_close(stream: *glu.tcp.Stream) void {
+    glu.tcp.close(stream);
+    alloc.destroy(stream);
 }
-
-// ── TCP extended API ──
 
 export fn glu_tcp_listen_with_config(port: u16, nodelay: bool, quickack: bool, keepalive: bool, keepalive_idle: u32, keepalive_interval: u32, keepalive_count: u32, recv_buf: i32, send_buf: i32, defer_accept: bool, connect_timeout_ms: u32, recv_timeout_ms: u32, send_timeout_ms: u32, out: *?*glu.tcp.Server) c_int {
-    const io = glu.io();
-    return allocWrap(glu.tcp.Server, glu.tcp.listen(io, port, .{
+    return allocWrap(glu.tcp.Server, glu.tcp.listen(port, .{
         .nodelay = nodelay,
         .quickack = quickack,
         .keepalive = keepalive,
@@ -226,12 +256,9 @@ export fn glu_tcp_listen_with_config(port: u16, nodelay: bool, quickack: bool, k
     }), out);
 }
 
-export fn glu_tcp_connect_with_config(host: [*:0]const u8, port: u16, connect_timeout_ms: u32, recv_timeout_ms: u32, send_timeout_ms: u32, out: *?*glu.tcp.Stream) c_int {
-    const io = glu.io();
-    return allocWrap(glu.tcp.Stream, glu.tcp.connect(io, std.mem.sliceTo(host, 0), port, .{
+export fn glu_tcp_connect_with_timeout(host: [*:0]const u8, port: u16, connect_timeout_ms: u32, out: *?*glu.tcp.Stream) c_int {
+    return allocWrap(glu.tcp.Stream, glu.tcp.connect(std.mem.sliceTo(host, 0), port, .{
         .connect_timeout_ms = connect_timeout_ms,
-        .recv_timeout_ms = if (recv_timeout_ms > 0) @as(?u32, recv_timeout_ms) else null,
-        .send_timeout_ms = if (send_timeout_ms > 0) @as(?u32, send_timeout_ms) else null,
     }), out);
 }
 
@@ -240,42 +267,37 @@ export fn glu_tcp_connect_with_config(host: [*:0]const u8, port: u16, connect_ti
 // ─────────────────────────────────────────────
 
 export fn glu_udp_bind(port: u16, out: *?*glu.udp.Socket) c_int {
-    const io = glu.io();
-    return allocWrap(glu.udp.Socket, glu.udp.bind(io, port, .{}), out);
+    return allocWrap(glu.udp.Socket, glu.udp.bind(port, .{}), out);
 }
 
-export fn glu_udp_deinit(sock: *glu.udp.Socket) void {
-    const io = glu.io();
-    sock.close(io);
+export fn glu_udp_close(sock: *glu.udp.Socket) void {
+    glu.udp.close(sock);
     alloc.destroy(sock);
 }
 
 export fn glu_udp_send_to(sock: *glu.udp.Socket, host: [*:0]const u8, port: u16, data: [*]const u8, len: u32) c_int {
-    const io = glu.io();
-    const bytes = glu.udp.sendTo(sock, io, std.mem.sliceTo(host, 0), port, data[0..len]) catch |err| return mapErr(err);
-    return @intCast(bytes);
-}
-
-export fn glu_udp_socket_connect(sock: *glu.udp.Socket, host: [*:0]const u8, port: u16) c_int {
-    glu.udp.connect(sock, std.mem.sliceTo(host, 0), port);
+    const n = glu.udp.sendTo(sock, std.mem.sliceTo(host, 0), port, data[0..len]) catch |err| return mapErr(err);
+    _ = n;
     return GLU_OK;
 }
 
+export fn glu_udp_connect(sock: *glu.udp.Socket, host: [*:0]const u8, port: u16) void {
+    glu.udp.connect(sock, std.mem.sliceTo(host, 0), port);
+}
+
 export fn glu_udp_send(sock: *glu.udp.Socket, data: [*]const u8, len: u32) c_int {
-    const io = glu.io();
-    const bytes = glu.udp.send(sock, io, data[0..len]) catch |err| return mapErr(err);
-    return @intCast(bytes);
+    const n = glu.udp.send(sock, data[0..len]) catch |err| return mapErr(err);
+    _ = n;
+    return GLU_OK;
 }
 
 export fn glu_udp_receive(sock: *glu.udp.Socket, buffer: [*]u8, len: u32) c_int {
-    const io = glu.io();
-    const bytes = glu.udp.receive(sock, io, buffer[0..len]) catch |err| return mapErr(err);
+    const bytes = glu.udp.receive(sock, buffer[0..len]) catch |err| return mapErr(err);
     return @intCast(bytes);
 }
 
 export fn glu_udp_receive_from(sock: *glu.udp.Socket, buffer: [*]u8, len: u32, out_bytes: *u32, out_endpoint: *GluUdpEndpoint) c_int {
-    const io = glu.io();
-    const result = glu.udp.receiveFrom(sock, io, buffer[0..len]) catch |err| return mapErr(err);
+    const result = glu.udp.receiveFrom(sock, buffer[0..len]) catch |err| return mapErr(err);
     out_bytes.* = @intCast(result.data.len);
     out_endpoint.* = GluUdpEndpoint{
         .host = result.sender.host,
@@ -288,8 +310,7 @@ export fn glu_udp_receive_from(sock: *glu.udp.Socket, buffer: [*]u8, len: u32, o
 // ── UDP extended API ──
 
 export fn glu_udp_bind_with_config(port: u16, recv_buf: i32, send_buf: i32, broadcast: bool, recv_timeout_ms: u32, send_timeout_ms: u32, out: *?*glu.udp.Socket) c_int {
-    const io = glu.io();
-    return allocWrap(glu.udp.Socket, glu.udp.bind(io, port, .{
+    return allocWrap(glu.udp.Socket, glu.udp.bind(port, .{
         .recv_buf = if (recv_buf >= 0) @as(?i32, recv_buf) else null,
         .send_buf = if (send_buf >= 0) @as(?i32, send_buf) else null,
         .broadcast = broadcast,

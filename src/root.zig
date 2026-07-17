@@ -9,14 +9,17 @@ pub const registry = @import("registry.zig");
 pub const net = @import("transport/net.zig");
 pub const tcp = @import("transport/tcp.zig");
 pub const udp = @import("transport/udp.zig");
-pub const io_mod = @import("io.zig");
-pub const io = io_mod;
+
+const zio = @import("zio");
+pub const Runtime = zio.Runtime;
+pub const RuntimeOptions = zio.RuntimeOptions;
+pub const Duration = zio.Duration;
+pub const sleep = zio.sleep;
 
 comptime {
     _ = @import("channel.zig");
     _ = @import("api/publisher.zig");
     _ = @import("api/subscriber.zig");
-    _ = @import("io.zig");
     _ = @import("transport/net.zig");
     _ = @import("transport/tcp.zig");
     _ = @import("transport/udp.zig");
