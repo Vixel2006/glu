@@ -1,38 +1,20 @@
 const std = @import("std");
-const c = std.c;
 const utils = @import("utils.zig");
-const logs = @import("logs.zig");
-const Registry = @import("../registry.zig");
+const node = @import("../node/mod.zig");
+const debug = @import("../debug/mod.zig");
 
 /// Stop all registered nodes (`glu down`).
 pub fn cmdDown(init: std.process.Init) !void {
     var fw = utils.writer(init);
     const w = &fw.interface;
 
-    const entries = Registry.listAlive(init.gpa) catch {
+    const stopped = node.stopAllNodes(init.gpa) catch 0;
+    if (stopped == 0) {
         try w.writeAll("no running nodes\n");
         return;
-    };
-    defer {
-        for (entries) |e| init.gpa.free(e.name);
-        init.gpa.free(entries);
-    }
-
-    if (entries.len == 0) {
-        try w.writeAll("no running nodes\n");
-        return;
-    }
-
-    var stopped: usize = 0;
-    for (entries) |e| {
-        if (e.alive) {
-            _ = c.kill(@as(i32, @intCast(e.pid)), std.os.linux.SIG.TERM);
-            stopped += 1;
-        }
-        Registry.unregister(e.name);
     }
 
     try w.print("stopped {d} node(s)\n", .{stopped});
 
-    logs.cleanupLogs(init.io);
+    debug.cleanupLogs(init.io);
 }

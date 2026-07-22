@@ -1,8 +1,8 @@
 const std = @import("std");
-const c = std.c;
 const os = std.os.linux;
 const utils = @import("utils.zig");
-const logs = @import("logs.zig");
+const topic = @import("../topic/mod.zig");
+const debug = @import("../debug/mod.zig");
 const launch_mod = @import("../launch/launcher.zig");
 const toml = @import("../launch/toml.zig");
 const Registry = @import("../registry.zig");
@@ -10,47 +10,13 @@ const Registry = @import("../registry.zig");
 var launched_children: []launch_mod.LaunchedNode = &.{};
 var launch_io: std.Io = undefined;
 
-fn cleanupShm() void {
-    const Header = @import("../channel.zig").Header;
-    const GLU_MAGIC = @import("../channel.zig").GLU_MAGIC;
-
-    const dirp = c.opendir("/dev/shm") orelse return;
-    defer _ = c.closedir(dirp);
-
-    while (true) {
-        const entry = c.readdir(dirp) orelse break;
-        if (entry.type != 8) continue;
-        const name = std.mem.sliceTo(@as([]const u8, entry.name[0..]), 0);
-        if (name.len == 0) continue;
-        if (std.mem.startsWith(u8, name, "sem.")) continue;
-
-        var shm_name_buf: [256]u8 = undefined;
-        const shm_name = std.fmt.bufPrint(&shm_name_buf, "/{s}", .{name}) catch continue;
-        shm_name_buf[shm_name.len] = 0;
-
-        const fd = c.shm_open(shm_name_buf[0..shm_name.len :0], 0, 0);
-        if (fd == -1) continue;
-        defer _ = c.close(fd);
-
-        const mapped = os.mmap(null, @sizeOf(Header), os.PROT{ .READ = true }, os.MAP{ .TYPE = .SHARED }, fd, 0);
-        if (mapped == ~@as(usize, 0)) continue;
-
-        const ptr: [*]u8 = @ptrFromInt(mapped);
-        const hdr: *align(1) Header = @ptrCast(ptr);
-        const is_glu = hdr.magic == GLU_MAGIC;
-        _ = os.munmap(@ptrFromInt(mapped), @sizeOf(Header));
-
-        if (is_glu) _ = c.shm_unlink(shm_name_buf[0..shm_name.len :0]);
-    }
-}
-
 fn handleSigint(_: os.SIG) callconv(.c) void {
     for (launched_children) |*n| {
         n.child.kill(launch_io);
         Registry.unregister(n.name);
     }
-    cleanupShm();
-    logs.cleanupLogs(launch_io);
+    topic.cleanupTopics();
+    debug.cleanupLogs(launch_io);
     std.process.exit(1);
 }
 
@@ -116,7 +82,7 @@ pub fn cmdLaunch(init: std.process.Init, args: *std.process.Args.Iterator) !void
         }
     }
 
-    logs.cleanupLogs(init.io);
+    debug.cleanupLogs(init.io);
 
     init.gpa.free(launched_children);
     launched_children = &.{};

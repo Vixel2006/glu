@@ -74,7 +74,7 @@ fn mapErr(err: anyerror) c_int {
     };
 }
 
-fn allocWrap(comptime T: type, result: !T, out: *?*T) c_int {
+fn allocWrap(comptime T: type, result: anyerror!T, out: *?*T) c_int {
     const val = result catch |err| return mapErr(err);
     const ptr = alloc.create(T) catch return GLU_ERR_OUT_OF_MEM;
     ptr.* = val;
@@ -131,22 +131,22 @@ export fn glu_publisher_init(allocator: std.mem.Allocator, topic: [*:0]const u8,
     return allocWrap(glu.Publisher, glu.Publisher.init(allocator, std.mem.sliceTo(topic, 0), msg_size, capacity, @enumFromInt(tos)), out);
 }
 
-export fn glu_publisher_deinit(pub: *glu.Publisher) void {
-    pub.deinit();
+export fn glu_publisher_deinit(publisher: *glu.Publisher) void {
+    publisher.deinit();
 }
 
-export fn glu_publisher_reserve(pub: *glu.Publisher, out: *?*anyopaque) c_int {
-    const ptr = pub.reserve() orelse return GLU_ERR_NO_SPACE;
+export fn glu_publisher_reserve(publisher: *glu.Publisher, out: *?*anyopaque) c_int {
+    const ptr = publisher.reserve() orelse return GLU_ERR_NO_SPACE;
     out.* = @ptrCast(ptr);
     return GLU_OK;
 }
 
-export fn glu_publisher_commit(pub: *glu.Publisher) void {
-    pub.commit();
+export fn glu_publisher_commit(publisher: *glu.Publisher) void {
+    publisher.commit();
 }
 
-export fn glu_publisher_publish(pub: *glu.Publisher, data: *const anyopaque) void {
-    pub.publish(@ptrCast(@alignCast(data)));
+export fn glu_publisher_publish(publisher: *glu.Publisher, data: *const anyopaque) void {
+    publisher.publish(@ptrCast(@alignCast(data)));
 }
 
 // ─────────────────────────────────────────────

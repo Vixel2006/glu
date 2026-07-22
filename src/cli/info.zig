@@ -1,7 +1,9 @@
 const std = @import("std");
 const utils = @import("utils.zig");
+const topic = @import("../topic/mod.zig");
 const slowestReader = @import("../channel.zig").slowestReader;
 const MAX_READERS = @import("../channel.zig").MAX_READERS;
+const Header = @import("../channel.zig").Header;
 
 /// Show detailed info about a topic (`glu info <topic>`).
 pub fn cmdInfo(init: std.process.Init, args: *std.process.Args.Iterator) !void {
@@ -13,7 +15,7 @@ pub fn cmdInfo(init: std.process.Init, args: *std.process.Args.Iterator) !void {
         return;
     };
 
-    var topic = utils.Topic.open(init.gpa, topic_name) catch |err| {
+    var t = topic.Topic.open(init.gpa, topic_name) catch |err| {
         const msg = switch (err) {
             error.TopicNotFound => "not found",
             error.InvalidTopic => "is not a valid glu topic",
@@ -24,9 +26,9 @@ pub fn cmdInfo(init: std.process.Init, args: *std.process.Args.Iterator) !void {
         try w.print("error: topic '{s}' {s}\n", .{ topic_name, msg });
         return;
     };
-    defer topic.close();
+    defer t.close();
 
-    const hdr = topic.header;
+    const hdr = t.header;
 
     const name_slice = hdr.name[0..hdr.name_len];
     const data_size = hdr.msg_size * hdr.capacity;
@@ -40,8 +42,8 @@ pub fn cmdInfo(init: std.process.Init, args: *std.process.Args.Iterator) !void {
     try w.print("Msg Size:    {d} bytes\n", .{hdr.msg_size});
     try w.print("Capacity:    {d} messages\n", .{hdr.capacity});
     try w.print("Data Size:   {d} bytes\n", .{data_size});
-    try w.print("Header:      {d} bytes (v1)\n", .{@sizeOf(utils.Header)});
-    try w.print("Total Size:  {d} bytes\n", .{topic.file_size});
+    try w.print("Header:      {d} bytes (v1)\n", .{@sizeOf(Header)});
+    try w.print("Total Size:  {d} bytes\n", .{t.file_size});
     try w.print("Connections: {d}\n", .{hdr.conns});
     try w.print("Write Pos:   {d}\n", .{hdr.write % hdr.capacity});
     try w.print("Queued:      {d} ({d:.1}% full)\n", .{ depth, pct });

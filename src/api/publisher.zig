@@ -4,6 +4,7 @@ const c = std.c;
 const Channel = @import("../channel.zig").Channel;
 const Header = @import("../channel.zig").Header;
 const ToS = @import("../channel.zig").ToS;
+const isAlive = @import("../registry.zig").isAlive;
 const slowestReader = @import("../channel.zig").slowestReader;
 const sweepDeadReaders = @import("../channel.zig").sweepDeadReaders;
 const write = @import("../channel.zig").write;
@@ -17,25 +18,32 @@ const PubErr = error{
 
 /// High-level publisher wrapping a raw `Channel`.
 ///
-/// Each topic can have at most one publisher. The publisher owns the
-/// shared memory segment (creates it on `init`, unlinks on `deinit`).
+/// Each topic can have at most one publisher. The publisher attaches to
+/// an existing segment or creates one if none exists. Unlinks on `deinit`.
 pub const Publisher = struct {
     channel: Channel,
 
-    /// Create a new publisher for topic `name`.
+    /// Create (or attach to) a shared-memory channel for topic `name`.
     ///
-    /// Shm-unlinks any stale segment first, then creates a fresh channel.
-    /// Self-registers the process in the node registry.
+    /// If the existing segment has no alive subscribers and we are the
+    /// only connection it is treated as a stale leak (crashed publisher)
+    /// and a fresh channel is created.
     pub fn init(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32, tos: ToS) PubErr!Publisher {
         assert(msg_size > 0);
         assert(capacity > 0);
         assert(name.len > 0);
-        const name_z = try allocator.alloc(u8, name.len + 1);
-        defer allocator.free(name_z);
-        @memcpy(name_z[0..name.len], name);
-        name_z[name.len] = 0;
-        _ = c.shm_unlink(name_z[0..name.len :0]);
-        return Publisher{ .channel = try Channel.open(allocator, name, msg_size, capacity, tos) };
+        var self = Publisher{ .channel = try Channel.open(allocator, name, msg_size, capacity, tos) };
+
+        var any_alive = false;
+        for (&self.channel.header.pids) |pid| {
+            if (pid != 0 and isAlive(pid)) any_alive = true;
+        }
+        if (!any_alive and self.channel.header.conns == 1) {
+            self.deinit();
+            return Publisher{ .channel = try Channel.open(allocator, name, msg_size, capacity, tos) };
+        }
+
+        return self;
     }
 
     pub fn deinit(self: *Publisher) void {
