@@ -3,11 +3,11 @@ const utils = @import("utils.zig");
 const Registry = @import("../registry.zig");
 
 /// List registered glu nodes (`glu ps`).
-pub fn cmdPs(init: std.process.Init) !void {
+pub fn cmd_ps(init: std.process.Init) !void {
     var fw = utils.writer(init);
     const w = &fw.interface;
 
-    const entries = Registry.listAlive(init.gpa) catch |err| {
+    const entries = Registry.list_alive(init.gpa) catch |err| {
         try w.print("error: cannot list nodes: {}\n", .{err});
         return;
     };

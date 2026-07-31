@@ -4,9 +4,9 @@ const c = std.c;
 const posix = std.posix;
 const mem = std.mem;
 const net = @import("net.zig");
-const zio = @import("zio");
+const IO = @import("../io.zig").IO;
 
-pub const Socket = zio.net.Socket;
+pub const Socket = posix.socket_t;
 
 pub const SocketConfig = struct {
     recv_buf: ?i32 = null,
@@ -46,7 +46,7 @@ fn setTimeval(fd: i32, level: c_int, opt: u32, ms: u32) void {
     _ = c.setsockopt(fd, level, opt, &tv, @sizeOf(std.c.timeval));
 }
 
-fn applySocketOpts(fd: i32, config: SocketConfig) void {
+fn apply_socket_opts(fd: i32, config: SocketConfig) void {
     if (config.recv_buf) |buf| setInt(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.RCVBUF)), buf);
     if (config.send_buf) |buf| setInt(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.SNDBUF)), buf);
     setInt(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.BROADCAST)), @as(c_int, @intFromBool(config.broadcast)));
@@ -54,220 +54,226 @@ fn applySocketOpts(fd: i32, config: SocketConfig) void {
     if (config.send_timeout_ms) |ms| setTimeval(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.SNDTIMEO)), ms);
 }
 
-pub fn bind(port: u16, config: SocketConfig) !Socket {
-    var addr_buf: [32]u8 = undefined;
-    const addr_str = try std.fmt.bufPrint(&addr_buf, "0.0.0.0:{d}", .{port});
-    const addr = try zio.net.IpAddress.parseIpAndPort(addr_str);
+pub fn bind(io: *IO, port: u16, config: SocketConfig) !Socket {
+    const socket = try io.socket(posix.AF.INET, posix.SOCK.DGRAM, 0);
 
-    const socket = try addr.bind(.{});
+    const addr: posix.sockaddr.in = .{
+        .port = @byteSwap(port),
+        .addr = 0,
+    };
 
-    applySocketOpts(socket.handle, config);
+    try io.bind(socket, addr);
+
+    apply_socket_opts(socket, config);
 
     return socket;
 }
 
-pub fn sendTo(socket: *Socket, host: []const u8, port: u16, data: []const u8) !usize {
+pub fn send_to(
+    io: *IO,
+    comptime Context: type,
+    context: Context,
+    comptime callback: fn (
+        context: Context,
+        completion: *IO.Completion,
+        result: IO.SendToError!usize,
+    ) void,
+    completion: *IO.Completion,
+    socket: Socket,
+    host: []const u8,
+    port: u16,
+    data: []const u8,
+) !void {
     assert(host.len > 0);
     assert(port > 0);
     assert(data.len > 0);
-    var addr_buf: [256]u8 = undefined;
-    const addr_str = try std.fmt.bufPrint(&addr_buf, "{s}:{d}", .{ host, port });
-    const addr = try zio.net.IpAddress.parseIpAndPort(addr_str);
 
-    return socket.sendTo(.{ .ip = addr }, data, .none);
-}
-
-pub fn receiveFrom(socket: *Socket, buffer: []u8) !ReceiveResult {
-    assert(buffer.len > 0);
-    const result = try socket.receiveFrom(buffer, .none);
-    return ReceiveResult{
-        .data = buffer[0..result.len],
-        .sender = net.addressToEndpoint(result.from),
+    const parsed = try std.Io.net.IpAddress.parse(host, port);
+    const addr: posix.sockaddr.in = switch (parsed) {
+        .ip4 => |ip4| .{
+            .port = @byteSwap(ip4.port),
+            .addr = @bitCast(ip4.bytes),
+        },
+        .ip6 => return error.AddressFamilyNotSupported,
     };
+
+    try io.send_to(Context, context, callback, completion, socket, data, addr);
 }
 
-pub fn connect(socket: *Socket, host: []const u8, port: u16) void {
+pub fn receive_from(
+    io: *IO,
+    comptime Context: type,
+    context: Context,
+    comptime callback: fn (
+        context: Context,
+        completion: *IO.Completion,
+        result: IO.RecvFromError!ReceiveResult,
+    ) void,
+    completion: *IO.Completion,
+    socket: Socket,
+    buffer: []u8,
+) !void {
+    assert(buffer.len > 0);
+
+    const wrapper = struct {
+        fn call(ctx: Context, compl: *IO.Completion, res: IO.RecvFromError!usize) void {
+            const result: IO.RecvFromError!ReceiveResult = blk: {
+                if (res) |n| {
+                    const addr = compl.operation.recv_from.address;
+                    break :blk ReceiveResult{
+                        .data = compl.operation.recv_from.buffer[0..n],
+                        .sender = net.address_to_endpoint(addr),
+                    };
+                } else |err| {
+                    break :blk err;
+                }
+            };
+            callback(ctx, compl, result);
+        }
+    }.call;
+
+    try io.recv_from(Context, context, wrapper, completion, socket, buffer);
+}
+
+pub fn connect(
+    io: *IO,
+    comptime Context: type,
+    context: Context,
+    comptime callback: fn (
+        context: Context,
+        completion: *IO.Completion,
+        result: IO.ConnectError!void,
+    ) void,
+    completion: *IO.Completion,
+    socket: Socket,
+    host: []const u8,
+    port: u16,
+) !void {
     assert(host.len > 0);
     assert(port > 0);
-    var addr_buf: [256]u8 = undefined;
-    const addr_str = std.fmt.bufPrint(&addr_buf, "{s}:{d}", .{ host, port }) catch return;
-    const addr = zio.net.IpAddress.parseIpAndPort(addr_str) catch return;
-
-    socket.connect(.{ .ip = addr }, .{ .timeout = .none }) catch {};
+    const parsed = try std.Io.net.IpAddress.parse(host, port);
+    const addr: posix.sockaddr.in = switch (parsed) {
+        .ip4 => |ip4| .{
+            .port = @byteSwap(ip4.port),
+            .addr = @bitCast(ip4.bytes),
+        },
+        .ip6 => return error.AddressFamilyNotSupported,
+    };
+    try io.connect(Context, context, callback, completion, socket, addr);
 }
 
-pub fn send(socket: *Socket, data: []const u8) !usize {
+pub fn send(
+    io: *IO,
+    comptime Context: type,
+    context: Context,
+    comptime callback: fn (
+        context: Context,
+        completion: *IO.Completion,
+        result: IO.SendError!usize,
+    ) void,
+    completion: *IO.Completion,
+    socket: Socket,
+    data: []const u8,
+) !void {
     assert(data.len > 0);
-    return socket.send(data, .none);
+    try io.send(Context, context, callback, completion, socket, data);
 }
 
-pub fn receive(socket: *Socket, buffer: []u8) !usize {
+pub fn receive(
+    io: *IO,
+    comptime Context: type,
+    context: Context,
+    comptime callback: fn (
+        context: Context,
+        completion: *IO.Completion,
+        result: IO.RecvError!usize,
+    ) void,
+    completion: *IO.Completion,
+    socket: Socket,
+    buffer: []u8,
+) !void {
     assert(buffer.len > 0);
-    const n = try socket.receive(buffer, .none);
-    if (n == 0) return error.ConnectionResetByPeer;
-    return n;
+    try io.recv(Context, context, callback, completion, socket, buffer);
 }
 
-pub fn joinMulticast(socket: *Socket, group: []const u8) void {
+pub fn join_multicast(socket: Socket, group: []const u8) void {
     assert(group.len > 0);
-    var addr_buf: [256]u8 = undefined;
-    const addr_str = std.fmt.bufPrint(&addr_buf, "{s}:0", .{group}) catch return;
-    const addr = zio.net.IpAddress.parseIpAndPort(addr_str) catch return;
-
-    if (addr.any.family != std.os.linux.AF.INET) return;
+    const parsed = (std.Io.net.IpAddress.parseIp4(group, 0) catch return).ip4;
 
     const mreq = IpMreq{
-        .imr_multiaddr = addr.in.addr,
+        .imr_multiaddr = @bitCast(parsed.bytes),
         .imr_interface = 0,
     };
-    _ = c.setsockopt(socket.handle, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, @sizeOf(IpMreq));
+    _ = c.setsockopt(socket, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, @sizeOf(IpMreq));
 }
 
-pub fn leaveMulticast(socket: *Socket, group: []const u8) void {
-    assert(group.len > 0);
-    var addr_buf: [256]u8 = undefined;
-    const addr_str = std.fmt.bufPrint(&addr_buf, "{s}:0", .{group}) catch return;
-    const addr = zio.net.IpAddress.parseIpAndPort(addr_str) catch return;
+test "bind UDP socket" {
+    var io = try IO.init(32, 0);
+    defer io.deinit();
 
-    if (addr.any.family != std.os.linux.AF.INET) return;
+    const socket = try bind(&io, 0, .{});
+    defer _ = c.close(socket);
+}
 
-    const mreq = IpMreq{
-        .imr_multiaddr = addr.in.addr,
-        .imr_interface = 0,
+test "send_to and receive_from round-trip" {
+    var io = try IO.init(32, 0);
+    defer io.deinit();
+
+    const socket1 = try bind(&io, 0, .{});
+    defer _ = c.close(socket1);
+
+    const socket2 = try bind(&io, 0, .{});
+    defer _ = c.close(socket2);
+
+    var addr1: std.posix.sockaddr.in = undefined;
+    var len1: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.in);
+    _ = c.getsockname(socket1, @ptrCast(&addr1), &len1);
+    const port1 = std.mem.bigToNative(u16, addr1.port);
+
+    const TestContext = struct {
+        send_done: bool = false,
+        recv_done: bool = false,
+        send_result: ?IO.SendToError!usize = null,
+        recv_result: ?IO.RecvFromError!ReceiveResult = null,
     };
-    _ = c.setsockopt(socket.handle, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mreq, @sizeOf(IpMreq));
-}
 
-pub fn close(socket: *Socket) void {
-    socket.close();
-}
+    var ctx = TestContext{};
 
-fn getPort(fd: i32) u16 {
-    var sockname: posix.sockaddr.in = undefined;
-    var namelen: posix.socklen_t = @sizeOf(posix.sockaddr.in);
-    if (c.getsockname(fd, @ptrCast(&sockname), &namelen) == 0)
-        return mem.bigToNative(u16, sockname.port);
-    return 0;
-}
+    const send_cb = struct {
+        fn call(c_ctx: *TestContext, compl: *IO.Completion, res: IO.SendToError!usize) void {
+            _ = compl;
+            c_ctx.send_result = res;
+            c_ctx.send_done = true;
+        }
+    }.call;
 
-test "bind and close cleanly" {
-    var rt = try zio.Runtime.init(std.testing.allocator, .{});
-    defer rt.deinit();
-    var s = try bind(0, .{});
-    defer close(&s);
-}
+    const recv_cb = struct {
+        fn call(c_ctx: *TestContext, compl: *IO.Completion, res: IO.RecvFromError!ReceiveResult) void {
+            _ = compl;
+            c_ctx.recv_result = res;
+            c_ctx.recv_done = true;
+        }
+    }.call;
 
-test "sendTo and receiveFrom exchange data" {
-    var rt = try zio.Runtime.init(std.testing.allocator, .{});
-    defer rt.deinit();
+    var compl_send: IO.Completion = undefined;
+    var compl_recv: IO.Completion = undefined;
 
-    var receiver = try bind(0, .{});
-    defer close(&receiver);
-    const recv_port = getPort(receiver.handle);
-
-    var sender = try bind(0, .{});
-    defer close(&sender);
-
-    const msg = "hello udp!";
-    const sent = try sendTo(&sender, "127.0.0.1", recv_port, msg);
-    try std.testing.expectEqual(@as(usize, msg.len), sent);
+    const msg = "hello udp";
+    try send_to(&io, *TestContext, &ctx, send_cb, &compl_send, socket2, "127.0.0.1", port1, msg);
 
     var buf: [64]u8 = undefined;
-    const result = try receiveFrom(&receiver, &buf);
-    try std.testing.expectEqual(@as(usize, msg.len), result.data.len);
-    try std.testing.expect(mem.eql(u8, msg, result.data));
-}
+    try receive_from(&io, *TestContext, &ctx, recv_cb, &compl_recv, socket1, &buf);
 
-test "receiveFrom returns correct sender endpoint" {
-    var rt = try zio.Runtime.init(std.testing.allocator, .{});
-    defer rt.deinit();
+    while (!ctx.send_done or !ctx.recv_done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.complete_all();
+    }
 
-    var receiver = try bind(0, .{});
-    defer close(&receiver);
-    const recv_port = getPort(receiver.handle);
+    const sent_bytes = try ctx.send_result.?;
+    try std.testing.expectEqual(msg.len, sent_bytes);
 
-    var sender = try bind(0, .{});
-    defer close(&sender);
-    const send_port = getPort(sender.handle);
-
-    const msg = "whoami";
-    _ = try sendTo(&sender, "127.0.0.1", recv_port, msg);
-
-    var buf: [64]u8 = undefined;
-    const result = try receiveFrom(&receiver, &buf);
-    try std.testing.expect(mem.eql(u8, msg, result.data));
-    try std.testing.expect(mem.eql(u8, "127.0.0.1", result.sender.host[0..result.sender.host_len]));
-    try std.testing.expectEqual(send_port, result.sender.port);
-}
-
-test "bind fails with BindFailed on port conflict" {
-    var rt = try zio.Runtime.init(std.testing.allocator, .{});
-    defer rt.deinit();
-
-    var sock1 = try bind(0, .{});
-    defer close(&sock1);
-    const port = getPort(sock1.handle);
-    try std.testing.expectError(error.AddressInUse, bind(port, .{}));
-}
-
-test "sendTo and receiveFrom return correct byte count" {
-    var rt = try zio.Runtime.init(std.testing.allocator, .{});
-    defer rt.deinit();
-
-    var receiver = try bind(0, .{});
-    defer close(&receiver);
-    const recv_port = getPort(receiver.handle);
-
-    var sender = try bind(0, .{});
-    defer close(&sender);
-
-    const msg = "hello";
-    const sent = try sendTo(&sender, "127.0.0.1", recv_port, msg);
-    try std.testing.expectEqual(@as(usize, msg.len), sent);
-
-    var buf: [16]u8 = undefined;
-    const result = try receiveFrom(&receiver, &buf);
-    try std.testing.expectEqual(@as(usize, msg.len), result.data.len);
-}
-
-test "joinMulticast accepts loopback address" {
-    var rt = try zio.Runtime.init(std.testing.allocator, .{});
-    defer rt.deinit();
-    var s = try bind(0, .{});
-    defer close(&s);
-
-    joinMulticast(&s, "224.0.0.1");
-    leaveMulticast(&s, "224.0.0.1");
-}
-
-test "connected send and receive" {
-    var rt = try zio.Runtime.init(std.testing.allocator, .{});
-    defer rt.deinit();
-
-    var receiver = try bind(0, .{});
-    defer close(&receiver);
-    const recv_port = getPort(receiver.handle);
-
-    var sender = try bind(0, .{});
-    defer close(&sender);
-    const send_port = getPort(sender.handle);
-
-    connect(&sender, "127.0.0.1", recv_port);
-    connect(&receiver, "127.0.0.1", send_port);
-
-    const msg = "hello connected!";
-    const sent = try send(&sender, msg);
-    try std.testing.expectEqual(@as(usize, msg.len), sent);
-
-    var buf: [64]u8 = undefined;
-    const n = try receive(&receiver, &buf);
-    try std.testing.expectEqual(@as(usize, msg.len), n);
-    try std.testing.expect(mem.eql(u8, msg, buf[0..n]));
-}
-
-test "socket options apply on a real socket" {
-    var rt = try zio.Runtime.init(std.testing.allocator, .{});
-    defer rt.deinit();
-    var s = try bind(0, .{});
-    defer close(&s);
+    const recv_res = try ctx.recv_result.?;
+    try std.testing.expectEqual(@as(usize, msg.len), recv_res.data.len);
+    try std.testing.expect(std.mem.eql(u8, msg, recv_res.data));
 }

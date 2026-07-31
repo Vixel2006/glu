@@ -2,6 +2,8 @@ const std = @import("std");
 const glu = @import("glu");
 const msgs = @import("msgs.zig");
 
+const IO = glu.IO;
+
 const topic_raw = "/temperature";
 const topic_filtered = "/filtered_temp";
 const node_name = "temperature_processor";
@@ -17,14 +19,28 @@ fn milliTimestamp() i64 {
         @divTrunc(@as(i64, @intCast(ts.nsec)), std.time.ns_per_ms);
 }
 
+fn sleep(ms: u64) void {
+    var ts = std.os.linux.timespec{
+        .sec = @as(i64, @intCast(ms / 1000)),
+        .nsec = @as(i64, @intCast((ms % 1000) * 1_000_000)),
+    };
+    _ = std.os.linux.nanosleep(&ts, null);
+}
+
+var global_io: ?IO = null;
+
 pub fn main() void {
     const allocator = std.heap.page_allocator;
 
-    var rt = glu.Runtime.init(allocator, .{}) catch |e| {
-        std.debug.print("[processor] Runtime init failed: {}\n", .{e});
+    var io = IO.init(32, 0) catch |e| {
+        std.debug.print("[processor] IO init failed: {}\n", .{e});
         return;
     };
-    defer rt.deinit();
+    global_io = io;
+    defer {
+        global_io.?.deinit();
+        global_io = null;
+    }
 
     var raw_sub = glu.Subscriber.init(allocator, topic_raw, @sizeOf(msgs.TemperatureReading), capacity) catch |e| {
         std.debug.print("[processor] subscriber init failed: {}\n", .{e});
@@ -42,7 +58,7 @@ pub fn main() void {
     defer glu.registry.unregister(node_name);
 
     std.debug.print(
-        "[processor] temperature filter node (zio alerts)\n" ++
+        "[processor] temperature filter node (glu alerts)\n" ++
         "[processor]   {s} → (moving avg {d}) → {s}\n" ++
         "[processor]   Ctrl-C to stop\n",
         .{ topic_raw, window_size, topic_filtered },
@@ -103,15 +119,16 @@ pub fn main() void {
 
         if (alert_cooldown > 0) alert_cooldown -= 1;
 
-        rt.sleep(glu.Duration.fromMilliseconds(1000 / rate_hz)) catch {};
+        sleep(1000 / rate_hz);
     }
 }
 
 fn send_tcp_alert(temp: f32, seq_in: u32) void {
+    const io = &(global_io orelse return);
     var buf: [128]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "ALERT seq={d} temp={d:.1}°C\n", .{ seq_in, temp }) catch return;
 
-    var stream = glu.tcp.connect("127.0.0.1", 9998, .{}) catch return;
+    var stream = glu.tcp.connect(io, "127.0.0.1", 9998, .{}) catch return;
     defer glu.tcp.close(&stream);
     glu.tcp.send(&stream, msg) catch {};
 }

@@ -4,9 +4,9 @@ const c = std.c;
 const Channel = @import("../channel.zig").Channel;
 const Header = @import("../channel.zig").Header;
 const ToS = @import("../channel.zig").ToS;
-const isAlive = @import("../registry.zig").isAlive;
-const slowestReader = @import("../channel.zig").slowestReader;
-const sweepDeadReaders = @import("../channel.zig").sweepDeadReaders;
+const is_alive = @import("../registry.zig").is_alive;
+const slowest_reader = @import("../channel.zig").slowest_reader;
+const sweep_dead_readers = @import("../channel.zig").sweep_dead_readers;
 const write = @import("../channel.zig").write;
 const read = @import("../channel.zig").read;
 
@@ -36,7 +36,7 @@ pub const Publisher = struct {
 
         var any_alive = false;
         for (&self.channel.header.pids) |pid| {
-            if (pid != 0 and isAlive(pid)) any_alive = true;
+            if (pid != 0 and is_alive(pid)) any_alive = true;
         }
         if (!any_alive and self.channel.header.conns == 1) {
             self.deinit();
@@ -59,10 +59,10 @@ pub const Publisher = struct {
         const cap = self.channel.header.capacity;
         const tos: ToS = @enumFromInt(self.channel.header.tos);
 
-        while (self.channel.header.write -% slowestReader(&self.channel.header.read, self.channel.header.write) >= cap) {
+        while (self.channel.header.write -% slowest_reader(&self.channel.header.read, self.channel.header.write) >= cap) {
             if (tos == .best_effort) break;
-            sweepDeadReaders(&self.channel.header.read, &self.channel.header.pids);
-            if (self.channel.header.write -% slowestReader(&self.channel.header.read, self.channel.header.write) < cap) break;
+            sweep_dead_readers(&self.channel.header.read, &self.channel.header.pids);
+            if (self.channel.header.write -% slowest_reader(&self.channel.header.read, self.channel.header.write) < cap) break;
             std.atomic.spinLoopHint();
         }
         const slot = self.channel.ptr + @sizeOf(Header) + (self.channel.header.write % self.channel.header.capacity) * self.channel.header.msg_size;

@@ -8,8 +8,8 @@ const Registry = @import("../registry.zig");
 /// and unregistering it from the node registry.
 ///
 /// Returns the number of nodes that were signalled.
-pub fn stopAllNodes(allocator: std.mem.Allocator) !usize {
-    const entries = try Registry.listAlive(allocator);
+pub fn stop_all_nodes(allocator: std.mem.Allocator) !usize {
+    const entries = try Registry.list_alive(allocator);
     defer {
         for (entries) |e| allocator.free(e.name);
         allocator.free(entries);

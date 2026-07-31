@@ -3,7 +3,7 @@ const assert = std.debug.assert;
 const c = @import("std").c;
 const os = @import("std").os.linux;
 
-const isAlive = @import("registry.zig").isAlive;
+const is_alive = @import("registry.zig").is_alive;
 
 const ShmErr = error{ OutOfMemory, ShmOpenFailed, MmapFailed };
 
@@ -172,10 +172,10 @@ pub const Channel = struct {
 /// assign `maxInt(u32)` to its cursor so that it's
 /// ignored when we check for the slowest reader in the
 /// reliable connection mode of node communications.
-pub fn sweepDeadReaders(readers: *[8]u32, pids: []const u32) void {
+pub fn sweep_dead_readers(readers: *[8]u32, pids: []const u32) void {
     assert(pids.len >= 8);
     for (0.., pids) |i, pid| {
-        if (pid != 0 and !isAlive(pid)) {
+        if (pid != 0 and !is_alive(pid)) {
             readers[i] = std.math.maxInt(u32);
         }
     }
@@ -186,7 +186,7 @@ pub fn sweepDeadReaders(readers: *[8]u32, pids: []const u32) void {
 /// Inactive readers (those with `maxInt(u32)`) are skipped so they don't
 /// block the writer. If no readers are active the write cursor itself is
 /// returned, meaning the writer will never be held back.
-pub fn slowestReader(readers: []const u32, write_cursor: u32) u32 {
+pub fn slowest_reader(readers: []const u32, write_cursor: u32) u32 {
     var min = write_cursor;
     for (readers) |reader| {
         if (reader != std.math.maxInt(u32)) {
@@ -207,10 +207,10 @@ pub fn write(chan: *Channel, msg: *const anyopaque) void {
     const cap = chan.header.capacity;
     const tos: ToS = @enumFromInt(chan.header.tos);
 
-    while (chan.header.write -% slowestReader(&chan.header.read, chan.header.write) >= cap) {
-        sweepDeadReaders(&chan.header.read, &chan.header.pids);
+    while (chan.header.write -% slowest_reader(&chan.header.read, chan.header.write) >= cap) {
+        sweep_dead_readers(&chan.header.read, &chan.header.pids);
         if (tos == .best_effort) break;
-        if (chan.header.write -% slowestReader(&chan.header.read, chan.header.write) < cap) break;
+        if (chan.header.write -% slowest_reader(&chan.header.read, chan.header.write) < cap) break;
         std.atomic.spinLoopHint();
     }
 
@@ -236,30 +236,30 @@ pub fn read(chan: *Channel, sub_id: u32) *anyopaque {
     return @ptrCast(slot);
 }
 
-test "slowestReader: skips inactive MAX_U32 readers" {
+test "slowest_reader: skips inactive MAX_U32 readers" {
     const readers = [_]u32{ 5, std.math.maxInt(u32), 3, std.math.maxInt(u32), 10, std.math.maxInt(u32), std.math.maxInt(u32), std.math.maxInt(u32) };
-    try std.testing.expectEqual(@as(u32, 3), slowestReader(&readers, 100));
+    try std.testing.expectEqual(@as(u32, 3), slowest_reader(&readers, 100));
 }
 
-test "slowestReader: returns write cursor when no active readers" {
+test "slowest_reader: returns write cursor when no active readers" {
     const readers: [MAX_READERS]u32 = comptime brk: {
         var arr: [MAX_READERS]u32 = undefined;
         for (&arr) |*a| a.* = std.math.maxInt(u32);
         break :brk arr;
     };
-    try std.testing.expectEqual(@as(u32, 42), slowestReader(&readers, 42));
+    try std.testing.expectEqual(@as(u32, 42), slowest_reader(&readers, 42));
 }
 
-test "slowestReader: active reader lower than write cursor is selected" {
+test "slowest_reader: active reader lower than write cursor is selected" {
     const readers = [_]u32{ std.math.maxInt(u32), 2, std.math.maxInt(u32), std.math.maxInt(u32), std.math.maxInt(u32), std.math.maxInt(u32), std.math.maxInt(u32), std.math.maxInt(u32) };
-    try std.testing.expectEqual(@as(u32, 2), slowestReader(&readers, 10));
+    try std.testing.expectEqual(@as(u32, 2), slowest_reader(&readers, 10));
 }
 
-test "sweepDeadReaders: reclaims slots of dead PIDs" {
+test "sweep_dead_readers: reclaims slots of dead PIDs" {
     var readers = [_]u32{ 10, 20, std.math.maxInt(u32), 40, 50, std.math.maxInt(u32), std.math.maxInt(u32), std.math.maxInt(u32) };
     var pids = [_]u32{ @intCast(os.getpid()), 0, 0, 999999999, @intCast(os.getpid()), 0, 0, 0 };
 
-    sweepDeadReaders(&readers, &pids);
+    sweep_dead_readers(&readers, &pids);
 
     try std.testing.expectEqual(@as(u32, 10), readers[0]);
     try std.testing.expectEqual(@as(u32, 20), readers[1]);
@@ -268,16 +268,16 @@ test "sweepDeadReaders: reclaims slots of dead PIDs" {
     try std.testing.expectEqual(@as(u32, 50), readers[4]);
 }
 
-test "sweepDeadReaders: no crash when all PIDs are zero" {
+test "sweep_dead_readers: no crash when all PIDs are zero" {
     var readers = [_]u32{ 1, 2, 3, 4, 5, 6, 7, 8 };
     var pids = [_]u32{ 0, 0, 0, 0, 0, 0, 0, 0 };
 
-    sweepDeadReaders(&readers, &pids);
+    sweep_dead_readers(&readers, &pids);
 
     for (&readers) |r| try std.testing.expect(r != std.math.maxInt(u32));
 }
 
-test "sweepDeadReaders: leaves unowned slots unchanged" {
+test "sweep_dead_readers: leaves unowned slots unchanged" {
     var readers: [MAX_READERS]u32 = comptime brk: {
         var arr: [MAX_READERS]u32 = undefined;
         for (&arr) |*a| a.* = std.math.maxInt(u32);
@@ -285,7 +285,7 @@ test "sweepDeadReaders: leaves unowned slots unchanged" {
     };
     var pids = [_]u32{ 0, 0, 0, 0, 0, 0, 0, 0 };
 
-    sweepDeadReaders(&readers, &pids);
+    sweep_dead_readers(&readers, &pids);
 
     for (&readers) |r| try std.testing.expectEqual(std.math.maxInt(u32), r);
 }

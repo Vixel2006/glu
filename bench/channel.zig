@@ -105,31 +105,31 @@ fn resetRead32() void {
     resetRead(&chan_read);
 }
 
-pub fn benchChannelWrite32(allocator: std.mem.Allocator) void {
+pub fn bench_channel_write32(allocator: std.mem.Allocator) void {
     _ = allocator;
     const msg = initMsg(Msg32);
     write(&chan32, Msg32, &msg);
 }
 
-pub fn benchChannelWrite256(allocator: std.mem.Allocator) void {
+pub fn bench_channel_write256(allocator: std.mem.Allocator) void {
     _ = allocator;
     const msg = initMsg(Msg256);
     write(&chan256, Msg256, &msg);
 }
 
-pub fn benchChannelWrite1024(allocator: std.mem.Allocator) void {
+pub fn bench_channel_write1024(allocator: std.mem.Allocator) void {
     _ = allocator;
     const msg = initMsg(Msg1024);
     write(&chan1024, Msg1024, &msg);
 }
 
-pub fn benchChannelWrite4096(allocator: std.mem.Allocator) void {
+pub fn bench_channel_write4096(allocator: std.mem.Allocator) void {
     _ = allocator;
     const msg = initMsg(Msg4096);
     write(&chan4096, Msg4096, &msg);
 }
 
-pub fn benchChannelRead32(allocator: std.mem.Allocator) void {
+pub fn bench_channel_read32(allocator: std.mem.Allocator) void {
     _ = allocator;
     const msg = read(&chan_read, Msg32, 0);
     std.mem.doNotOptimizeAway(msg);

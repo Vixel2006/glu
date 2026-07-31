@@ -2,6 +2,8 @@ const std = @import("std");
 const glu = @import("glu");
 const msgs = @import("msgs.zig");
 
+const IO = glu.IO;
+
 const topic_filtered = "/filtered_temp";
 const topic_status = "/sensor_status";
 const node_name = "temperature_dashboard";
@@ -17,12 +19,20 @@ fn milliTimestamp() i64 {
         @divTrunc(@as(i64, @intCast(ts.nsec)), std.time.ns_per_ms);
 }
 
+fn sleep(ms: u64) void {
+    var ts = std.os.linux.timespec{
+        .sec = @as(i64, @intCast(ms / 1000)),
+        .nsec = @as(i64, @intCast((ms % 1000) * 1_000_000)),
+    };
+    _ = std.os.linux.nanosleep(&ts, null);
+}
+
 fn runDisplay(allocator: std.mem.Allocator) void {
-    var rt = glu.Runtime.init(allocator, .{}) catch |e| {
-        std.debug.print("[dashboard/tx] Runtime init failed: {}\n", .{e});
+    var io = IO.init(32, 0) catch |e| {
+        std.debug.print("[dashboard/tx] IO init failed: {}\n", .{e});
         return;
     };
-    defer rt.deinit();
+    defer io.deinit();
 
     var filtered_sub = glu.Subscriber.init(allocator, topic_filtered, @sizeOf(msgs.FilteredTemperature), capacity) catch |e| {
         std.debug.print("[dashboard/tx] subscriber init failed: {}\n", .{e});
@@ -36,14 +46,14 @@ fn runDisplay(allocator: std.mem.Allocator) void {
     };
     defer status_sub.deinit();
 
-    var udp_sock = glu.udp.bind(0, .{}) catch |e| {
+    var udp_sock = glu.udp.bind(&io, 0, .{}) catch |e| {
         std.debug.print("[dashboard/tx] UDP bind failed: {}\n", .{e});
         return;
     };
     defer glu.udp.close(&udp_sock);
 
     std.debug.print(
-        "[dashboard/tx] display + registry monitor (zio)\n" ++
+        "[dashboard/tx] display + registry monitor (glu)\n" ++
         "[dashboard/tx]   Ctrl-C to stop\n",
         .{},
     );
@@ -73,7 +83,7 @@ fn runDisplay(allocator: std.mem.Allocator) void {
                 );
             }
 
-            if (glu.registry.listAlive(allocator)) |entries| {
+            if (glu.registry.list_alive(allocator)) |entries| {
                 if (entries.len > 0) {
                     std.debug.print("[dashboard] nodes:", .{});
                     for (entries) |entry| {
@@ -86,21 +96,21 @@ fn runDisplay(allocator: std.mem.Allocator) void {
                 allocator.free(entries);
             } else |_| {}
 
-            _ = glu.udp.sendTo(&udp_sock, "127.0.0.1", 9997, "dashboard_alive") catch {};
+            _ = glu.udp.send_to(&io, udp_sock, "127.0.0.1", 9997, "dashboard_alive") catch {};
         }
 
-        rt.sleep(glu.Duration.fromMilliseconds(1000 / tick_rate_hz)) catch {};
+        sleep(1000 / tick_rate_hz);
     }
 }
 
 fn runTcpServer() void {
     const allocator = std.heap.page_allocator;
 
-    var rt = glu.Runtime.init(allocator, .{}) catch |e| {
-        std.debug.print("[dashboard/tcp] Runtime init failed: {}\n", .{e});
+    var io = IO.init(32, 0) catch |e| {
+        std.debug.print("[dashboard/tcp] IO init failed: {}\n", .{e});
         return;
     };
-    defer rt.deinit();
+    defer io.deinit();
 
     var sub = glu.Subscriber.init(allocator, topic_filtered, @sizeOf(msgs.FilteredTemperature), capacity) catch |e| {
         std.debug.print("[dashboard/tcp] subscriber init failed: {}\n", .{e});
@@ -108,21 +118,21 @@ fn runTcpServer() void {
     };
     defer sub.deinit();
 
-    var server = glu.tcp.listen(tcp_port, .{}) catch |e| {
+    var server = glu.tcp.listen(&io, tcp_port, .{}) catch |e| {
         std.debug.print("[dashboard/tcp] listen on {d} failed: {}\n", .{ tcp_port, e });
         return;
     };
-    defer glu.tcp.closeServer(&server);
+    defer glu.tcp.close_server(&server);
 
     std.debug.print(
-        "[dashboard/tcp] listening on :{d} (zio)\n",
+        "[dashboard/tcp] listening on :{d} (glu)\n",
         .{tcp_port},
     );
 
     while (true) {
-        var stream = glu.tcp.accept(&server, .{}) catch |e| {
+        var stream = glu.tcp.accept(&io, &server, .{}) catch |e| {
             std.debug.print("[dashboard/tcp] accept error: {}\n", .{e});
-            rt.sleep(glu.Duration.fromMilliseconds(100)) catch {};
+            sleep(100);
             continue;
         };
         defer glu.tcp.close(&stream);
@@ -141,7 +151,7 @@ fn runTcpServer() void {
                 glu.tcp.send(&stream, bytes) catch break;
             }
 
-            rt.sleep(glu.Duration.fromMilliseconds(1000 / tick_rate_hz)) catch {};
+            sleep(1000 / tick_rate_hz);
         }
     }
 }
@@ -171,6 +181,6 @@ pub fn main() void {
         _ = std.c.kill(pid, std.posix.SIG.TERM);
         _ = std.c.waitpid(pid, null, 0);
     } else {
-        std.debug.print("[dashboard] fork failed\n", .{});
+        std.debug.print("[dashboard] fork failed\n", {});
     }
 }

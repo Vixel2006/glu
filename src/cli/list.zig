@@ -3,12 +3,12 @@ const utils = @import("utils.zig");
 const topic = @import("../topic/mod.zig");
 
 /// List all active glu topics in shared memory (`glu list` / `glu ls`).
-pub fn cmdList(init: std.process.Init) !void {
+pub fn cmd_list(init: std.process.Init) !void {
     const allocator = init.gpa;
     var fw = utils.writer(init);
     const w = &fw.interface;
 
-    const entries = topic.scanTopics(allocator) catch |err| switch (err) {
+    const entries = topic.scan_topics(allocator) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.ShmDirInaccessible => {
             try w.writeAll("error: /dev/shm not accessible\n");

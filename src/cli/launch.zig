@@ -15,13 +15,13 @@ fn handleSigint(_: os.SIG) callconv(.c) void {
         n.child.kill(launch_io);
         Registry.unregister(n.name);
     }
-    topic.cleanupTopics();
-    debug.cleanupLogs(launch_io);
+    topic.cleanup_topics();
+    debug.cleanup_logs(launch_io);
     std.process.exit(1);
 }
 
 /// Launch nodes from a TOML config (`glu launch -f <file> [-d]`).
-pub fn cmdLaunch(init: std.process.Init, args: *std.process.Args.Iterator) !void {
+pub fn cmd_launch(init: std.process.Init, args: *std.process.Args.Iterator) !void {
     var file: ?[]const u8 = null;
     var detach = false;
 
@@ -34,20 +34,20 @@ pub fn cmdLaunch(init: std.process.Init, args: *std.process.Args.Iterator) !void
     }
 
     const file_path = file orelse {
-        var ew = utils.errWriter(init);
+        var ew = utils.err_writer(init);
         ew.interface.print("usage: glu launch -f <file.toml> [-d]\n", .{}) catch {};
         return error.MissingArgument;
     };
 
     var config = toml.parse(init.io, init.gpa, file_path) catch |err| {
-        var ew = utils.errWriter(init);
+        var ew = utils.err_writer(init);
         ew.interface.print("error parsing launch config '{s}': {}\n", .{ file_path, err }) catch {};
         return err;
     };
     defer config.deinit(init.gpa);
 
     if (detach) {
-        try launch_mod.launchDetached(init.io, init.gpa, config.nodes, "/tmp/glu/logs");
+        try launch_mod.launch_detached(init.io, init.gpa, config.nodes, "/tmp/glu/logs");
         var fw = utils.writer(init);
         fw.interface.print("launched {d} node(s) in background\n", .{config.nodes.len}) catch {};
         return;
@@ -82,7 +82,7 @@ pub fn cmdLaunch(init: std.process.Init, args: *std.process.Args.Iterator) !void
         }
     }
 
-    debug.cleanupLogs(init.io);
+    debug.cleanup_logs(init.io);
 
     init.gpa.free(launched_children);
     launched_children = &.{};

@@ -4,15 +4,10 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const zio_dep = b.dependency("zio", .{ .target = target, .optimize = optimize });
-    const zio_mod = zio_dep.module("zio");
-
     const mod = b.addModule("glu", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
-        .imports = &.{
-            .{ .name = "zio", .module = zio_mod },
-        },
+        .imports = &.{},
     });
 
     const exe = b.addExecutable(.{
@@ -91,9 +86,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .link_libc = true,
-        .imports = &.{
-            .{ .name = "zio", .module = zio_mod },
-        },
+        .imports = &.{},
     });
 
     const lib_tests = b.addTest(.{

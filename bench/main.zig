@@ -63,13 +63,13 @@ pub fn main(init: std.process.Init) !void {
     var bench = zbench.Benchmark.init(allocator, .{});
     defer bench.deinit();
 
-    try bench.add("channel write 32B", channel.benchChannelWrite32, .{ .hooks = channel.write32_hooks });
-    try bench.add("channel write 256B", channel.benchChannelWrite256, .{ .hooks = channel.write256_hooks });
-    try bench.add("channel write 1024B", channel.benchChannelWrite1024, .{ .hooks = channel.write1024_hooks });
-    try bench.add("channel write 4096B", channel.benchChannelWrite4096, .{ .hooks = channel.write4096_hooks });
-    try bench.add("channel read 32B", channel.benchChannelRead32, .{ .hooks = channel.read32_hooks });
-    try bench.add("publisher publish", api.benchPublisherPublish, .{ .hooks = api.publish_hooks });
-    try bench.add("subscriber receive", api.benchSubscriberReceive, .{ .hooks = api.receive_hooks });
+    try bench.add("channel write 32B", channel.bench_channel_write32, .{ .hooks = channel.write32_hooks });
+    try bench.add("channel write 256B", channel.bench_channel_write256, .{ .hooks = channel.write256_hooks });
+    try bench.add("channel write 1024B", channel.bench_channel_write1024, .{ .hooks = channel.write1024_hooks });
+    try bench.add("channel write 4096B", channel.bench_channel_write4096, .{ .hooks = channel.write4096_hooks });
+    try bench.add("channel read 32B", channel.bench_channel_read32, .{ .hooks = channel.read32_hooks });
+    try bench.add("publisher publish", api.bench_publisher_publish, .{ .hooks = api.publish_hooks });
+    try bench.add("subscriber receive", api.bench_subscriber_receive, .{ .hooks = api.receive_hooks });
 
     try zbench.prettyPrintHeader(io, stdout, bench.max_name_len);
 

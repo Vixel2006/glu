@@ -4,7 +4,7 @@ const LOGS_DIR = "/tmp/glu/logs";
 const MAX_LOG_BUF: usize = 4096;
 
 /// Clean up the logs directory by deleting it entirely.
-pub fn cleanupLogs(io: std.Io) void {
+pub fn cleanup_logs(io: std.Io) void {
     const cwd = std.Io.Dir.cwd();
     cwd.deleteTree(io, LOGS_DIR) catch {};
 }
@@ -12,7 +12,7 @@ pub fn cleanupLogs(io: std.Io) void {
 /// Count the byte offset after the first `n` lines in `buf`.
 ///
 /// Used to extract the head of a log file.
-pub fn countHeadLines(buf: []const u8, n: u64) usize {
+pub fn count_head_lines(buf: []const u8, n: u64) usize {
     var end: usize = 0;
     var line_count: u64 = 0;
     while (end < buf.len) : (end += 1) {
@@ -27,7 +27,7 @@ pub fn countHeadLines(buf: []const u8, n: u64) usize {
 /// Count the byte offset of the start of the last `n` lines in `buf`.
 ///
 /// Used to extract the tail of a log file.
-pub fn countTailLines(buf: []const u8, n: u64) usize {
+pub fn count_tail_lines(buf: []const u8, n: u64) usize {
     var start: usize = 0;
     var line_count: u64 = 0;
     var i = buf.len;
@@ -49,7 +49,7 @@ pub fn countTailLines(buf: []const u8, n: u64) usize {
 ///
 /// Returns an owned slice allocated with `allocator`, or `null` if
 /// no matching log file is found. The caller must free the result.
-pub fn readLogHead(io: std.Io, allocator: std.mem.Allocator, logs_dir: []const u8, node: []const u8, n: u64) !?[]const u8 {
+pub fn read_log_head(io: std.Io, allocator: std.mem.Allocator, logs_dir: []const u8, node: []const u8, n: u64) !?[]const u8 {
     const cwd = std.Io.Dir.cwd();
     const dir = cwd.openDir(io, logs_dir, .{ .iterate = true }) catch return null;
     defer dir.close(io);
@@ -70,7 +70,7 @@ pub fn readLogHead(io: std.Io, allocator: std.mem.Allocator, logs_dir: []const u
             var buf: [MAX_LOG_BUF]u8 = undefined;
             _ = try file.readPositionalAll(io, buf[0..to_read], 0);
 
-            const end = countHeadLines(buf[0..to_read], n);
+            const end = count_head_lines(buf[0..to_read], n);
             if (end == 0) return null;
 
             return try allocator.dupe(u8, buf[0..end]);
@@ -83,7 +83,7 @@ pub fn readLogHead(io: std.Io, allocator: std.mem.Allocator, logs_dir: []const u
 ///
 /// Returns an owned slice allocated with `allocator`, or `null` if
 /// no matching log file is found. The caller must free the result.
-pub fn readLogTail(io: std.Io, allocator: std.mem.Allocator, logs_dir: []const u8, node: []const u8, n: u64) !?[]const u8 {
+pub fn read_log_tail(io: std.Io, allocator: std.mem.Allocator, logs_dir: []const u8, node: []const u8, n: u64) !?[]const u8 {
     const cwd = std.Io.Dir.cwd();
     const dir = cwd.openDir(io, logs_dir, .{ .iterate = true }) catch return null;
     defer dir.close(io);
@@ -105,7 +105,7 @@ pub fn readLogTail(io: std.Io, allocator: std.mem.Allocator, logs_dir: []const u
             var buf: [MAX_LOG_BUF]u8 = undefined;
             _ = try file.readPositionalAll(io, buf[0..to_read], offset);
 
-            const start = countTailLines(buf[0..to_read], n);
+            const start = count_tail_lines(buf[0..to_read], n);
             if (start >= to_read) return null;
 
             return try allocator.dupe(u8, buf[start..to_read]);
@@ -114,40 +114,40 @@ pub fn readLogTail(io: std.Io, allocator: std.mem.Allocator, logs_dir: []const u
     return null;
 }
 
-test "countHeadLines: fewer lines than requested returns full buffer" {
+test "count_head_lines: fewer lines than requested returns full buffer" {
     const buf = "line1\nline2\n";
-    try std.testing.expectEqual(@as(usize, buf.len), countHeadLines(buf, 10));
+    try std.testing.expectEqual(@as(usize, buf.len), count_head_lines(buf, 10));
 }
 
-test "countHeadLines: exact number of lines" {
+test "count_head_lines: exact number of lines" {
     const buf = "line1\nline2\nline3\n";
-    try std.testing.expectEqual(@as(usize, 18), countHeadLines(buf, 3));
+    try std.testing.expectEqual(@as(usize, 18), count_head_lines(buf, 3));
 }
 
-test "countHeadLines: empty buffer" {
-    try std.testing.expectEqual(@as(usize, 0), countHeadLines("", 5));
+test "count_head_lines: empty buffer" {
+    try std.testing.expectEqual(@as(usize, 0), count_head_lines("", 5));
 }
 
-test "countTailLines: fewer lines than requested returns full buffer" {
+test "count_tail_lines: fewer lines than requested returns full buffer" {
     const buf = "line1\nline2\n";
-    try std.testing.expectEqual(@as(usize, 0), countTailLines(buf, 10));
+    try std.testing.expectEqual(@as(usize, 0), count_tail_lines(buf, 10));
 }
 
-test "countTailLines: last two lines of three" {
+test "count_tail_lines: last two lines of three" {
     const buf = "line1\nline2\nline3\n";
-    try std.testing.expectEqual(@as(usize, 6), countTailLines(buf, 2));
+    try std.testing.expectEqual(@as(usize, 6), count_tail_lines(buf, 2));
 }
 
-test "countTailLines: last line only" {
+test "count_tail_lines: last line only" {
     const buf = "line1\nline2\nline3\n";
-    try std.testing.expectEqual(@as(usize, 12), countTailLines(buf, 1));
+    try std.testing.expectEqual(@as(usize, 12), count_tail_lines(buf, 1));
 }
 
-test "countTailLines: empty buffer" {
-    try std.testing.expectEqual(@as(usize, 0), countTailLines("", 5));
+test "count_tail_lines: empty buffer" {
+    try std.testing.expectEqual(@as(usize, 0), count_tail_lines("", 5));
 }
 
-test "readLogTail: reads matching log file" {
+test "read_log_tail: reads matching log file" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -159,13 +159,13 @@ test "readLogTail: reads matching log file" {
     const logs_dir = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&dir.sub_path});
     defer allocator.free(logs_dir);
 
-    const result = try readLogTail(io, allocator, logs_dir, "mynode", 10);
+    const result = try read_log_tail(io, allocator, logs_dir, "mynode", 10);
     try std.testing.expect(result != null);
     try std.testing.expectEqualStrings("hello from mynode", result.?);
     allocator.free(result.?);
 }
 
-test "readLogTail: no matching file silently returns null" {
+test "read_log_tail: no matching file silently returns null" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -177,11 +177,11 @@ test "readLogTail: no matching file silently returns null" {
     const logs_dir = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&dir.sub_path});
     defer allocator.free(logs_dir);
 
-    const result = try readLogTail(io, allocator, logs_dir, "mynode", 10);
+    const result = try read_log_tail(io, allocator, logs_dir, "mynode", 10);
     try std.testing.expect(result == null);
 }
 
-test "readLogHead: reads first lines of log file" {
+test "read_log_head: reads first lines of log file" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -193,7 +193,7 @@ test "readLogHead: reads first lines of log file" {
     const logs_dir = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&dir.sub_path});
     defer allocator.free(logs_dir);
 
-    const result = try readLogHead(io, allocator, logs_dir, "sensor", 2);
+    const result = try read_log_head(io, allocator, logs_dir, "sensor", 2);
     try std.testing.expect(result != null);
     try std.testing.expectEqualStrings("line1\nline2\n", result.?);
     allocator.free(result.?);

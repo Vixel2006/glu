@@ -21,8 +21,8 @@ pub const NodeEntry = struct {
 /// Register a node by name with an explicit PID.
 ///
 /// Writes a `.pid` file under `/tmp/glu/nodes/` so other processes can
-/// discover the node via `listAlive`.
-pub fn registerPid(name: []const u8, pid: u32) RegistryErr!void {
+/// discover the node via `list_alive`.
+pub fn register_pid(name: []const u8, pid: u32) RegistryErr!void {
     assert(name.len > 0);
     assert(pid > 0);
     const io = std.Io.Threaded.global_single_threaded.io();
@@ -68,7 +68,7 @@ pub fn unregister(name: []const u8) void {
 ///
 /// Uses `access(F_OK)` on `/proc/<pid>/status`, which is a cheap
 /// OS-level existence check with no privileges required.
-pub fn isAlive(pid: u32) bool {
+pub fn is_alive(pid: u32) bool {
     var buf: [64]u8 = undefined;
     const path_len = (std.fmt.bufPrint(&buf, "/proc/{d}/status", .{pid}) catch return false).len;
     buf[path_len] = 0;
@@ -78,9 +78,9 @@ pub fn isAlive(pid: u32) bool {
 /// List all registered nodes and their health status.
 ///
 /// Scans `/tmp/glu/nodes/*.pid` files, reads each PID, and calls
-/// `isAlive` to determine if the process is still running.
+/// `is_alive` to determine if the process is still running.
 /// Returns an owned slice allocated with `allocator`.
-pub fn listAlive(allocator: std.mem.Allocator) RegistryErr![]NodeEntry {
+pub fn list_alive(allocator: std.mem.Allocator) RegistryErr![]NodeEntry {
     var entries = std.ArrayList(NodeEntry).empty;
 
     const dirp = c.opendir(REGISTRY_DIR) orelse return entries.toOwnedSlice(allocator);
@@ -110,13 +110,13 @@ pub fn listAlive(allocator: std.mem.Allocator) RegistryErr![]NodeEntry {
         const pid = std.fmt.parseInt(u32, std.mem.trim(u8, content, " \n\r"), 10) catch continue;
 
         const name_copy = try allocator.dupe(u8, node_name);
-        try entries.append(allocator, .{ .name = name_copy, .pid = pid, .alive = isAlive(pid) });
+        try entries.append(allocator, .{ .name = name_copy, .pid = pid, .alive = is_alive(pid) });
     }
 
     return entries.toOwnedSlice(allocator);
 }
 
-test "register and listAlive" {
+test "register and list_alive" {
     const allocator = std.testing.allocator;
 
     const name = "glu-test-register-alive";
@@ -124,7 +124,7 @@ test "register and listAlive" {
 
     try register(name);
 
-    const entries = try listAlive(allocator);
+    const entries = try list_alive(allocator);
     defer {
         for (entries) |e| allocator.free(e.name);
         allocator.free(entries);
@@ -141,15 +141,15 @@ test "register and listAlive" {
     try std.testing.expect(found);
 }
 
-test "registerPid with explicit PID" {
+test "register_pid with explicit PID" {
     const allocator = std.testing.allocator;
 
     const name = "glu-test-register-pid";
     defer unregister(name);
 
-    try registerPid(name, 42);
+    try register_pid(name, 42);
 
-    const entries = try listAlive(allocator);
+    const entries = try list_alive(allocator);
     defer {
         for (entries) |e| allocator.free(e.name);
         allocator.free(entries);
@@ -173,7 +173,7 @@ test "unregister removes entry" {
 
     // Verify it exists
     {
-        const entries = try listAlive(allocator);
+        const entries = try list_alive(allocator);
         defer {
             for (entries) |e| allocator.free(e.name);
             allocator.free(entries);
@@ -191,7 +191,7 @@ test "unregister removes entry" {
 
     // Verify it's gone
     {
-        const entries = try listAlive(allocator);
+        const entries = try list_alive(allocator);
         defer {
             for (entries) |e| allocator.free(e.name);
             allocator.free(entries);
@@ -206,13 +206,13 @@ test "unregister nonexistent name does not crash" {
     unregister("glu-test-nonexistent-this-should-not-exist");
 }
 
-test "listAlive empty when no matching nodes" {
+test "list_alive empty when no matching nodes" {
     const allocator = std.testing.allocator;
 
     const name = "glu-test-list-empty";
     defer unregister(name);
 
-    const entries = try listAlive(allocator);
+    const entries = try list_alive(allocator);
     defer {
         for (entries) |e| allocator.free(e.name);
         allocator.free(entries);

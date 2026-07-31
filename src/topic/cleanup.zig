@@ -9,7 +9,7 @@ const Header = @import("../channel.zig").Header;
 ///
 /// Called on shutdown to clean up stale shared memory segments
 /// that may remain after a crash.
-pub fn cleanupTopics() void {
+pub fn cleanup_topics() void {
     const dirp = c.opendir("/dev/shm") orelse return;
     defer _ = c.closedir(dirp);
 

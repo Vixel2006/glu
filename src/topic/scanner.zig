@@ -3,7 +3,7 @@ const c = std.c;
 const os = std.os.linux;
 
 const Topic = @import("topic.zig").Topic;
-const slowestReader = @import("../channel.zig").slowestReader;
+const slowest_reader = @import("../channel.zig").slowest_reader;
 const MAX_READERS = @import("../channel.zig").MAX_READERS;
 
 pub const ScanErr = error{
@@ -30,7 +30,7 @@ pub const TopicEntry = struct {
 /// Returns an owned slice allocated with `allocator`. Each entry's
 /// `name` is also allocator-owned and must be freed individually.
 /// Returns `error.ShmDirInaccessible` if `/dev/shm` cannot be opened.
-pub fn scanTopics(allocator: std.mem.Allocator) ScanErr![]TopicEntry {
+pub fn scan_topics(allocator: std.mem.Allocator) ScanErr![]TopicEntry {
     var entries = std.ArrayList(TopicEntry).empty;
     errdefer {
         for (entries.items) |*e| e.deinit(allocator);
@@ -66,7 +66,7 @@ pub fn scanTopics(allocator: std.mem.Allocator) ScanErr![]TopicEntry {
             .capacity = hdr.capacity,
             .conns = hdr.conns,
             .write_pos = hdr.write,
-            .read_pos = slowestReader(&read_vals, hdr.write),
+            .read_pos = slowest_reader(&read_vals, hdr.write),
         });
     }
 

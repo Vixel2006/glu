@@ -1,3 +1,4 @@
+pub const IO = @import("io.zig").IO;
 pub const Channel = @import("channel.zig").Channel;
 pub const GLU_MAGIC = @import("channel.zig").GLU_MAGIC;
 pub const ToS = @import("channel.zig").ToS;
@@ -12,12 +13,6 @@ pub const debug = @import("debug/mod.zig");
 pub const net = @import("transport/net.zig");
 pub const tcp = @import("transport/tcp.zig");
 pub const udp = @import("transport/udp.zig");
-
-const zio = @import("zio");
-pub const Runtime = zio.Runtime;
-pub const RuntimeOptions = zio.RuntimeOptions;
-pub const Duration = zio.Duration;
-pub const sleep = zio.sleep;
 
 comptime {
     _ = @import("channel.zig");

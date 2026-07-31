@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub fn logErr(comptime ctx: []const u8, err: anyerror) void {
+pub fn log_err(comptime ctx: []const u8, err: anyerror) void {
     const io = std.Io.Threaded.global_single_threaded.io();
     var fw = std.Io.File.stderr().writerStreaming(io, &.{});
     const w = &fw.interface;
@@ -15,6 +15,6 @@ pub fn writer(init: std.process.Init) std.Io.File.Writer {
     return std.Io.File.stdout().writerStreaming(init.io, &.{});
 }
 
-pub fn errWriter(init: std.process.Init) std.Io.File.Writer {
+pub fn err_writer(init: std.process.Init) std.Io.File.Writer {
     return std.Io.File.stderr().writerStreaming(init.io, &.{});
 }

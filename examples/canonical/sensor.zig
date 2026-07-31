@@ -2,6 +2,8 @@ const std = @import("std");
 const glu = @import("glu");
 const msgs = @import("msgs.zig");
 
+const IO = glu.IO;
+
 const topic_temp = "/temperature";
 const topic_status = "/sensor_status";
 const capacity = 4096;
@@ -15,14 +17,22 @@ fn milliTimestamp() i64 {
         @divTrunc(@as(i64, @intCast(ts.nsec)), std.time.ns_per_ms);
 }
 
+fn sleep(ms: u64) void {
+    var ts = std.os.linux.timespec{
+        .sec = @as(i64, @intCast(ms / 1000)),
+        .nsec = @as(i64, @intCast((ms % 1000) * 1_000_000)),
+    };
+    _ = std.os.linux.nanosleep(&ts, null);
+}
+
 pub fn main() void {
     const allocator = std.heap.page_allocator;
 
-    var rt = glu.Runtime.init(allocator, .{}) catch |e| {
-        std.debug.print("[sensor] Runtime init failed: {}\n", .{e});
+    var io = IO.init(32, 0) catch |e| {
+        std.debug.print("[sensor] IO init failed: {}\n", .{e});
         return;
     };
-    defer rt.deinit();
+    defer io.deinit();
 
     var temp_pub = glu.Publisher.init(allocator, topic_temp, @sizeOf(msgs.TemperatureReading), capacity, .reliable) catch |e| {
         std.debug.print("[sensor] publisher init failed: {}\n", .{e});
@@ -39,14 +49,14 @@ pub fn main() void {
     glu.registry.register(node_name) catch {};
     defer glu.registry.unregister(node_name);
 
-    var udp_sock = glu.udp.bind(0, .{}) catch |e| {
+    var udp_sock = glu.udp.bind(&io, 0, .{}) catch |e| {
         std.debug.print("[sensor] UDP bind failed: {}\n", .{e});
         return;
     };
     defer glu.udp.close(&udp_sock);
 
     std.debug.print(
-        "[sensor] temperature sensor node (zio)\n" ++
+        "[sensor] temperature sensor node (glu)\n" ++
         "[sensor]   {s} @ {d} Hz  (zero-copy)\n" ++
         "[sensor]   {s} @  1 Hz  (publish)\n" ++
         "[sensor]   Ctrl-C to stop\n",
@@ -97,7 +107,7 @@ pub fn main() void {
             status_pub.publish(@ptrCast(&status));
             seq_status += 1;
 
-            _ = glu.udp.sendTo(&udp_sock, "127.0.0.1", 9997, "sensor_alive") catch {};
+            _ = glu.udp.send_to(&io, udp_sock, "127.0.0.1", 9997, "sensor_alive") catch {};
         }
 
         if (seq_temp > 0 and seq_temp % (rate_hz * 5) == 0) {
@@ -107,6 +117,6 @@ pub fn main() void {
             );
         }
 
-        rt.sleep(glu.Duration.fromMilliseconds(interval_ms)) catch {};
+        sleep(interval_ms);
     }
 }

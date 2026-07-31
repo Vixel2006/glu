@@ -2,7 +2,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const c = std.c;
 const mem = std.mem;
-const zio = @import("zio");
+const posix = std.posix;
 
 pub const Endpoint = struct {
     host: [46]u8,
@@ -10,20 +10,20 @@ pub const Endpoint = struct {
     port: u16,
 };
 
-pub fn addressToEndpoint(addr: zio.net.Address) Endpoint {
+pub fn address_to_endpoint(addr: posix.sockaddr.in) Endpoint {
     var ep = Endpoint{ .host = undefined, .host_len = 0, .port = 0 };
-    if (addr.any.family == std.os.linux.AF.INET) {
-        ep.port = addr.ip.getPort();
-        const bytes: *const [4]u8 = @ptrCast(&addr.ip.in.addr);
-        ep.host_len = (std.fmt.bufPrint(&ep.host, "{d}.{d}.{d}.{d}", .{ bytes[0], bytes[1], bytes[2], bytes[3] }) catch unreachable).len;
-    }
+    ep.port = @byteSwap(addr.port);
+    const bytes: *const [4]u8 = @ptrCast(&addr.addr);
+    ep.host_len = (std.fmt.bufPrint(&ep.host, "{d}.{d}.{d}.{d}", .{ bytes[0], bytes[1], bytes[2], bytes[3] }) catch unreachable).len;
     return ep;
 }
 
-test "addressToEndpoint from IPv4" {
-    const ip = zio.net.IpAddress.initIp4(.{ 127, 0, 0, 1 }, 8080);
-    const addr = zio.net.Address{ .ip = ip };
-    const ep = addressToEndpoint(addr);
+test "address_to_endpoint from IPv4" {
+    const addr: posix.sockaddr.in = .{
+        .port = @byteSwap(@as(u16, 8080)),
+        .addr = @bitCast(@as([4]u8, .{ 127, 0, 0, 1 })),
+    };
+    const ep = address_to_endpoint(addr);
     try std.testing.expectEqual(@as(u16, 8080), ep.port);
     try std.testing.expectEqualStrings("127.0.0.1", ep.host[0..ep.host_len]);
 }

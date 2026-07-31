@@ -1,12 +1,12 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 const topic = @import("../topic/mod.zig");
-const slowestReader = @import("../channel.zig").slowestReader;
+const slowest_reader = @import("../channel.zig").slowest_reader;
 const MAX_READERS = @import("../channel.zig").MAX_READERS;
 const Header = @import("../channel.zig").Header;
 
 /// Show detailed info about a topic (`glu info <topic>`).
-pub fn cmdInfo(init: std.process.Init, args: *std.process.Args.Iterator) !void {
+pub fn cmd_info(init: std.process.Init, args: *std.process.Args.Iterator) !void {
     var fw = utils.writer(init);
     const w = &fw.interface;
 
@@ -34,7 +34,7 @@ pub fn cmdInfo(init: std.process.Init, args: *std.process.Args.Iterator) !void {
     const data_size = hdr.msg_size * hdr.capacity;
     var read_vals: [MAX_READERS]u32 = undefined;
     @memcpy(&read_vals, &hdr.read);
-    const slowest = slowestReader(&read_vals, hdr.write);
+    const slowest = slowest_reader(&read_vals, hdr.write);
     const depth = hdr.write -% slowest;
     const pct = if (hdr.capacity > 0) @as(f64, @floatFromInt(depth)) / @as(f64, @floatFromInt(hdr.capacity)) * 100.0 else 0.0;
 

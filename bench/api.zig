@@ -39,12 +39,12 @@ fn resetSubscriber() void {
     sub_channel.channel.header.read[0] = 0;
 }
 
-pub fn benchPublisherPublish(allocator: std.mem.Allocator) void {
+pub fn bench_publisher_publish(allocator: std.mem.Allocator) void {
     _ = allocator;
     pub_channel.publish(TestMsg, &.{ .x = 42, .y = 99 });
 }
 
-pub fn benchSubscriberReceive(allocator: std.mem.Allocator) void {
+pub fn bench_subscriber_receive(allocator: std.mem.Allocator) void {
     _ = allocator;
     const msg = sub_channel.receive(TestMsg);
     std.mem.doNotOptimizeAway(msg);

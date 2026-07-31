@@ -3,7 +3,7 @@ const utils = @import("utils.zig");
 const debug = @import("../debug/mod.zig");
 
 /// Print logs for a node (`glu logs [--tail <n>] [--head <n>] <node>`).
-pub fn cmdLogs(init: std.process.Init, args: *std.process.Args.Iterator, logs_dir: []const u8) !void {
+pub fn cmd_logs(init: std.process.Init, args: *std.process.Args.Iterator, logs_dir: []const u8) !void {
     var tail: ?u64 = null;
     var head: ?u64 = null;
     var node: ?[]const u8 = null;
@@ -27,24 +27,24 @@ pub fn cmdLogs(init: std.process.Init, args: *std.process.Args.Iterator, logs_di
     }
 
     const node_name = node orelse {
-        var ew = utils.errWriter(init);
+        var ew = utils.err_writer(init);
         ew.interface.print("usage: glu logs [--tail <n>] [--head <n>] <node>\n", .{}) catch {};
         return error.MissingArgument;
     };
 
     if (tail == null and head == null) tail = 10;
 
-    var ew = utils.errWriter(init);
+    var ew = utils.err_writer(init);
     const w = &ew.interface;
 
     if (head) |n| {
-        const content = try debug.readLogHead(init.io, init.gpa, logs_dir, node_name, n);
+        const content = try debug.read_log_head(init.io, init.gpa, logs_dir, node_name, n);
         if (content) |c| {
             defer init.gpa.free(c);
             try w.print("{s}\n", .{c});
         }
     } else if (tail) |n| {
-        const content = try debug.readLogTail(init.io, init.gpa, logs_dir, node_name, n);
+        const content = try debug.read_log_tail(init.io, init.gpa, logs_dir, node_name, n);
         if (content) |c| {
             defer init.gpa.free(c);
             try w.print("{s}\n", .{c});
@@ -77,6 +77,6 @@ test "logs: missing argument returns error" {
 
     var args_iter = std.process.Args.Iterator.init(init.minimal.args);
 
-    const err = cmdLogs(init, &args_iter, "/nonexistent");
+    const err = cmd_logs(init, &args_iter, "/nonexistent");
     try std.testing.expectError(error.MissingArgument, err);
 }

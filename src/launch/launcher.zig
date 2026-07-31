@@ -53,7 +53,7 @@ pub fn launch(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig
             .stderr = .inherit,
         }) catch return LaunchErr.FileSystem;
         allocator.free(argv);
-        if (child.id) |pid| Registry.registerPid(cfg.name, @intCast(pid)) catch {};
+        if (child.id) |pid| Registry.register_pid(cfg.name, @intCast(pid)) catch {};
         launched.appendAssumeCapacity(.{ .name = cfg.name, .child = child });
     }
 
@@ -64,7 +64,7 @@ pub fn launch(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig
 ///
 /// Each node's stdout/stderr is redirected to a log file in `logs_dir`.
 /// Nodes are registered in the registry for lifecycle management.
-pub fn launchDetached(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig, logs_dir: []const u8) LaunchErr!void {
+pub fn launch_detached(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig, logs_dir: []const u8) LaunchErr!void {
     assert(logs_dir.len > 0);
     const cwd = std.Io.Dir.cwd();
     cwd.createDirPath(io, logs_dir) catch return LaunchErr.FileSystem;
@@ -90,7 +90,7 @@ pub fn launchDetached(io: std.Io, allocator: std.mem.Allocator, cfgs: []const No
             continue;
         };
         allocator.free(argv);
-        if (child.id) |pid| Registry.registerPid(cfg.name, @intCast(pid)) catch {};
+        if (child.id) |pid| Registry.register_pid(cfg.name, @intCast(pid)) catch {};
     }
 }
 
@@ -158,7 +158,7 @@ test "launch with extra arguments" {
     try std.testing.expectEqual(term, std.process.Child.Term{ .exited = 0 });
 }
 
-test "launchDetached: creates log directory" {
+test "launch_detached: creates log directory" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -168,14 +168,14 @@ test "launchDetached: creates log directory" {
     const logs_dir = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/logs_test", .{&dir.sub_path});
     defer allocator.free(logs_dir);
 
-    try launchDetached(io, allocator, &.{}, logs_dir);
+    try launch_detached(io, allocator, &.{}, logs_dir);
 
     const cwd = std.Io.Dir.cwd();
     var opened = try cwd.openDir(io, logs_dir, .{ .iterate = true });
     opened.close(io);
 }
 
-test "launchDetached: creates log file with process output" {
+test "launch_detached: creates log file with process output" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
@@ -189,7 +189,7 @@ test "launchDetached: creates log file with process output" {
         .{ .name = "echo_node", .bin = "/bin/echo", .extra_cfg = &.{"hello from detached"} },
     };
 
-    try launchDetached(io, allocator, cfgs, logs_dir);
+    try launch_detached(io, allocator, cfgs, logs_dir);
 
     try std.Io.sleep(io, std.Io.Duration.fromMilliseconds(50), .awake);
 

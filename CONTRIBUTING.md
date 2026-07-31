@@ -109,7 +109,7 @@ we keep it simple. glu's code style matches what zig's standard library uses.
 ### naming
 
 - **types**: `PascalCase` — `Publisher`, `Subscriber`, `ChannelHeader`
-- **functions**: `camelCase` — `init()`, `deinit()`, `publish()`, `receive()`
+- **functions**: `snake_case` — `init()`, `deinit()`, `send_to()`, `recv_from()`
 - **variables**: `snake_case` — `allocator`, `write_cursor`, `msg_size`
 - **files**: `snake_case` — `channel.zig`, `codegen.zig`, `launch.toml`
 
