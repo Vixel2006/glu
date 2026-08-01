@@ -15,6 +15,7 @@ pub const tcp = @import("transport/tcp.zig");
 pub const udp = @import("transport/udp.zig");
 
 comptime {
+    _ = @import("io.zig");
     _ = @import("channel.zig");
     _ = @import("api/publisher.zig");
     _ = @import("api/subscriber.zig");

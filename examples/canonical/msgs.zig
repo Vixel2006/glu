@@ -22,10 +22,3 @@ pub const FilteredTemperature = struct {
     humidity: f32,
     sample_count: u32,
 };
-
-pub const AlertMessage = struct {
-    seq: u32,
-    timestamp: i64,
-    severity: u8,
-    message: [64]u8,
-};

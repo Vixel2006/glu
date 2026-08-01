@@ -9,14 +9,50 @@ const topic_status = "/sensor_status";
 const node_name = "temperature_dashboard";
 const capacity = 4096;
 const tcp_port: u16 = 9999;
-const alert_port: u16 = 9998;
 const tick_rate_hz = 200;
 
-fn milliTimestamp() i64 {
-    var ts: std.os.linux.timespec = undefined;
-    _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.REALTIME, &ts);
-    return @as(i64, @intCast(ts.sec)) * 1000 +
-        @divTrunc(@as(i64, @intCast(ts.nsec)), std.time.ns_per_ms);
+fn sendToSync(io: *IO, socket: glu.udp.Socket, host: []const u8, port: u16, data: []const u8) !void {
+    const SyncState = struct {
+        done: bool = false,
+        result: IO.SendToError!usize = undefined,
+    };
+    const cb = struct {
+        fn call(ctx: *SyncState, _: *IO.Completion, res: IO.SendToError!usize) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+    var compl: IO.Completion = undefined;
+    var state = SyncState{};
+    try glu.udp.send_to(io, *SyncState, &state, cb, &compl, socket, host, port, data);
+    while (!state.done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    _ = try state.result;
+}
+
+fn acceptSync(io: *IO, server: *glu.tcp.Server) !glu.tcp.Stream {
+    const SyncState = struct {
+        done: bool = false,
+        result: IO.AcceptError!glu.tcp.Stream = undefined,
+    };
+    const cb = struct {
+        fn call(ctx: *SyncState, _: *IO.Completion, res: IO.AcceptError!glu.tcp.Stream) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+    var compl: IO.Completion = undefined;
+    var state = SyncState{};
+    try glu.tcp.accept(io, *SyncState, &state, cb, &compl, server, .{});
+    while (!state.done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    return state.result;
 }
 
 fn sleep(ms: u64) void {
@@ -54,7 +90,7 @@ fn runDisplay(allocator: std.mem.Allocator) void {
 
     std.debug.print(
         "[dashboard/tx] display + registry monitor (glu)\n" ++
-        "[dashboard/tx]   Ctrl-C to stop\n",
+            "[dashboard/tx]   Ctrl-C to stop\n",
         .{},
     );
 
@@ -96,9 +132,10 @@ fn runDisplay(allocator: std.mem.Allocator) void {
                 allocator.free(entries);
             } else |_| {}
 
-            _ = glu.udp.send_to(&io, udp_sock, "127.0.0.1", 9997, "dashboard_alive") catch {};
+            sendToSync(&io, udp_sock, "127.0.0.1", 9997, "dashboard_alive") catch {};
         }
 
+        io.run(0) catch {};
         sleep(1000 / tick_rate_hz);
     }
 }
@@ -124,18 +161,14 @@ fn runTcpServer() void {
     };
     defer glu.tcp.close_server(&server);
 
-    std.debug.print(
-        "[dashboard/tcp] listening on :{d} (glu)\n",
-        .{tcp_port},
-    );
+    std.debug.print("[dashboard/tcp] listening on :{d} (glu)\n", .{tcp_port});
 
     while (true) {
-        var stream = glu.tcp.accept(&io, &server, .{}) catch |e| {
+        var stream = acceptSync(&io, &server) catch |e| {
             std.debug.print("[dashboard/tcp] accept error: {}\n", .{e});
             sleep(100);
             continue;
         };
-        defer glu.tcp.close(&stream);
 
         std.debug.print("[dashboard/tcp] client connected\n", .{});
 
@@ -147,27 +180,26 @@ fn runTcpServer() void {
             }
 
             if (latest) |data| {
-                const bytes = std.mem.asBytes(&data);
-                glu.tcp.send(&stream, bytes) catch break;
+                glu.tcp.send(&io, &stream, std.mem.asBytes(&data)) catch break;
             }
 
+            io.run(0) catch {};
             sleep(1000 / tick_rate_hz);
         }
+        glu.tcp.close(&stream);
     }
 }
 
 pub fn main() void {
-    const allocator = std.heap.page_allocator;
-
     glu.registry.register(node_name) catch {};
     defer glu.registry.unregister(node_name);
 
     std.debug.print(
         "[dashboard] temperature monitor\n" ++
-        "[dashboard]   {s} ← filtered data\n" ++
-        "[dashboard]   {s} ← sensor status\n" ++
-        "[dashboard]   TCP :{d}  (connect with companion python client)\n" ++
-        "[dashboard]   Ctrl-C to stop\n",
+            "[dashboard]   {s} ← filtered data\n" ++
+            "[dashboard]   {s} ← sensor status\n" ++
+            "[dashboard]   TCP :{d}  (connect with companion python client)\n" ++
+            "[dashboard]   Ctrl-C to stop\n",
         .{ topic_filtered, topic_status, tcp_port },
     );
 
@@ -177,10 +209,11 @@ pub fn main() void {
         runTcpServer();
         std.c.exit(0);
     } else if (pid > 0) {
+        const allocator = std.heap.page_allocator;
         runDisplay(allocator);
         _ = std.c.kill(pid, std.posix.SIG.TERM);
         _ = std.c.waitpid(pid, null, 0);
     } else {
-        std.debug.print("[dashboard] fork failed\n", {});
+        std.debug.print("[dashboard] fork failed\n", .{});
     }
 }

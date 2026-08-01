@@ -100,6 +100,10 @@ pub fn send_to(
     try io.send_to(Context, context, callback, completion, socket, data, addr);
 }
 
+pub fn close(socket: *Socket) void {
+    _ = c.close(socket.*);
+}
+
 pub fn receive_from(
     io: *IO,
     comptime Context: type,
@@ -267,7 +271,7 @@ test "send_to and receive_from round-trip" {
     while (!ctx.send_done or !ctx.recv_done) {
         try io.submit(1);
         try io.complete(1);
-        try io.complete_all();
+        try io.run_callback();
     }
 
     const sent_bytes = try ctx.send_result.?;

@@ -1,136 +1,151 @@
-# orchestration & CLI tools
+# GLU Orchestration & CLI
 
-becuase we know managing 20 terminal windows just to run a robot navigation stack is a nightmare. `glu` has a built-in process manager and diagnostic suite packed right into our single binary. 
+Managing multiple processes, console logs, and diagnostic states across a robot system can be complex. `glu` has a built-in process manager, runner, and diagnostic toolset packed directly into its single executable binary.
 
-no master node. no daemon servers. just a simple TOML configuration and clean shell commands.
+No master nodes, background daemons, or complex configuration layers required. Just a simple TOML configuration file and clean command-line tools.
 
 ---
 
-## configuration: `launch.toml`
+## 1. Process Configuration: `launch.toml`
 
-to configure your robot node ecosystem, write a `launch.toml` file in your workspace root. 
+To manage your node ecosystem, write a `launch.toml` file in your workspace root. Slashes (`#`) define comments.
 
-you can launch compiled binaries, or run raw `.zig` source files directly (super helpful for rapid hacking):
+You can launch precompiled binaries or execute raw `.zig` source files on the fly:
 
 ```toml
 # launch.toml
 
-# launch a compiled binary
+# Launch a compiled binary with arguments
 [[node]]
 name = "lidar_driver"
 bin  = "zig-out/bin/rplidar_node"
 extra_cfg = ["--serial-port", "/dev/ttyUSB0", "--baud", "115200"]
 
-# launch a raw zig file directly (glu runs: zig run src/tracker.zig -- args)
+# Compile and run a raw Zig script directly
 [[node]]
 name = "tracker"
 path = "src/tracker.zig"
 extra_cfg = ["--fps", "30", "--threshold", "0.85"]
 ```
 
-### configuration schema
-- `name`: string name of the node. this registers the process name in the `/tmp/glu/nodes/` PID tracker.
-- `bin`: absolute or relative path to a compiled binary.
-- `path`: (optional) path to a `.zig` file to compile and execute on the fly using `zig run`.
-- `extra_cfg`: (optional) string array of arguments passed directly to the node executable.
+### Configuration Keys:
+*   `name` (string): Unique identifier for the process. This registration name is tracked in the node registry.
+*   `bin` (string): Absolute or relative path to a precompiled executable binary.
+*   `path` (string): Path to a `.zig` source file to compile and execute on the fly using `zig run`.
+*   `extra_cfg` (array of strings, optional): Command line arguments passed directly to the node.
 
 ---
 
-## cli reference
+## 2. Command Line Reference
 
-run `glu` in your shell to see all available commands. they're designed to be fast and simple.
+Running `glu` in your shell displays the helper console. The CLI commands are fast and straightforward.
 
-### 1. launch nodes
+```
+usage: glu <command> [args]
+
+commands:
+  launch   Launch nodes from a TOML config file
+  list     List active topics in shared memory
+  info     Show detailed info about a topic
+  ps       List registered nodes
+  logs     Print out all the logs for a specific node when launching with -d flag
+  down     Stop all running nodes
+```
+
+---
+
+### `glu launch`
+Spawns all nodes defined in the TOML configuration file.
+
 ```bash
 glu launch -f launch.toml
 ```
-spawns all nodes in the config. logs are streamed straight to your current shell. press `Ctrl+C` to terminate all of them cleanly.
 
-#### background mode (detached daemons):
+By default, child processes run in the foreground, streaming stdout and stderr to the shell. Pressing `Ctrl+C` triggers a signal handler that terminates all child processes cleanly and unregisters them.
+
+#### Background (Detached) Mode:
 ```bash
 glu launch -f launch.toml -d
 ```
-runs the nodes in the background, redirecting output to `/dev/null` and saving the child process IDs under `/tmp/glu/nodes/`. 
+Runs the nodes in the background. Their PIDs are stored under `/tmp/glu/nodes/`, and their outputs are automatically redirected to log files under `/tmp/glu/logs/<node_name>.log`.
 
 ---
 
-### 2. inspect running nodes (`glu ps`)
+### `glu ps`
+Queries the local node registry to list all registered processes, showing their names, PIDs, and active status.
+
 ```bash
 glu ps
 ```
-reads the node registry to list all registered processes, showing their names, PIDs, and active status.
 
-example output:
+**Example Output:**
 ```
 node          pid      status
 -----------------------------
-lidar_driver  48202    active
-tracker       48205    active
+lidar_driver  12095    active
+tracker       12098    active
 ```
-under the hood, this simply verifies if `/proc/<pid>/status` exists. no network round-trips.
+*Note: Under the hood, this simply verifies if `/proc/<pid>/status` exists, resulting in sub-microsecond execution time.*
 
 ---
 
-### 3. list active topics (`glu list`)
+### `glu list` (or `glu ls`)
+Scans `/dev/shm` to list all currently active communication topics.
+
 ```bash
 glu list
-# or
-glu ls
 ```
-scans the directory space to display all active communication topics.
 
 ---
 
-### 4. diagnostic topic inspection (`glu info`)
-want to see if a publisher is running too fast, or if a subscriber is blocking the channel? 
+### `glu info`
+Retrieves detailed runtime diagnostics directly from the POSIX shared memory header of a given topic.
 
 ```bash
-glu info /joint_states
+glu info /filtered_temp
 ```
 
-example output:
+**Example Output:**
 ```
-topic:           /joint_states
+topic:           /filtered_temp
 magic:           GLU\0
-message size:    24 bytes
-capacity:        1024 slots
+message size:    32 bytes
+capacity:        4096 slots
 connections:     2 active connections
-write cursor:    1012
+write cursor:    10482
 subscribers:
-  [sub 0]:       1012 (active, synced with publisher)
-  [sub 1]:       959 (active, lagging behind by 53 messages!)
+  [sub 0]:       10482 (active, synced with publisher)
+  [sub 1]:       10402 (active, lagging behind by 80 messages!)
   [sub 2..7]:    inactive
 ```
-this prints the actual structure of the POSIX shared memory header so you know exactly which subscriber is holding up the publishers.
+*This is invaluable for debugging pipeline bottlenecks, showing which subscriber is running slowly and holding up the publisher.*
 
 ---
 
-### 5. view node logs (`glu logs`)
-when running in detached mode (`-d`), each node's stdout and stderr are saved to `/tmp/glu/logs/<node>.log`. use `glu logs` to inspect them:
+### `glu logs`
+View log files generated by background nodes launched with the `-d` flag.
 
 ```bash
-glu logs <node>
+glu logs <node_name>
 ```
-prints the last 10 lines of the node's log file (default).
+Prints the last 10 lines of the node's log file (default).
 
+#### Tail log outputs:
 ```bash
-glu logs --tail 50 <node>
+glu logs --tail 50 <node_name>
 ```
-prints the last 50 lines.
 
+#### Head log outputs:
 ```bash
-glu logs --head 20 <node>
+glu logs --head 20 <node_name>
 ```
-prints the first 20 lines.
-
-output is capped at 4096 bytes per read.
 
 ---
 
-### 6. teardown (`glu down`)
-if you launched nodes with `-d` (detached mode) and want to shut down your robot system, run:
+### `glu down`
+Gracefully stops your detached robot node system.
 
 ```bash
 glu down
 ```
-this sends a termination signal to all registered PIDs in `/tmp/glu/nodes` and deletes the stale files. clean exit.
+Sends a termination signal (`SIGTERM`) to all active process IDs registered in `/tmp/glu/nodes/` and cleans up stale registration files.

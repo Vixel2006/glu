@@ -220,7 +220,7 @@ pub fn send(io: *IO, stream: *Stream, data: []const u8) !void {
         while (!state.done) {
             try io.submit(1);
             try io.complete(1);
-            try io.complete_all();
+            try io.run_callback();
         }
         _ = try state.result;
     }
@@ -232,7 +232,7 @@ pub fn send(io: *IO, stream: *Stream, data: []const u8) !void {
         while (!state.done) {
             try io.submit(1);
             try io.complete(1);
-            try io.complete_all();
+            try io.run_callback();
         }
         _ = try state.result;
     }
@@ -263,7 +263,7 @@ pub fn receive(io: *IO, stream: *Stream, buffer: []u8) !usize {
         while (!state.done) {
             try io.submit(1);
             try io.complete(1);
-            try io.complete_all();
+            try io.run_callback();
         }
         const n = try state.result;
         if (n == 0) return error.ConnectionResetByPeer;
@@ -285,7 +285,7 @@ pub fn receive(io: *IO, stream: *Stream, buffer: []u8) !usize {
                 while (!state.done) {
                     try io.submit(1);
                     try io.complete(1);
-                    try io.complete_all();
+                    try io.run_callback();
                 }
                 const n = try state.result;
                 if (n == 0) return error.ConnectionResetByPeer;
@@ -304,7 +304,7 @@ pub fn receive(io: *IO, stream: *Stream, buffer: []u8) !usize {
         while (!state.done) {
             try io.submit(1);
             try io.complete(1);
-            try io.complete_all();
+            try io.run_callback();
         }
         const n = try state.result;
         if (n == 0) return error.ConnectionResetByPeer;
@@ -380,7 +380,7 @@ test "listen + connect + accept round-trip" {
     while (!ctx.connect_done or !ctx.accept_done) {
         try io.submit(1);
         try io.complete(1);
-        try io.complete_all();
+        try io.run_callback();
     }
 
     var stream = try ctx.connect_result.?;
@@ -435,7 +435,7 @@ test "send and receive data" {
     while (!ctx.connect_done or !ctx.accept_done) {
         try io.submit(1);
         try io.complete(1);
-        try io.complete_all();
+        try io.run_callback();
     }
 
     var stream = try ctx.connect_result.?;
@@ -495,7 +495,7 @@ test "empty message round-trip" {
     while (!ctx.connect_done or !ctx.accept_done) {
         try io.submit(1);
         try io.complete(1);
-        try io.complete_all();
+        try io.run_callback();
     }
 
     var stream = try ctx.connect_result.?;

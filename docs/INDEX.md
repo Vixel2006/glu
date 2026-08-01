@@ -1,28 +1,31 @@
-# glu docs
+# GLU Documentation Index
 
-welcome to the `glu` docs. if you're tired of setting up 15 environment variables, downloading 4GB of docker images, and waiting 10 minutes for your robot middleware to compile a "hello world" node, you're in the right place. 
+Welcome to the **glu** documentation! If you are looking for a high-performance, developer-friendly, and lightweight middleware for robotics, you are in the right place. 
 
-`glu` is a blazingly fast, zero-dependency robot middleware written in [Zig](https://ziglang.org/). no enterprise synergy, no DDS tax, no bloated layers of abstract factories. just raw, deterministic, lock-free, zero-copy process communication.
-
-here's how we're doing things:
-
-## documentation map
-
-- [quickstart](../README.md#quickstart) — from zero to running your first node in 60 seconds. compiling faster than you can check twitter.
-- [api reference](./api.md) — how to use `glu.Publisher`, `glu.Subscriber`, `glu.tcp`, and `glu.udp` without reading a 500-page manual.
-- [architecture](./architecture.md) — under the hood. lock-free ring buffers, POSIX shared memory (`/dev/shm`), and how we keep it zero-copy.
-- [orchestration & cli](./launch.md) — orchestrating your nodes using `launch.toml` and managing them via CLI. 
+`glu` is a zero-dependency, lock-free robot middleware written in [Zig](https://ziglang.org/). It is designed to replace bloated, complex systems (like ROS 2 / DDS) with raw, deterministic, zero-copy process communication.
 
 ---
 
-## why glu? (tl;dr)
+## Documentation Map
 
-| the old way (ROS2 / DDS) | the glu way |
-| :--- | :--- |
-| requires a whole ubuntu distro lock-in | runs anywhere with libc & POSIX |
-| cmake + colcon + xml + yaml = build times that make you cry | `zig build` with parallel, cached builds |
-| DDS discovery taking seconds (or just randomly dying) | sub-millisecond file-based registry |
-| gigabytes of runtime dependencies | ~2MB single standalone binary, zero runtime deps |
-| heavy serialization, copying, context-switches | zero-copy shared memory rings |
+To help you get started and master `glu` quickly, we've structured our documentation into the following guides:
 
-fr, robots deserve better than 2004-era enterprise Java architecture repackaged in C++. let's build something clean.
+*   **[API Reference](file:///home/vixel/code/glu/docs/api.md)**: A complete reference of the `glu` API, featuring detailed signatures and verified code examples for Shared Memory Pub/Sub, `glu.IO` (io_uring), TCP, UDP, and the Node Registry.
+*   **[Architecture & Internals](file:///home/vixel/code/glu/docs/architecture.md)**: Under the hood. Learn how our packed memory layouts, lock-free ring buffers, slowest-reader backpressure, and file-based registry keep things ultra-fast and robust.
+*   **[Orchestration & CLI](file:///home/vixel/code/glu/docs/launch.md)**: Configure your node ecosystem with `launch.toml` and manage live processes easily using CLI commands like `glu launch`, `glu ps`, and `glu info`.
+
+---
+
+## Why GLU? (TL;DR)
+
+If you have worked with ROS 2 or other enterprise middleware, here is how `glu` compares:
+
+| Feature / Aspect | The Old Way (ROS 2 / DDS) | The GLU Way |
+| :--- | :--- | :--- |
+| **Dependencies** | Gigabytes of runtime dependencies, Ubuntu lock-in | Zero runtime dependencies, runs on any POSIX system |
+| **Build System** | `cmake` + `colcon` + XML/YAML; long build times | `zig build` with parallel, cached compilation |
+| **Discovery** | DDS discovery taking seconds (or failing randomly) | Sub-millisecond local file-based node registry |
+| **Footprint** | Heavy system footprint | ~2MB standalone executable binary |
+| **Overhead** | Complex serialization, copies, kernel context-switches | Zero-copy shared memory rings (acquire/release) |
+
+Robots deserve clean, modern, and high-performance developer tools. Let's build something clean!

@@ -1,4 +1,5 @@
 const std = @import("std");
+const time = @import("time.zig");
 const Queue = @import("queue.zig").Queue;
 const assert = std.debug.assert;
 const os = std.os;
@@ -14,10 +15,10 @@ fn unexpected_errno(name: []const u8, err: posix.E) posix.UnexpectedError {
     return posix.unexpectedErrno(err);
 }
 
-
 pub const IO = struct {
     ring: IoUring,
     completed: Queue(Completion),
+    inflight: u32 = 0,
 
     pub fn init(entries: u16, flags: u32) !IO {
         var ring: IoUring = try .init(entries, flags);
@@ -36,13 +37,22 @@ pub const IO = struct {
         self.ring.deinit();
     }
 
-    pub fn enqueue(self: *IO, completion: *Completion) !void {
-        const sqe = try self.ring.get_sqe();
-        completion.prep(sqe);
+    pub fn run(self: *IO, nanoseconds: u64) !void {
+        const deadline = time.monotonic() + nanoseconds;
+
+        while (true) {
+            try self.submit(0);
+            if (self.inflight == 0) break;
+            try self.complete(1);
+            try self.run_callback();
+            if (time.monotonic() >= deadline) break;
+        }
+
+        try self.submit(0);
     }
 
     pub fn submit(self: *IO, wait_nr: u32) !void {
-        const queued = self.ring.sq.tail.* -% self.ring.sq.head.*;
+        const queued = self.ring.sq.sqe_tail -% self.ring.sq.sqe_head;
         if (queued == 0 and wait_nr == 0) {
             return;
         }
@@ -69,6 +79,8 @@ pub const IO = struct {
                 else => return err,
             };
 
+            self.inflight -|= @intCast(completed);
+
             for (cqes[0..completed]) |cqe| {
                 const completion: *Completion = @ptrFromInt(cqe.user_data);
                 completion.result = cqe.res;
@@ -78,14 +90,17 @@ pub const IO = struct {
         }
     }
 
-    pub fn next_completion(self: *IO) ?*Completion {
-        if (self.completed.is_empty()) return null;
-        return self.completed.dequeue() catch return null;
+    pub fn enqueue(self: *IO, completion: *Completion) !void {
+        const sqe = try self.ring.get_sqe();
+        self.inflight += 1;
+        completion.prep(sqe);
     }
 
-    pub fn complete_all(self: *IO) !void {
-        while (self.next_completion()) |completion| {
-            Completion.complete(completion);
+    pub fn run_callback(self: *IO) !void {
+        while (true) {
+            if (self.completed.is_empty()) return;
+            const completed = try self.completed.dequeue();
+            Completion.complete(completed);
         }
     }
 
@@ -110,7 +125,6 @@ pub const IO = struct {
             }
         }
     }
-
 
     pub fn bind(self: *IO, sock: posix.socket_t, address: posix.sockaddr.in) !void {
         _ = self;
@@ -149,7 +163,6 @@ pub const IO = struct {
             }
         }
     }
-
 
     pub const Operation = union(enum) {
         accept: struct {
@@ -433,7 +446,7 @@ pub const IO = struct {
                     completion.callback(completion.context, completion, &result);
                 },
                 .fsync => {
-                    const result: anyerror!void = blk: {
+                    const result: FsyncError!void = blk: {
                         if (completion.result < 0) {
                             const err = switch (@as(posix.E, @enumFromInt(-completion.result))) {
                                 .INTR => {
@@ -1200,7 +1213,85 @@ pub const IO = struct {
         try self.enqueue(completion);
     }
 
+    pub const FsyncError = error{
+        FileDescriptorInvalid,
+        InputOutput,
+        SystemResources,
+    } || posix.UnexpectedError;
+
+    pub fn fsync(
+        self: *IO,
+        comptime Context: type,
+        context: Context,
+        comptime callback: fn (
+            context: Context,
+            completion: *Completion,
+            result: FsyncError!void,
+        ) void,
+        completion: *Completion,
+        fd: posix.fd_t,
+    ) !void {
+        const wrapper = struct {
+            fn call(ctx: *anyopaque, compl: *Completion, res_ptr: *const anyopaque) void {
+                const typed_context: Context = @ptrCast(@alignCast(ctx));
+                const typed_result: *const FsyncError!void = @ptrCast(@alignCast(res_ptr));
+                callback(typed_context, compl, typed_result.*);
+            }
+        }.call;
+
+        completion.* = .{
+            .io = self,
+            .context = @ptrCast(context),
+            .callback = wrapper,
+            .operation = .{
+                .fsync = .{
+                    .fd = fd,
+                },
+            },
+        };
+        try self.enqueue(completion);
+    }
+
     pub const OpenatError = posix.OpenError || posix.UnexpectedError;
+
+    pub fn openat(
+        self: *IO,
+        comptime Context: type,
+        context: Context,
+        comptime callback: fn (
+            context: Context,
+            completion: *Completion,
+            result: OpenatError!posix.fd_t,
+        ) void,
+        completion: *Completion,
+        fd: posix.fd_t,
+        path: [*:0]const u8,
+        flags: posix.O,
+        mode: u32,
+    ) !void {
+        const wrapper = struct {
+            fn call(ctx: *anyopaque, compl: *Completion, res_ptr: *const anyopaque) void {
+                const typed_context: Context = @ptrCast(@alignCast(ctx));
+                const typed_result: *const OpenatError!posix.fd_t = @ptrCast(@alignCast(res_ptr));
+                callback(typed_context, compl, typed_result.*);
+            }
+        }.call;
+
+        completion.* = .{
+            .io = self,
+            .context = @ptrCast(context),
+            .callback = wrapper,
+            .operation = .{
+                .openat = .{
+                    .fd = fd,
+                    .path = path,
+                    .flags = flags,
+                    .mode = mode,
+                },
+            },
+        };
+        try self.enqueue(completion);
+    }
 
     pub const StatxError = error{
         SymLinkLoop,
@@ -1209,5 +1300,843 @@ pub const IO = struct {
         NotDir,
     } || std.Io.File.StatError || posix.UnexpectedError;
 
+    pub fn statx(
+        self: *IO,
+        comptime Context: type,
+        context: Context,
+        comptime callback: fn (
+            context: Context,
+            completion: *Completion,
+            result: StatxError!void,
+        ) void,
+        completion: *Completion,
+        fd: posix.fd_t,
+        path: [*:0]const u8,
+        flags: u32,
+        mask: os.linux.STATX,
+        buffer: *std.os.linux.Statx,
+    ) !void {
+        const wrapper = struct {
+            fn call(ctx: *anyopaque, compl: *Completion, res_ptr: *const anyopaque) void {
+                const typed_context: Context = @ptrCast(@alignCast(ctx));
+                const typed_result: *const StatxError!void = @ptrCast(@alignCast(res_ptr));
+                callback(typed_context, compl, typed_result.*);
+            }
+        }.call;
+
+        completion.* = .{
+            .io = self,
+            .context = @ptrCast(context),
+            .callback = wrapper,
+            .operation = .{
+                .statx = .{
+                    .fd = fd,
+                    .path = path,
+                    .flags = flags,
+                    .mask = mask,
+                    .buffer = buffer,
+                },
+            },
+        };
+        try self.enqueue(completion);
+    }
+
     pub const TimeoutError = error{Canceled} || posix.UnexpectedError;
+
+    pub fn timeout(
+        self: *IO,
+        comptime Context: type,
+        context: Context,
+        comptime callback: fn (
+            context: Context,
+            completion: *Completion,
+            result: TimeoutError!void,
+        ) void,
+        completion: *Completion,
+        timespec: *std.os.linux.kernel_timespec,
+        flags: u32,
+    ) !void {
+        const wrapper = struct {
+            fn call(ctx: *anyopaque, compl: *Completion, res_ptr: *const anyopaque) void {
+                const typed_context: Context = @ptrCast(@alignCast(ctx));
+                const typed_result: *const TimeoutError!void = @ptrCast(@alignCast(res_ptr));
+                callback(typed_context, compl, typed_result.*);
+            }
+        }.call;
+
+        completion.* = .{
+            .io = self,
+            .context = @ptrCast(context),
+            .callback = wrapper,
+            .operation = .{
+                .timeout = .{
+                    .timeout = timespec,
+                    .flags = flags,
+                },
+            },
+        };
+        try self.enqueue(completion);
+    }
+
+    pub fn next_tick(
+        self: *IO,
+        comptime Context: type,
+        context: Context,
+        comptime callback: fn (
+            context: Context,
+            completion: *Completion,
+            result: NextTickResult,
+        ) void,
+        completion: *Completion,
+    ) !void {
+        const wrapper = struct {
+            fn call(ctx: *anyopaque, compl: *Completion, res_ptr: *const anyopaque) void {
+                const typed_context: Context = @ptrCast(@alignCast(ctx));
+                const typed_result: *const NextTickResult = @ptrCast(@alignCast(res_ptr));
+                callback(typed_context, compl, typed_result.*);
+            }
+        }.call;
+
+        completion.* = .{
+            .io = self,
+            .context = @ptrCast(context),
+            .callback = wrapper,
+            .operation = .next_tick,
+        };
+        try self.enqueue(completion);
+    }
 };
+
+const testing = std.testing;
+
+test "init and deinit across entry sizes" {
+    inline for (.{ 1, 2, 8, 32, 256 }) |entries| {
+        var io = try IO.init(entries, 0);
+        io.deinit();
+    }
+}
+
+test "deinit with pending unsent completion does not crash" {
+    var io = try IO.init(8, 0);
+    const Ctx = struct {
+        done: bool = false,
+        calls: u32 = 0,
+    };
+    const cb = struct {
+        fn call(ctx: *Ctx, _: *IO.Completion, _: IO.NextTickResult) void {
+            ctx.calls += 1;
+            ctx.done = true;
+        }
+    }.call;
+    var ctx = Ctx{};
+    var compl: IO.Completion = undefined;
+    try io.next_tick(*Ctx, &ctx, cb, &compl);
+    io.deinit();
+}
+
+test "enqueue beyond ring capacity returns error.SQFull" {
+    var io = try IO.init(2, 0);
+    defer io.deinit();
+    const Ctx = struct {
+        done: bool = false,
+        calls: u32 = 0,
+    };
+    const cb = struct {
+        fn call(ctx: *Ctx, _: *IO.Completion, _: IO.NextTickResult) void {
+            ctx.calls += 1;
+            ctx.done = true;
+        }
+    }.call;
+    var ctx = Ctx{};
+    var compls: [4]IO.Completion = undefined;
+    var saw_full = false;
+    for (&compls) |*compl| {
+        io.next_tick(*Ctx, &ctx, cb, compl) catch |err| {
+            try testing.expectEqual(error.SubmissionQueueFull, err);
+            saw_full = true;
+            break;
+        };
+    }
+    try testing.expect(saw_full);
+}
+
+test "file ops: openat, write, fsync, statx, read, close" {
+    var io = try IO.init(32, 0);
+    defer io.deinit();
+
+    var dir = testing.tmpDir(.{});
+    defer dir.cleanup();
+    var path_buf: [256:0]u8 = undefined;
+    const path_len = (std.fmt.bufPrint(path_buf[0..255], ".zig-cache/tmp/{s}/{s}", .{ dir.sub_path[0..], "glu_io_test.bin" }) catch unreachable).len;
+    path_buf[path_len] = 0;
+    const path_z: [*:0]const u8 = path_buf[0..];
+
+    const data = "hello io_uring file io";
+
+    const OpenCtx = struct {
+        done: bool = false,
+        result: ?IO.OpenatError!posix.fd_t = null,
+    };
+    const open_cb = struct {
+        fn call(ctx: *OpenCtx, _: *IO.Completion, res: IO.OpenatError!posix.fd_t) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+
+    // openat: create + truncate + read-write
+    var open_ctx = OpenCtx{};
+    var compl: IO.Completion = undefined;
+    try io.openat(*OpenCtx, &open_ctx, open_cb, &compl, posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDWR, .CREAT = true, .TRUNC = true }, 0o644);
+    while (!open_ctx.done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    const fd = try open_ctx.result.?;
+
+    const WriteCtx = struct {
+        done: bool = false,
+        result: ?IO.WriteError!usize = null,
+    };
+    const write_cb = struct {
+        fn call(ctx: *WriteCtx, _: *IO.Completion, res: IO.WriteError!usize) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+
+    // write
+    var write_ctx = WriteCtx{};
+    try io.write(*WriteCtx, &write_ctx, write_cb, &compl, fd, data, 0);
+    while (!write_ctx.done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    try testing.expectEqual(data.len, try write_ctx.result.?);
+
+    const FsyncCtx = struct {
+        done: bool = false,
+        result: ?IO.FsyncError!void = null,
+    };
+    const fsync_cb = struct {
+        fn call(ctx: *FsyncCtx, _: *IO.Completion, res: IO.FsyncError!void) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+
+    // fsync
+    var fsync_ctx = FsyncCtx{};
+    try io.fsync(*FsyncCtx, &fsync_ctx, fsync_cb, &compl, fd);
+    while (!fsync_ctx.done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    try fsync_ctx.result.?;
+
+    const StatxCtx = struct {
+        done: bool = false,
+        result: ?IO.StatxError!void = null,
+    };
+    const statx_cb = struct {
+        fn call(ctx: *StatxCtx, _: *IO.Completion, res: IO.StatxError!void) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+
+    // statx: verify size
+    var stx: std.os.linux.Statx = undefined;
+    var statx_ctx = StatxCtx{};
+    try io.statx(*StatxCtx, &statx_ctx, statx_cb, &compl, posix.AT.FDCWD, path_z, 0, std.os.linux.STATX.BASIC_STATS, &stx);
+    while (!statx_ctx.done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    try statx_ctx.result.?;
+    try testing.expectEqual(@as(u64, data.len), stx.size);
+
+    const ReadCtx = struct {
+        done: bool = false,
+        result: ?IO.ReadError!usize = null,
+    };
+    const read_cb = struct {
+        fn call(ctx: *ReadCtx, _: *IO.Completion, res: IO.ReadError!usize) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+
+    // read back
+    var read_ctx = ReadCtx{};
+    var buf: [64]u8 = undefined;
+    try io.read(*ReadCtx, &read_ctx, read_cb, &compl, fd, &buf, 0);
+    while (!read_ctx.done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    const n = try read_ctx.result.?;
+    try testing.expectEqual(data.len, n);
+    try testing.expectEqualStrings(data, buf[0..n]);
+
+    const CloseCtx = struct {
+        done: bool = false,
+        result: ?IO.CloseError!void = null,
+    };
+    const close_cb = struct {
+        fn call(ctx: *CloseCtx, _: *IO.Completion, res: IO.CloseError!void) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+
+    // close
+    var close_ctx = CloseCtx{};
+    try io.close(*CloseCtx, &close_ctx, close_cb, &compl, fd);
+    while (!close_ctx.done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    try close_ctx.result.?;
+}
+
+test "tcp connect accept send recv round-trip" {
+    var io = try IO.init(32, 0);
+    defer io.deinit();
+
+    const listener = try io.socket(posix.AF.INET, posix.SOCK.STREAM, 0);
+    defer _ = std.c.close(listener);
+    const one: c_int = 1;
+    _ = std.c.setsockopt(listener, std.c.SOL.SOCKET, std.c.SO.REUSEADDR, &one, @sizeOf(c_int));
+    try io.bind(listener, .{ .port = 0, .addr = 0 });
+    try io.listen(listener, 16);
+
+    var sockname: posix.sockaddr.in = undefined;
+    var namelen: posix.socklen_t = @sizeOf(posix.sockaddr.in);
+    try testing.expect(std.c.getsockname(listener, @ptrCast(&sockname), &namelen) == 0);
+    const port = std.mem.bigToNative(u16, sockname.port);
+    try testing.expect(port != 0);
+
+    const client = try io.socket(posix.AF.INET, posix.SOCK.STREAM, 0);
+    defer _ = std.c.close(client);
+
+    const ConnCtx = struct {
+        connect_done: bool = false,
+        accept_done: bool = false,
+        connect_result: ?IO.ConnectError!void = null,
+        accept_result: ?IO.AcceptError!posix.socket_t = null,
+    };
+    const connect_cb = struct {
+        fn call(ctx: *ConnCtx, _: *IO.Completion, res: IO.ConnectError!void) void {
+            ctx.connect_result = res;
+            ctx.connect_done = true;
+        }
+    }.call;
+    const accept_cb = struct {
+        fn call(ctx: *ConnCtx, _: *IO.Completion, res: IO.AcceptError!posix.socket_t) void {
+            ctx.accept_result = res;
+            ctx.accept_done = true;
+        }
+    }.call;
+
+    var conn_ctx = ConnCtx{};
+    var compl_accept: IO.Completion = undefined;
+    var compl_connect: IO.Completion = undefined;
+    try io.accept(*ConnCtx, &conn_ctx, accept_cb, &compl_accept, listener);
+    const addr: posix.sockaddr.in = .{
+        .port = @byteSwap(port),
+        .addr = @bitCast(@as([4]u8, .{ 127, 0, 0, 1 })),
+    };
+    try io.connect(*ConnCtx, &conn_ctx, connect_cb, &compl_connect, client, addr);
+
+    while (!conn_ctx.connect_done or !conn_ctx.accept_done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    try conn_ctx.connect_result.?;
+    const server_fd = try conn_ctx.accept_result.?;
+
+    const msg = "glu io_uring tcp";
+    const SendCtx = struct {
+        done: bool = false,
+        result: ?IO.SendError!usize = null,
+    };
+    const send_cb = struct {
+        fn call(ctx: *SendCtx, _: *IO.Completion, res: IO.SendError!usize) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+    const RecvCtx = struct {
+        done: bool = false,
+        result: ?IO.RecvError!usize = null,
+    };
+    const recv_cb = struct {
+        fn call(ctx: *RecvCtx, _: *IO.Completion, res: IO.RecvError!usize) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+
+    var send_ctx = SendCtx{};
+    var compl_send: IO.Completion = undefined;
+    try io.send(*SendCtx, &send_ctx, send_cb, &compl_send, client, msg);
+    var recv_ctx = RecvCtx{};
+    var compl_recv: IO.Completion = undefined;
+    var recv_buf: [64]u8 = undefined;
+    try io.recv(*RecvCtx, &recv_ctx, recv_cb, &compl_recv, server_fd, &recv_buf);
+
+    while (!send_ctx.done or !recv_ctx.done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    try testing.expectEqual(@as(usize, msg.len), try send_ctx.result.?);
+    const rn = try recv_ctx.result.?;
+    try testing.expectEqual(@as(usize, msg.len), rn);
+    try testing.expectEqualStrings(msg, recv_buf[0..rn]);
+
+    const CloseCtx = struct {
+        done: bool = false,
+        result: ?IO.CloseError!void = null,
+    };
+    const close_cb = struct {
+        fn call(ctx: *CloseCtx, _: *IO.Completion, res: IO.CloseError!void) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+
+    var close_ctx = CloseCtx{};
+    var compl_close: IO.Completion = undefined;
+    try io.close(*CloseCtx, &close_ctx, close_cb, &compl_close, server_fd);
+    while (!close_ctx.done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    try close_ctx.result.?;
+}
+
+test "udp send_to recv_from round-trip" {
+    var io = try IO.init(32, 0);
+    defer io.deinit();
+
+    const s1 = try io.socket(posix.AF.INET, posix.SOCK.DGRAM, 0);
+    defer _ = std.c.close(s1);
+    const s2 = try io.socket(posix.AF.INET, posix.SOCK.DGRAM, 0);
+    defer _ = std.c.close(s2);
+
+    try io.bind(s1, .{ .port = 0, .addr = 0 });
+    try io.bind(s2, .{ .port = 0, .addr = 0 });
+
+    var sockname: posix.sockaddr.in = undefined;
+    var namelen: posix.socklen_t = @sizeOf(posix.sockaddr.in);
+    try testing.expect(std.c.getsockname(s1, @ptrCast(&sockname), &namelen) == 0);
+    const port1 = std.mem.bigToNative(u16, sockname.port);
+    try testing.expect(port1 != 0);
+
+    const msg = "glu io_uring udp";
+    const addr: posix.sockaddr.in = .{
+        .port = @byteSwap(port1),
+        .addr = @bitCast(@as([4]u8, .{ 127, 0, 0, 1 })),
+    };
+
+    const SendToCtx = struct {
+        done: bool = false,
+        result: ?IO.SendToError!usize = null,
+    };
+    const send_to_cb = struct {
+        fn call(ctx: *SendToCtx, _: *IO.Completion, res: IO.SendToError!usize) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+
+    var send_ctx = SendToCtx{};
+    var compl_send: IO.Completion = undefined;
+    try io.send_to(*SendToCtx, &send_ctx, send_to_cb, &compl_send, s2, msg, addr);
+
+    const RecvFromCtx = struct {
+        done: bool = false,
+        result: ?IO.RecvFromError!usize = null,
+    };
+    const recv_from_cb = struct {
+        fn call(ctx: *RecvFromCtx, _: *IO.Completion, res: IO.RecvFromError!usize) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+
+    var recv_ctx = RecvFromCtx{};
+    var compl_recv: IO.Completion = undefined;
+    var buf: [64]u8 = undefined;
+    try io.recv_from(*RecvFromCtx, &recv_ctx, recv_from_cb, &compl_recv, s1, &buf);
+
+    while (!send_ctx.done or !recv_ctx.done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    try testing.expectEqual(@as(usize, msg.len), try send_ctx.result.?);
+    const n = try recv_ctx.result.?;
+    try testing.expectEqual(@as(usize, msg.len), n);
+    try testing.expectEqualStrings(msg, buf[0..n]);
+}
+
+test "timeout fires after the requested duration" {
+    var io = try IO.init(8, 0);
+    defer io.deinit();
+
+    const Ctx = struct {
+        done: bool = false,
+        result: ?IO.TimeoutError!void = null,
+    };
+    const cb = struct {
+        fn call(ctx: *Ctx, _: *IO.Completion, res: IO.TimeoutError!void) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+
+    var ts: std.os.linux.kernel_timespec = .{ .sec = 0, .nsec = 40 * std.time.ns_per_ms };
+    var ctx = Ctx{};
+    var compl: IO.Completion = undefined;
+    try io.timeout(*Ctx, &ctx, cb, &compl, &ts, 0);
+
+    const start = time.monotonic();
+    while (!ctx.done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    const elapsed_ns = time.monotonic() - start;
+
+    try ctx.result.?;
+    try testing.expect(elapsed_ns >= 30 * std.time.ns_per_ms);
+}
+
+test "next_tick completes immediately" {
+    var io = try IO.init(8, 0);
+    defer io.deinit();
+    const Ctx = struct {
+        done: bool = false,
+        calls: u32 = 0,
+    };
+    const cb = struct {
+        fn call(ctx: *Ctx, _: *IO.Completion, _: IO.NextTickResult) void {
+            ctx.calls += 1;
+            ctx.done = true;
+        }
+    }.call;
+    var ctx = Ctx{};
+    var compl: IO.Completion = undefined;
+    try io.next_tick(*Ctx, &ctx, cb, &compl);
+    while (!ctx.done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    try testing.expectEqual(@as(u32, 1), ctx.calls);
+}
+
+test "openat nonexistent path returns FileNotFound" {
+    var io = try IO.init(8, 0);
+    defer io.deinit();
+    var dir = testing.tmpDir(.{});
+    defer dir.cleanup();
+    var path_buf: [256:0]u8 = undefined;
+    const path_len = (std.fmt.bufPrint(path_buf[0..255], ".zig-cache/tmp/{s}/{s}", .{ dir.sub_path[0..], "glu_missing.bin" }) catch unreachable).len;
+    path_buf[path_len] = 0;
+    const path_z: [*:0]const u8 = path_buf[0..];
+
+    const Ctx = struct {
+        done: bool = false,
+        result: ?IO.OpenatError!posix.fd_t = null,
+    };
+    const cb = struct {
+        fn call(ctx: *Ctx, _: *IO.Completion, res: IO.OpenatError!posix.fd_t) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+
+    var ctx = Ctx{};
+    var compl: IO.Completion = undefined;
+    try io.openat(*Ctx, &ctx, cb, &compl, posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDWR }, 0o644);
+    while (!ctx.done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    try testing.expectError(error.FileNotFound, ctx.result.?);
+}
+
+test "statx nonexistent path returns FileNotFound" {
+    var io = try IO.init(8, 0);
+    defer io.deinit();
+    var dir = testing.tmpDir(.{});
+    defer dir.cleanup();
+    var path_buf: [256:0]u8 = undefined;
+    const path_len = (std.fmt.bufPrint(path_buf[0..255], ".zig-cache/tmp/{s}/{s}", .{ dir.sub_path[0..], "glu_missing.bin" }) catch unreachable).len;
+    path_buf[path_len] = 0;
+    const path_z: [*:0]const u8 = path_buf[0..];
+
+    const Ctx = struct {
+        done: bool = false,
+        result: ?IO.StatxError!void = null,
+    };
+    const cb = struct {
+        fn call(ctx: *Ctx, _: *IO.Completion, res: IO.StatxError!void) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+
+    var stx: std.os.linux.Statx = undefined;
+    var ctx = Ctx{};
+    var compl: IO.Completion = undefined;
+    try io.statx(*Ctx, &ctx, cb, &compl, posix.AT.FDCWD, path_z, 0, std.os.linux.STATX.BASIC_STATS, &stx);
+    while (!ctx.done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    try testing.expectError(error.FileNotFound, ctx.result.?);
+}
+
+test "connect to a closed port returns ConnectionRefused" {
+    var io = try IO.init(8, 0);
+    defer io.deinit();
+
+    const probe = try io.socket(posix.AF.INET, posix.SOCK.STREAM, 0);
+    try io.bind(probe, .{ .port = 0, .addr = 0 });
+    var sockname: posix.sockaddr.in = undefined;
+    var namelen: posix.socklen_t = @sizeOf(posix.sockaddr.in);
+    try testing.expect(std.c.getsockname(probe, @ptrCast(&sockname), &namelen) == 0);
+    const port = std.mem.bigToNative(u16, sockname.port);
+    _ = std.c.close(probe);
+    try testing.expect(port != 0);
+
+    const s = try io.socket(posix.AF.INET, posix.SOCK.STREAM, 0);
+    defer _ = std.c.close(s);
+    const addr: posix.sockaddr.in = .{
+        .port = @byteSwap(port),
+        .addr = @bitCast(@as([4]u8, .{ 127, 0, 0, 1 })),
+    };
+    const Ctx = struct {
+        done: bool = false,
+        result: ?IO.ConnectError!void = null,
+    };
+    const cb = struct {
+        fn call(ctx: *Ctx, _: *IO.Completion, res: IO.ConnectError!void) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+    var ctx = Ctx{};
+    var compl: IO.Completion = undefined;
+    try io.connect(*Ctx, &ctx, cb, &compl, s, addr);
+    while (!ctx.done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    try testing.expectError(error.ConnectionRefused, ctx.result.?);
+}
+
+test "read from a closed fd returns NotOpenForReading" {
+    var io = try IO.init(8, 0);
+    defer io.deinit();
+    var dir = testing.tmpDir(.{});
+    defer dir.cleanup();
+    var path_buf: [256:0]u8 = undefined;
+    const path_len = (std.fmt.bufPrint(path_buf[0..255], ".zig-cache/tmp/{s}/{s}", .{ dir.sub_path[0..], "glu_closed.bin" }) catch unreachable).len;
+    path_buf[path_len] = 0;
+    const path_z: [*:0]const u8 = path_buf[0..];
+
+    const OpenCtx = struct {
+        done: bool = false,
+        result: ?IO.OpenatError!posix.fd_t = null,
+    };
+    const open_cb = struct {
+        fn call(ctx: *OpenCtx, _: *IO.Completion, res: IO.OpenatError!posix.fd_t) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+    var open_ctx = OpenCtx{};
+    var compl: IO.Completion = undefined;
+    try io.openat(*OpenCtx, &open_ctx, open_cb, &compl, posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDWR, .CREAT = true, .TRUNC = true }, 0o644);
+    while (!open_ctx.done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    const fd = try open_ctx.result.?;
+    _ = std.c.close(fd);
+
+    const ReadCtx = struct {
+        done: bool = false,
+        result: ?IO.ReadError!usize = null,
+    };
+    const read_cb = struct {
+        fn call(ctx: *ReadCtx, _: *IO.Completion, res: IO.ReadError!usize) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+    var read_ctx = ReadCtx{};
+    var buf: [16]u8 = undefined;
+    try io.read(*ReadCtx, &read_ctx, read_cb, &compl, fd, &buf, 0);
+    while (!read_ctx.done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    try testing.expectError(error.NotOpenForReading, read_ctx.result.?);
+}
+
+test "accept on a non-listening socket returns SocketNotListening" {
+    var io = try IO.init(8, 0);
+    defer io.deinit();
+    const s = try io.socket(posix.AF.INET, posix.SOCK.STREAM, 0);
+    defer _ = std.c.close(s);
+    try io.bind(s, .{ .port = 0, .addr = 0 });
+
+    const Ctx = struct {
+        done: bool = false,
+        result: ?IO.AcceptError!posix.socket_t = null,
+    };
+    const cb = struct {
+        fn call(ctx: *Ctx, _: *IO.Completion, res: IO.AcceptError!posix.socket_t) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+    var ctx = Ctx{};
+    var compl: IO.Completion = undefined;
+    try io.accept(*Ctx, &ctx, cb, &compl, s);
+    while (!ctx.done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    try testing.expectError(error.SocketNotListening, ctx.result.?);
+}
+
+test "batch: enqueue and drain many operations in one submission" {
+    var io = try IO.init(8, 0);
+    defer io.deinit();
+    const Ctx = struct {
+        done: bool = false,
+        calls: u32 = 0,
+    };
+    const cb = struct {
+        fn call(ctx: *Ctx, _: *IO.Completion, _: IO.NextTickResult) void {
+            ctx.calls += 1;
+            ctx.done = true;
+        }
+    }.call;
+    var ctx = Ctx{};
+    var compls: [8]IO.Completion = undefined;
+    for (&compls) |*compl| {
+        try io.next_tick(*Ctx, &ctx, cb, compl);
+    }
+    while (ctx.calls < 8) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    try testing.expectEqual(@as(u32, 8), ctx.calls);
+}
+
+test "run pumps the event loop to completion" {
+    var io = try IO.init(8, 0);
+    defer io.deinit();
+    const Ctx = struct {
+        done: bool = false,
+        calls: u32 = 0,
+    };
+    const cb = struct {
+        fn call(ctx: *Ctx, _: *IO.Completion, _: IO.NextTickResult) void {
+            ctx.calls += 1;
+            ctx.done = true;
+        }
+    }.call;
+    var ctx = Ctx{};
+    var compl: IO.Completion = undefined;
+    try io.next_tick(*Ctx, &ctx, cb, &compl);
+    try io.run(10 * std.time.ns_per_ms);
+    try testing.expectEqual(@as(u32, 1), ctx.calls);
+}
+
+test "timeouts complete asynchronously while the app does work" {
+    var io = try IO.init(16, 0);
+    defer io.deinit();
+
+    const pump = struct {
+        fn call(io_: *IO) !void {
+            try io_.submit(0);
+            try io_.complete(0);
+            try io_.run_callback();
+        }
+    }.call;
+
+    const TimerCtx = struct {
+        fired: bool = false,
+    };
+    const timer_cb = struct {
+        fn call(ctx: *TimerCtx, _: *IO.Completion, _: IO.TimeoutError!void) void {
+            ctx.fired = true;
+        }
+    }.call;
+
+    var ctxs = [_]TimerCtx{ .{}, .{}, .{} };
+    var compls: [3]IO.Completion = undefined;
+    var specs = [_]std.os.linux.kernel_timespec{
+        .{ .sec = 0, .nsec = 30 * std.time.ns_per_ms },
+        .{ .sec = 0, .nsec = 60 * std.time.ns_per_ms },
+        .{ .sec = 0, .nsec = 90 * std.time.ns_per_ms },
+    };
+
+    for (&compls, 0..) |*compl, i| {
+        try io.timeout(*TimerCtx, &ctxs[i], timer_cb, compl, &specs[i], 0);
+    }
+
+    // Submitting hands the ops to the kernel: none complete synchronously.
+    try pump(&io);
+    try testing.expect(!ctxs[0].fired and !ctxs[1].fired and !ctxs[2].fired);
+
+    // The app thread does real work while all three timeouts are in flight;
+    // a blocking pump would let `work` barely advance.
+    const started = time.monotonic();
+    var work: u64 = 0;
+    while (time.monotonic() - started < 40 * std.time.ns_per_ms) {
+        work += 1;
+        try pump(&io);
+    }
+    try testing.expect(ctxs[0].fired);
+    try testing.expect(!ctxs[1].fired and !ctxs[2].fired);
+    try testing.expect(work >= 1000);
+
+    while (time.monotonic() - started < 70 * std.time.ns_per_ms) {
+        work += 1;
+        try pump(&io);
+    }
+    try testing.expect(ctxs[1].fired);
+    try testing.expect(!ctxs[2].fired);
+
+    while (time.monotonic() - started < 120 * std.time.ns_per_ms) {
+        work += 1;
+        try pump(&io);
+    }
+    try testing.expect(ctxs[2].fired);
+}

@@ -1,64 +1,59 @@
-# contributing
+# Contributing to GLU
 
-glu is built on the Unix philosophy: **do one thing and do it fucking well.**
+Welcome! `glu` is a next-generation robotics communication middleware designed with love for developers. It is built to be a zero-dependency, high-performance, and reliable.
 
-glu is middleware. not a framework, not an operating system, not a build system. it publishes messages and subscribes to them. that's it. everything else is a separate tool that composes with glu.
+We do not follow general "Unix philosophy" dogmas. Instead, we do **just enough things to make it function exceptionally well**, with a beautiful developer API, high performance, and simple, correct concepts.
 
-we can't build this alone. whether you're a zig veteran, a robotics engineer tired of DDS, or just someone who wants to learn — you're welcome here.
-
-no bureaucracy, no corporate gatekeeping. just code under the MIT license.
+We value technical excellence, hard design decisions, and taking the time required to build great software. Great things take time, effort, and care.
 
 ---
 
-## the unix philosophy
+## The GLU Core Philosophy: TigerStyle
 
-glu is not ROS2. we don't build a monolithic stack that does everything poorly. we build small, sharp tools that compose:
+We believe that code for next-generation robotics must be written to the highest standards of safety, performance, and correctness. To achieve this, we follow a style inspired by **TigerStyle** (from the TigerBeetle project):
 
-- **glu is middleware** — it moves bytes between processes. no GUI, no scheduler, no sensor drivers, no navigation stack.
-- **glu the CLI is a toolbox** — `glu launch` launches, `glu list` lists, `glu info` inspects. each command does exactly one thing and does it well.
-- **if it can be a separate program, it should be** — viz, nav, drivers, and everything else live in their own repos and communicate via glu's protocol. keep the core razor-thin.
-- **composition over monolith** — pipe glu with other Unix tools. write a sensor node in any language. swap out components without rewriting the world.
-
-before contributing, ask: *"does this belong in the core, or can it be a separate tool that uses glu?"* if the answer is the latter, build it as a separate tool.
-
----
-
-## table of contents
-
-- [ways to contribute](#ways-to-contribute)
-- [getting started](#getting-started)
-- [development workflow](#development-workflow)
-- [style guide](#style-guide)
-- [testing & benchmarks](#testing--benchmarks)
-- [pull request process](#pull-request-process)
-- [good first issues](#good-first-issues)
+1.  **Correctness First**: We write code that is correct under all conditions. Correctness is not sacrificed for features or fast releases.
+2.  **Explicit Control Flow**: No magic hidden under layers of abstractions. Control flow must be clear and direct. Error handling is always explicit; we do not ignore errors or panic unless an invariant is broken.
+3.  **Zero-Allocation Hot Path**: Hot paths must not allocate memory dynamically. All buffers and mappings are allocated statically or pre-allocated during initialization.
+4.  **Zero Dependencies**: We build a standalone, zero-dependency ecosystem. We link against POSIX libc, but otherwise keep our dependency tree entirely empty.
+5.  **Made with Love for Developers**: The developer experience is a primary feature. The API must be intuitive, self-documenting, and robust against common user errors.
+6.  **Patience & Quality**: We take our time to make the codebase as good as possible. We prioritize deliberate engineering, thorough testing, and clean design over quick hacks.
 
 ---
 
-## ways to contribute
+## Table of Contents
 
-you don't have to write zig code to help glu grow.
+- [Ways to Contribute](#ways-to-contribute)
+- [Getting Started](#getting-started)
+- [Development Workflow](#development-workflow)
+- [Style Guide](#style-guide)
+- [Testing & Benchmarks](#testing--benchmarks)
+- [Pull Request Process](#pull-request-process)
 
-| skill | how to help |
+---
+
+## Ways to Contribute
+
+You do not have to write Zig code to help `glu` grow.
+
+| Skill | How to Help |
 | :--- | :--- |
-| **zig** | implement features, fix bugs, optimize hot paths |
-| **robotics** | write sensor drivers, test glu with real hardware, port to embedded targets |
-| **documentation** | improve docs, fix typos, write tutorials, translate |
-| **testing** | run glu on your hardware/OS, report bugs, write regression tests |
-| **community** | answer questions on discord/github, write blog posts, make videos |
-| **design** | improve the website, create diagrams, design the glu logo/branding |
+| **Coding** | Optimize hot paths, implement features, fix bugs |
+| **Robotics & Hardware** | Test `glu` with real-world sensors, actors, and embedded platforms |
+| **Documentation** | Improve code docs, write tutorials, provide clear usage guides |
+| **Verification & Testing** | Find edge cases, write rigorous unit/integration tests, test memory safety |
 
 ---
 
-## getting started
+## Getting Started
 
-### prerequisites
+### Prerequisites
 
-- **zig 0.16.0** or later (install via [ziglang.org/download](https://ziglang.org/download) or your package manager)
-- a **POSIX system** (linux is primary; macOS/BSDs should work but aren't battle-tested yet)
-- **git**
+*   **Zig 0.17.0-dev** (or the version specified in the root `build.zig.zon`)
+*   A **POSIX system** (Linux is primary and required for `io_uring` support)
+*   **Git**
 
-### setup
+### Setup
 
 ```bash
 git clone https://github.com/Vixel2006/glu
@@ -66,140 +61,88 @@ cd glu
 zig build test
 ```
 
-if all tests pass, you're good. if they don't, open an issue.
+If all tests pass, you are ready to begin. If you hit any environment setup errors, please open a GitHub issue.
 
 ---
 
-## development workflow
+## Development Workflow
 
-### 1. find something to work on
-
-check the [issue tracker](https://github.com/Vixel2006/glu/issues) for open bugs or feature requests. look for the `good first issue` label if you're new.
-
-### 2. create a branch
-
+### 1. Create a Branch
+Work on a separate git branch for your feature or fix:
 ```bash
 git checkout -b feature/your-feature-name
 ```
+Branch prefix conventions:
+*   `fix/` — bug fixes
+*   `feature/` — new functionality
+*   `docs/` — documentation updates
+*   `perf/` — performance optimizations
+*   `refactor/` — code cleanup
 
-branch naming:
-- `fix/` — bug fixes
-- `feature/` — new functionality
-- `docs/` — documentation changes
-- `perf/` — performance optimizations
-- `refactor/` — code restructuring
+### 2. Make Focused Changes
+Keep your commits and pull requests small and focused. Refactors and new features should be submitted in separate PRs to keep code reviews clear and productive.
 
-### 3. make your changes
-
-keep changes focused. one feature or fix per PR. if you're refactoring, do it in a separate PR from feature work so diffs stay readable.
-
-### 4. test your changes
-
+### 3. Verify Code Locally
+Before pushing your branch, ensure all tests and benchmarks run cleanly:
 ```bash
 zig build test
-zig build bench   # check for performance regressions
+zig build bench
 ```
 
 ---
 
-## style guide
+## Style Guide
 
-we keep it simple. glu's code style matches what zig's standard library uses.
+We keep our code clean, consistent, and well-structured, matching Zig's standard library conventions.
 
-### naming
+### Naming Conventions
+*   **Types / Structs**: `PascalCase` (e.g. `Publisher`, `Subscriber`, `Channel`)
+*   **Functions / Methods**: `snake_case` (e.g. `init()`, `deinit()`, `send_to()`)
+*   **Variables / Fields**: `snake_case` (e.g. `allocator`, `write_cursor`, `msg_size`)
+*   **Source Files**: `snake_case` (e.g. `channel.zig`, `root.zig`)
 
-- **types**: `PascalCase` — `Publisher`, `Subscriber`, `ChannelHeader`
-- **functions**: `snake_case` — `init()`, `deinit()`, `send_to()`, `recv_from()`
-- **variables**: `snake_case` — `allocator`, `write_cursor`, `msg_size`
-- **files**: `snake_case` — `channel.zig`, `codegen.zig`, `launch.toml`
-
-### formatting
-
-zig has a built-in formatter. run it before committing:
-
+### Formatting
+Always format your code before committing. The CI system will reject any unformatted contributions.
 ```bash
 zig fmt src/
 ```
 
-this is not optional — CI will reject unformatted code.
+### Code Values (TigerStyle)
 
-### what we value
-
-| do | don't |
+| Do | Don't |
 | :--- | :--- |
-| write tools that do one thing well | add kitchen sinks and configuration flags for everything |
-| compose with other programs | build monolithic frameworks that do it all |
-| keep the core small and fast | pull in features that belong in userland |
-| write clear, self-documenting code | add comments explaining what the code does (the code should say that) |
-| use descriptive variable names | abbreviate everything until it's unreadable |
-| keep functions small | write 300-line functions |
-| handle errors explicitly | panic or silently ignore failures |
-| test edge cases | assume everything works |
+| Write simple, clear, and explicit code | Write overly clever or obfuscated code |
+| Handle all errors explicitly | Silently ignore errors or panic on expected path failures |
+| Keep functions focused and well-scoped | Write giant functions with excessive responsibilities |
+| Choose static/pre-allocated memory | Perform hidden heap allocations in performance loops |
+| Maintain self-documenting code with clear doc comments | Leave complex algorithms completely undocumented |
+| Take time to refine designs and implement cleanly | Rush implementations with dirty quick-fixes |
 
 ---
 
-## testing & benchmarks
+## Testing & Benchmarks
 
-### running tests
-
+### Running Unit Tests
+All source files containing logic should include unit tests to verify correctness:
 ```bash
 zig build test
 ```
 
-this runs all unit tests embedded in the source files. add `test` blocks to any file you modify.
-
-### running benchmarks
-
+### Running Benchmarks
+If you modify performance-critical segments (like `Channel`, `Publisher`, or transport loops), always check for regressions:
 ```bash
 zig build bench
 ```
 
-benchmarks use [zBench](https://github.com/hendriknielaender/zbench) and results are tracked in `.benchmarks/`. if your change affects a hot path, compare before-and-after:
+---
 
-```bash
-# before your change
-git stash && zig build bench && git stash pop
+## Pull Request Process
 
-# after your change
-zig build bench
-```
-
-we don't have strict performance budgets yet, but don't make things slower without a good reason.
-
-### manual testing with examples
-
-```bash
-zig build
-glu launch -f examples/telemetry/launch.toml
-```
-
-run the provided examples to verify your changes work end-to-end. if you add a feature, consider adding an example for it.
+1.  **Refine the Design**: Describe your plan or open a design discussion before starting on larger features. Great code requires consensus on architectural choices.
+2.  **Run formatting**: Ensure `zig fmt` has been run on all modified files.
+3.  **Pass CI Checks**: Confirm all unit tests and builds compile without warnings.
+4.  **Squash and Merge**: Once approved, squashed commits should follow clear, descriptive conventional messages (e.g. `feat: implement multicast UDP support`).
 
 ---
 
-## pull request process
-
-1. **open an issue first** (optional but recommended) — describe what you're fixing or adding so we can agree on the approach before you write code.
-2. **create a PR** with a clear title and description. link to any relevant issues.
-3. **CI must pass** — tests, formatting, and benchmarks.
-4. **review** — expect questions and feedback. this is not personal; we're all trying to make glu better.
-5. **merge** — once approved, squash and merge. your commit message should follow conventional commits format: `type: brief description`.
-
-### pr checklist
-
-before submitting, make sure:
-
-- [ ] `zig fmt src/` has been run
-- [ ] `zig build test` passes
-- [ ] `zig build` succeeds with no warnings
-- [ ] new functions have doc comments
-- [ ] changes don't break existing examples
-- [ ] commit messages are clear and descriptive
-
----
-
-## questions?
-
-open a [discussion](https://github.com/Vixel2006/glu/discussions) or ping the maintainer on [twitter](https://x.com/this_vixel). we're friendly, we promise.
-
-robots deserve better. let's build it together.
+Robots deserve better, highly engineered software. Let's build it with excellence.

@@ -11,12 +11,40 @@ const capacity = 4096;
 const rate_hz = 50;
 const window_size = 10;
 const alert_threshold: f32 = 50.0;
+const alert_port: u16 = 9998;
+
+fn send_tcp_alert(io: *IO, temp: f32, seq_in: u32) void {
+    var buf: [128]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "ALERT seq={d} temp={d:.1}°C\n", .{ seq_in, temp }) catch return;
+
+    const SyncState = struct {
+        done: bool = false,
+        result: IO.ConnectError!glu.tcp.Stream = undefined,
+    };
+    const cb = struct {
+        fn call(ctx: *SyncState, _: *IO.Completion, res: IO.ConnectError!glu.tcp.Stream) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+
+    var compl: IO.Completion = undefined;
+    var state = SyncState{};
+    glu.tcp.connect(io, *SyncState, &state, cb, &compl, "127.0.0.1", alert_port, .{}) catch return;
+    while (!state.done) {
+        io.submit(1) catch return;
+        io.complete(1) catch return;
+        io.run_callback() catch return;
+    }
+    var stream = state.result catch return;
+    defer glu.tcp.close(&stream);
+    glu.tcp.send(io, &stream, msg) catch {};
+}
 
 fn milliTimestamp() i64 {
     var ts: std.os.linux.timespec = undefined;
     _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.REALTIME, &ts);
-    return @as(i64, @intCast(ts.sec)) * 1000 +
-        @divTrunc(@as(i64, @intCast(ts.nsec)), std.time.ns_per_ms);
+    return @as(i64, @intCast(ts.sec)) * 1000 + @divTrunc(@as(i64, @intCast(ts.nsec)), 1_000_000);
 }
 
 fn sleep(ms: u64) void {
@@ -27,8 +55,6 @@ fn sleep(ms: u64) void {
     _ = std.os.linux.nanosleep(&ts, null);
 }
 
-var global_io: ?IO = null;
-
 pub fn main() void {
     const allocator = std.heap.page_allocator;
 
@@ -36,11 +62,7 @@ pub fn main() void {
         std.debug.print("[processor] IO init failed: {}\n", .{e});
         return;
     };
-    global_io = io;
-    defer {
-        global_io.?.deinit();
-        global_io = null;
-    }
+    defer io.deinit();
 
     var raw_sub = glu.Subscriber.init(allocator, topic_raw, @sizeOf(msgs.TemperatureReading), capacity) catch |e| {
         std.debug.print("[processor] subscriber init failed: {}\n", .{e});
@@ -59,18 +81,15 @@ pub fn main() void {
 
     std.debug.print(
         "[processor] temperature filter node (glu alerts)\n" ++
-        "[processor]   {s} → (moving avg {d}) → {s}\n" ++
-        "[processor]   Ctrl-C to stop\n",
+            "[processor]   {s} → (moving avg {d}) → {s}\n" ++
+            "[processor]   Ctrl-C to stop\n",
         .{ topic_raw, window_size, topic_filtered },
     );
 
-    var window: [window_size]f32 = undefined;
-    for (&window) |*v| v.* = 0;
+    var window = std.mem.zeroes([window_size]f32);
     var window_idx: usize = 0;
     var window_count: usize = 0;
     var seq: u32 = 0;
-    var last_raw: f32 = 0;
-    var last_humidity: f32 = 0;
     var alert_cooldown: u32 = 0;
 
     while (true) {
@@ -84,9 +103,6 @@ pub fn main() void {
             var sum: f32 = 0;
             for (window[0..window_count]) |val| sum += val;
             const filtered = sum / @as(f32, @floatFromInt(window_count));
-
-            last_raw = msg.temperature;
-            last_humidity = msg.humidity;
 
             const slot: *msgs.FilteredTemperature = @ptrCast(@alignCast(filtered_pub.reserve()));
             slot.* = msgs.FilteredTemperature{
@@ -105,7 +121,7 @@ pub fn main() void {
                     "\x1b[31m[processor] ALERT  {d:.1}°C exceeds {d:.0}°C threshold\x1b[0m\n",
                     .{ msg.temperature, alert_threshold },
                 );
-                send_tcp_alert(msg.temperature, msg.seq);
+                send_tcp_alert(&io, msg.temperature, msg.seq);
                 alert_cooldown = rate_hz * 10;
             }
 
@@ -119,16 +135,7 @@ pub fn main() void {
 
         if (alert_cooldown > 0) alert_cooldown -= 1;
 
+        io.run(0) catch {};
         sleep(1000 / rate_hz);
     }
-}
-
-fn send_tcp_alert(temp: f32, seq_in: u32) void {
-    const io = &(global_io orelse return);
-    var buf: [128]u8 = undefined;
-    const msg = std.fmt.bufPrint(&buf, "ALERT seq={d} temp={d:.1}°C\n", .{ seq_in, temp }) catch return;
-
-    var stream = glu.tcp.connect(io, "127.0.0.1", 9998, .{}) catch return;
-    defer glu.tcp.close(&stream);
-    glu.tcp.send(&stream, msg) catch {};
 }

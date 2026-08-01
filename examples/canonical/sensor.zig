@@ -10,11 +10,32 @@ const capacity = 4096;
 const rate_hz = 50;
 const node_name = "temperature_sensor";
 
+fn sendToSync(io: *IO, socket: glu.udp.Socket, host: []const u8, port: u16, data: []const u8) !void {
+    const SyncState = struct {
+        done: bool = false,
+        result: IO.SendToError!usize = undefined,
+    };
+    const cb = struct {
+        fn call(ctx: *SyncState, _: *IO.Completion, res: IO.SendToError!usize) void {
+            ctx.result = res;
+            ctx.done = true;
+        }
+    }.call;
+    var compl: IO.Completion = undefined;
+    var state = SyncState{};
+    try glu.udp.send_to(io, *SyncState, &state, cb, &compl, socket, host, port, data);
+    while (!state.done) {
+        try io.submit(1);
+        try io.complete(1);
+        try io.run_callback();
+    }
+    _ = try state.result;
+}
+
 fn milliTimestamp() i64 {
     var ts: std.os.linux.timespec = undefined;
     _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.REALTIME, &ts);
-    return @as(i64, @intCast(ts.sec)) * 1000 +
-        @divTrunc(@as(i64, @intCast(ts.nsec)), std.time.ns_per_ms);
+    return @as(i64, @intCast(ts.sec)) * 1000 + @divTrunc(@as(i64, @intCast(ts.nsec)), 1_000_000);
 }
 
 fn sleep(ms: u64) void {
@@ -57,9 +78,9 @@ pub fn main() void {
 
     std.debug.print(
         "[sensor] temperature sensor node (glu)\n" ++
-        "[sensor]   {s} @ {d} Hz  (zero-copy)\n" ++
-        "[sensor]   {s} @  1 Hz  (publish)\n" ++
-        "[sensor]   Ctrl-C to stop\n",
+            "[sensor]   {s} @ {d} Hz  (zero-copy)\n" ++
+            "[sensor]   {s} @  1 Hz  (publish)\n" ++
+            "[sensor]   Ctrl-C to stop\n",
         .{ topic_temp, rate_hz, topic_status },
     );
 
@@ -72,7 +93,6 @@ pub fn main() void {
     var base_temp: f32 = 23.0;
     var humidity: f32 = 45.0;
     var uptime: u32 = 0;
-    const error_count: u32 = 0;
 
     while (true) : (seq_temp += 1) {
         const t: f32 = @as(f32, @floatFromInt(seq_temp)) * dt;
@@ -102,12 +122,12 @@ pub fn main() void {
                 .timestamp = milliTimestamp(),
                 .uptime_sec = uptime,
                 .battery_voltage = @max(10.0, voltage),
-                .error_count = error_count,
+                .error_count = 0,
             };
             status_pub.publish(@ptrCast(&status));
             seq_status += 1;
 
-            _ = glu.udp.send_to(&io, udp_sock, "127.0.0.1", 9997, "sensor_alive") catch {};
+            sendToSync(&io, udp_sock, "127.0.0.1", 9997, "sensor_alive") catch {};
         }
 
         if (seq_temp > 0 and seq_temp % (rate_hz * 5) == 0) {
@@ -117,6 +137,7 @@ pub fn main() void {
             );
         }
 
+        io.run(0) catch {};
         sleep(interval_ms);
     }
 }
