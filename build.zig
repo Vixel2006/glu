@@ -98,28 +98,6 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_lib_tests.step);
 
-    // Benchmark targets
-    const bench_opts = .{ .target = target, .optimize = .ReleaseFast };
-    const zbench_module = b.dependency("zbench", bench_opts).module("zbench");
-
-    const bench_exe = b.addExecutable(.{
-        .name = "glu-bench",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("bench/main.zig"),
-            .target = target,
-            .optimize = .ReleaseFast,
-            .link_libc = true,
-            .imports = &.{
-                .{ .name = "glu", .module = mod },
-                .{ .name = "zbench", .module = zbench_module },
-            },
-        }),
-    });
-
-    const run_bench = b.addRunArtifact(bench_exe);
-    const bench_step = b.step("bench", "Run benchmarks");
-    bench_step.dependOn(&run_bench.step);
-
     // Adding LLDB for debugging
     const lldb = b.addSystemCommand(&.{
         "lldb",
@@ -144,11 +122,11 @@ pub fn build(b: *std.Build) void {
     const examples_step = b.step("examples", "Build all example executables");
 
     // -- canonical temperature monitoring ------------------------------------
-    addExample(b, target, optimize, mod, examples_step,
+    add_example(b, target, optimize, mod, examples_step,
         "glu-canonical-sensor", "examples/canonical/sensor.zig");
-    addExample(b, target, optimize, mod, examples_step,
+    add_example(b, target, optimize, mod, examples_step,
         "glu-canonical-processor", "examples/canonical/processor.zig");
-    addExample(b, target, optimize, mod, examples_step,
+    add_example(b, target, optimize, mod, examples_step,
         "glu-canonical-dashboard", "examples/canonical/dashboard.zig");
 }
 
@@ -160,7 +138,7 @@ pub fn build(b: *std.Build) void {
 ///
 /// The resulting binary is installed to zig-out/bin/<name> and added as a
 /// dependency of `examples_step` so `zig build examples` builds all of them.
-fn addExample(
+fn add_example(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
