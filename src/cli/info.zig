@@ -15,13 +15,12 @@ pub fn cmd_info(init: std.process.Init, args: *std.process.Args.Iterator) !void 
         return;
     };
 
-    var t = topic.Topic.open(init.gpa, topic_name) catch |err| {
+    var t = topic.Topic.open(topic_name) catch |err| {
         const msg = switch (err) {
             error.TopicNotFound => "not found",
             error.InvalidTopic => "is not a valid glu topic",
             error.MmapFailed => "mmap failed",
             error.BadMagic => "is not a glu topic (bad magic)",
-            error.OutOfMemory => "out of memory",
         };
         try w.print("error: topic '{s}' {s}\n", .{ topic_name, msg });
         return;

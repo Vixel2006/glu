@@ -31,27 +31,31 @@ const IpMreq = extern struct {
 };
 
 comptime {
-    std.debug.assert(@sizeOf(IpMreq) == 8);
+    assert(@sizeOf(IpMreq) == 8);
 }
 
-fn setInt(fd: i32, level: c_int, opt: u32, val: c_int) void {
-    _ = c.setsockopt(fd, level, opt, &val, @sizeOf(c_int));
+fn set_int(fd: i32, level: c_int, opt: u32, val: c_int) void {
+    if (c.setsockopt(fd, level, opt, &val, @sizeOf(c_int)) == -1) {
+        std.log.warn("setsockopt failed for fd {} level {} opt {}", .{ fd, level, opt });
+    }
 }
 
-fn setTimeval(fd: i32, level: c_int, opt: u32, ms: u32) void {
+fn set_timeval(fd: i32, level: c_int, opt: u32, ms: u32) void {
     const tv = std.c.timeval{
         .sec = @as(c_int, @intCast(ms / 1000)),
         .usec = @as(c_int, @intCast((ms % 1000) * 1000)),
     };
-    _ = c.setsockopt(fd, level, opt, &tv, @sizeOf(std.c.timeval));
+    if (c.setsockopt(fd, level, opt, &tv, @sizeOf(std.c.timeval)) == -1) {
+        std.log.warn("setsockopt timeval failed for fd {} level {} opt {}", .{ fd, level, opt });
+    }
 }
 
 fn apply_socket_opts(fd: i32, config: SocketConfig) void {
-    if (config.recv_buf) |buf| setInt(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.RCVBUF)), buf);
-    if (config.send_buf) |buf| setInt(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.SNDBUF)), buf);
-    setInt(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.BROADCAST)), @as(c_int, @intFromBool(config.broadcast)));
-    if (config.recv_timeout_ms) |ms| setTimeval(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.RCVTIMEO)), ms);
-    if (config.send_timeout_ms) |ms| setTimeval(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.SNDTIMEO)), ms);
+    if (config.recv_buf) |buf| set_int(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.RCVBUF)), buf);
+    if (config.send_buf) |buf| set_int(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.SNDBUF)), buf);
+    set_int(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.BROADCAST)), @as(c_int, @intFromBool(config.broadcast)));
+    if (config.recv_timeout_ms) |ms| set_timeval(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.RCVTIMEO)), ms);
+    if (config.send_timeout_ms) |ms| set_timeval(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.SNDTIMEO)), ms);
 }
 
 pub fn bind(io: *IO, port: u16, config: SocketConfig) !Socket {

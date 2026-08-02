@@ -30,7 +30,6 @@ Manages the allocation and writing of messages into a topic's shared memory segm
 #### `init`
 ```zig
 pub fn init(
-    allocator: std.mem.Allocator,
     name: []const u8,
     msg_size: u32,
     capacity: u32,
@@ -39,7 +38,6 @@ pub fn init(
 ```
 *   **Description**: Creates or attaches to a shared memory channel under `/dev/shm/<name>` and registers the publisher node. If the existing segment is stale (e.g. from a crashed previous run), it is automatically unlinked and initialized fresh.
 *   **Parameters**:
-    *   `allocator`: Standard allocator used for path allocations.
     *   `name`: Topic path (must start with a slash, e.g. `/robot/telemetry`).
     *   `msg_size`: Size of the message struct in bytes (`@sizeOf(T)`).
     *   `capacity`: Number of slots in the ring buffer (must be a power of two for optimal performance).
@@ -77,9 +75,7 @@ const std = @import("std");
 const glu = @import("glu");
 
 pub fn main() !void {
-    const allocator = std.heap.page_allocator;
-    
-    var pub = try glu.Publisher.init(allocator, "/sensor", @sizeOf(JointState), 1024, .reliable);
+    var pub = try glu.Publisher.init("/sensor", @sizeOf(JointState), 1024, .reliable);
     defer pub.deinit();
 
     // Option A: Zero-Copy (Recommended for large data)
@@ -114,7 +110,6 @@ Manages reading messages from a topic's shared memory segment.
 #### `init`
 ```zig
 pub fn init(
-    allocator: std.mem.Allocator,
     name: []const u8,
     msg_size: u32,
     capacity: u32
@@ -141,10 +136,16 @@ pub fn receive(self: *Subscriber) ?*anyopaque
 const std = @import("std");
 const glu = @import("glu");
 
-pub fn main() !void {
-    const allocator = std.heap.page_allocator;
+fn sleepMs(ms: u64) void {
+    var ts = std.os.linux.timespec{
+        .sec = @as(i64, @intCast(ms / 1000)),
+        .nsec = @as(i64, @intCast((ms % 1000) * 1_000_000)),
+    };
+    _ = std.os.linux.nanosleep(&ts, null);
+}
 
-    var sub = try glu.Subscriber.init(allocator, "/sensor", @sizeOf(JointState), 1024);
+pub fn main() !void {
+    var sub = try glu.Subscriber.init("/sensor", @sizeOf(JointState), 1024);
     defer sub.deinit();
 
     while (true) {
@@ -152,8 +153,7 @@ pub fn main() !void {
             const msg: *JointState = @ptrCast(@alignCast(raw));
             std.debug.print("Received: seq={d}, pos={d:.2}\n", .{ msg.seq, msg.position });
         }
-        // Yield or sleep to prevent 100% CPU usage
-        std.Thread.sleep(10 * std.time.ns_per_ms);
+        sleepMs(10);
     }
 }
 ```

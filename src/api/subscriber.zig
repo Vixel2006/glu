@@ -25,8 +25,8 @@ pub const Subscriber = struct {
     ///
     /// The `id` must be unique per channel and < MAX_READERS.
     /// Initialises the reader cursor to 0 (active) and self-registers.
-    pub fn init(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32) SubErr!Subscriber {
-        const chan = try Channel.open(allocator, name, msg_size, capacity, .reliable);
+    pub fn init(name: []const u8, msg_size: u32, capacity: u32) SubErr!Subscriber {
+        const chan = try Channel.open(name, msg_size, capacity, .reliable);
 
         var id: u32 = undefined;
         for (0.., chan.header.read) |i, cursor| {
@@ -78,17 +78,16 @@ pub const Subscriber = struct {
 
 test "Subscriber: publish via raw Channel, receive via Subscriber" {
     const TestMsg = packed struct { x: u32, y: u32 };
-    const allocator = std.heap.page_allocator;
 
     // we do unlink to close the stale POSIX shared memory from prior failed tests if any
     _ = c.shm_unlink("/glu_test_subscriber");
 
-    var sub = try Subscriber.init(allocator, "/glu_test_subscriber", @sizeOf(TestMsg), 2);
+    var sub = try Subscriber.init("/glu_test_subscriber", @sizeOf(TestMsg), 2);
     defer sub.deinit();
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open(allocator, "/glu_test_subscriber", @sizeOf(TestMsg), 2, .reliable) catch c.exit(1);
+        var child_chan = Channel.open("/glu_test_subscriber", @sizeOf(TestMsg), 2, .reliable) catch c.exit(1);
         write(&child_chan, @ptrCast(&TestMsg{ .x = 99, .y = 42 }));
         child_chan.close();
         c.exit(0);
@@ -107,18 +106,17 @@ test "Subscriber: publish via raw Channel, receive via Subscriber" {
 
 test "two subscribers on the same channel both receive messages" {
     const TestMsg = packed struct { x: u32, y: u32 };
-    const allocator = std.heap.page_allocator;
 
     _ = c.shm_unlink("/glu_test_two_subs");
 
-    var sub0 = try Subscriber.init(allocator, "/glu_test_two_subs", @sizeOf(TestMsg), 8);
+    var sub0 = try Subscriber.init("/glu_test_two_subs", @sizeOf(TestMsg), 8);
     defer sub0.deinit();
-    var sub1 = try Subscriber.init(allocator, "/glu_test_two_subs", @sizeOf(TestMsg), 8);
+    var sub1 = try Subscriber.init("/glu_test_two_subs", @sizeOf(TestMsg), 8);
     defer sub1.deinit();
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open(allocator, "/glu_test_two_subs", @sizeOf(TestMsg), 8, .reliable) catch c.exit(1);
+        var child_chan = Channel.open("/glu_test_two_subs", @sizeOf(TestMsg), 8, .reliable) catch c.exit(1);
         write(&child_chan, @ptrCast(&TestMsg{ .x = 1, .y = 2 }));
         write(&child_chan, @ptrCast(&TestMsg{ .x = 3, .y = 4 }));
         child_chan.close();

@@ -28,11 +28,11 @@ pub const Publisher = struct {
     /// If the existing segment has no alive subscribers and we are the
     /// only connection it is treated as a stale leak (crashed publisher)
     /// and a fresh channel is created.
-    pub fn init(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32, tos: ToS) PubErr!Publisher {
+    pub fn init(name: []const u8, msg_size: u32, capacity: u32, tos: ToS) PubErr!Publisher {
         assert(msg_size > 0);
         assert(capacity > 0);
         assert(name.len > 0);
-        var self = Publisher{ .channel = try Channel.open(allocator, name, msg_size, capacity, tos) };
+        var self = Publisher{ .channel = try Channel.open(name, msg_size, capacity, tos) };
 
         var any_alive = false;
         for (&self.channel.header.pids) |pid| {
@@ -40,7 +40,7 @@ pub const Publisher = struct {
         }
         if (!any_alive and self.channel.header.conns == 1) {
             self.deinit();
-            return Publisher{ .channel = try Channel.open(allocator, name, msg_size, capacity, tos) };
+            return Publisher{ .channel = try Channel.open(name, msg_size, capacity, tos) };
         }
 
         return self;
@@ -85,16 +85,15 @@ pub const Publisher = struct {
 
 test "Publisher: reserve and commit directly" {
     const TestMsg = packed struct { x: u32, y: u32 };
-    const allocator = std.heap.page_allocator;
 
     _ = c.shm_unlink("/glu_test_reserve");
 
-    var chan = try Channel.open(allocator, "/glu_test_reserve", @sizeOf(TestMsg), 5, .reliable);
+    var chan = try Channel.open("/glu_test_reserve", @sizeOf(TestMsg), 5, .reliable);
     defer chan.close();
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open(allocator, "/glu_test_reserve", @sizeOf(TestMsg), 5, .reliable) catch c.exit(1);
+        var child_chan = Channel.open("/glu_test_reserve", @sizeOf(TestMsg), 5, .reliable) catch c.exit(1);
         var publisher = Publisher{ .channel = child_chan };
         const slot: *TestMsg = @ptrCast(@alignCast(publisher.reserve()));
         slot.* = TestMsg{ .x = 42, .y = 99 };
@@ -115,14 +114,13 @@ test "Publisher: reserve and commit directly" {
 
 test "Publisher: publish a message, read it via raw Channel" {
     const TestMsg = packed struct { x: u32, y: u32 };
-    const allocator = std.heap.page_allocator;
 
-    var chan = try Channel.open(allocator, "/glu_test_publisher", @sizeOf(TestMsg), 5, .reliable);
+    var chan = try Channel.open("/glu_test_publisher", @sizeOf(TestMsg), 5, .reliable);
     defer chan.close();
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open(allocator, "/glu_test_publisher", @sizeOf(TestMsg), 5, .reliable) catch c.exit(1);
+        var child_chan = Channel.open("/glu_test_publisher", @sizeOf(TestMsg), 5, .reliable) catch c.exit(1);
         var publisher = Publisher{ .channel = child_chan };
         publisher.publish(@ptrCast(&TestMsg{ .x = 7, .y = 13 }));
         child_chan.close();

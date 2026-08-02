@@ -46,14 +46,14 @@ const Parser = struct {
         return self.pos >= self.buf.len;
     }
 
-    fn skipWhitespaceAndNewlines(self: *Parser) void {
+    fn skip_whitespace_and_newlines(self: *Parser) void {
         while (!self.done()) switch (self.buf[self.pos]) {
             ' ', '\t', '\n', '\r' => self.pos += 1,
             else => break,
         };
     }
 
-    fn skipComment(self: *Parser) void {
+    fn skip_comment(self: *Parser) void {
         while (!self.done() and self.buf[self.pos] != '\n') self.pos += 1;
     }
 
@@ -70,7 +70,7 @@ const Parser = struct {
         return null;
     }
 
-    fn parseString(self: *Parser, allocator: std.mem.Allocator) TomlErr![]const u8 {
+    fn parse_string(self: *Parser, allocator: std.mem.Allocator) TomlErr![]const u8 {
         self.pos += 1;
         const start = self.pos;
         while (!self.done() and self.buf[self.pos] != '"') {
@@ -82,16 +82,16 @@ const Parser = struct {
         return result;
     }
 
-    fn parseInlineArray(self: *Parser, allocator: std.mem.Allocator) TomlErr![]const []const u8 {
+    fn parse_inline_array(self: *Parser, allocator: std.mem.Allocator) TomlErr![]const []const u8 {
         self.pos += 1;
         var items: std.ArrayListAligned([]const u8, null) = .empty;
         while (!self.done() and self.buf[self.pos] != ']') {
-            self.skipWhitespaceAndNewlines();
+            self.skip_whitespace_and_newlines();
             if (self.buf[self.pos] == '"') {
-                const item = try self.parseString(allocator);
+                const item = try self.parse_string(allocator);
                 try items.append(allocator, item);
             }
-            self.skipWhitespaceAndNewlines();
+            self.skip_whitespace_and_newlines();
             _ = self.expect(',');
         }
         if (self.done()) return error.UnterminatedArray;
@@ -99,7 +99,7 @@ const Parser = struct {
         return try items.toOwnedSlice(allocator);
     }
 
-    fn parseTableHeader(self: *Parser) ?struct { is_array: bool, name: []const u8 } {
+    fn parse_table_header(self: *Parser) ?struct { is_array: bool, name: []const u8 } {
         if (!self.expect('[')) return null;
         const is_array = self.expect('[');
         const name_start = self.pos;
@@ -113,7 +113,7 @@ const Parser = struct {
         return .{ .is_array = is_array, .name = name };
     }
 
-    fn parseKeyValue(self: *Parser) ?struct { key: []const u8 } {
+    fn parse_key_value(self: *Parser) ?struct { key: []const u8 } {
         const key_start = self.pos;
         while (!self.done() and self.buf[self.pos] != '=') {
             self.pos += 1;
@@ -149,11 +149,11 @@ pub fn parse(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) To
     var current_node: ?NodeConfig = null;
 
     while (!p.done()) {
-        p.skipWhitespaceAndNewlines();
+        p.skip_whitespace_and_newlines();
         if (p.done()) break;
 
         if (p.peek() == '#') {
-            p.skipComment();
+            p.skip_comment();
             continue;
         }
 
@@ -161,7 +161,7 @@ pub fn parse(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) To
             if (current_node) |node| try nodes.append(allocator, node);
             current_node = null;
 
-            const header = p.parseTableHeader() orelse return error.InvalidSyntax;
+            const header = p.parse_table_header() orelse return error.InvalidSyntax;
             if (header.is_array and std.mem.eql(u8, header.name, "node")) {
                 current_node = NodeConfig{
                     .name = "",
@@ -172,12 +172,12 @@ pub fn parse(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) To
         }
 
         if (current_node) |*node| {
-            const kv = p.parseKeyValue() orelse return error.InvalidSyntax;
-            p.skipWhitespaceAndNewlines();
+            const kv = p.parse_key_value() orelse return error.InvalidSyntax;
+            p.skip_whitespace_and_newlines();
             const ch = p.peek() orelse return error.InvalidSyntax;
 
             if (ch == '"') {
-                const val = try p.parseString(allocator);
+                const val = try p.parse_string(allocator);
                 if (std.mem.eql(u8, kv.key, "name")) {
                     node.name = val;
                 } else if (std.mem.eql(u8, kv.key, "path")) {
@@ -186,7 +186,7 @@ pub fn parse(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) To
                     node.bin = val;
                 }
             } else if (ch == '[') {
-                node.extra_cfg = try p.parseInlineArray(allocator);
+                node.extra_cfg = try p.parse_inline_array(allocator);
             }
         }
     }
@@ -196,7 +196,7 @@ pub fn parse(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) To
     return LaunchConfig{ .nodes = try nodes.toOwnedSlice(allocator) };
 }
 
-fn testToml(allocator: std.mem.Allocator, content: []const u8) !LaunchConfig {
+fn test_toml(allocator: std.mem.Allocator, content: []const u8) !LaunchConfig {
     const io = std.testing.io;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
@@ -215,7 +215,7 @@ test "parse single node" {
         \\path = "./nodes/motor_driver"
     ;
 
-    var config = try testToml(allocator, toml);
+    var config = try test_toml(allocator, toml);
     defer config.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 1), config.nodes.len);
     try std.testing.expectEqualStrings("motor_driver", config.nodes[0].name);
@@ -235,7 +235,7 @@ test "parse multiple nodes with extra_cfg" {
         \\extra_cfg = ["--fps", "30"]
     ;
 
-    var config = try testToml(allocator, toml);
+    var config = try test_toml(allocator, toml);
     defer config.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 2), config.nodes.len);
     try std.testing.expectEqualStrings("lidar", config.nodes[0].name);
@@ -256,7 +256,7 @@ test "skip comments and blank lines" {
         \\path = "./test"
     ;
 
-    var config = try testToml(allocator, toml);
+    var config = try test_toml(allocator, toml);
     defer config.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 1), config.nodes.len);
     try std.testing.expectEqualStrings("test", config.nodes[0].name);

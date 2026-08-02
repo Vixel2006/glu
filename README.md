@@ -125,10 +125,8 @@ const Telemetry = extern struct {
 };
 
 pub fn main() !void {
-    const allocator = std.heap.page_allocator;
-    
     // Initialize a reliable publisher with a capacity of 1024 slots
-    var publisher = try glu.Publisher.init(allocator, "/telemetry", @sizeOf(Telemetry), 1024, .reliable);
+    var publisher = try glu.Publisher.init("/telemetry", @sizeOf(Telemetry), 1024, .reliable);
     defer publisher.deinit();
 
     // Option A: Publish by Copy
@@ -166,10 +164,8 @@ fn sleepMs(ms: u64) void {
 }
 
 pub fn main() !void {
-    const allocator = std.heap.page_allocator;
-    
     // Initialize a subscriber (automatically joins the channel)
-    var subscriber = try glu.Subscriber.init(allocator, "/telemetry", @sizeOf(Telemetry), 1024);
+    var subscriber = try glu.Subscriber.init("/telemetry", @sizeOf(Telemetry), 1024);
     defer subscriber.deinit();
 
     while (true) {

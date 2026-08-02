@@ -8,7 +8,7 @@ pub fn cmd_down(init: std.process.Init) !void {
     var fw = utils.writer(init);
     const w = &fw.interface;
 
-    const stopped = node.stop_all_nodes(init.gpa) catch 0;
+    const stopped = node.stop_all_nodes() catch 0;
     if (stopped == 0) {
         try w.writeAll("no running nodes\n");
         return;

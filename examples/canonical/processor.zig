@@ -38,10 +38,12 @@ fn send_tcp_alert(io: *IO, temp: f32, seq_in: u32) void {
     }
     var stream = state.result catch return;
     defer glu.tcp.close(&stream);
-    glu.tcp.send(io, &stream, msg) catch {};
+    glu.tcp.send(io, &stream, msg) catch |e| {
+        std.debug.print("[processor] warning: failed to send TCP alert: {}\n", .{e});
+    };
 }
 
-fn milliTimestamp() i64 {
+fn milli_timestamp() i64 {
     var ts: std.os.linux.timespec = undefined;
     _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.REALTIME, &ts);
     return @as(i64, @intCast(ts.sec)) * 1000 + @divTrunc(@as(i64, @intCast(ts.nsec)), 1_000_000);
@@ -56,27 +58,27 @@ fn sleep(ms: u64) void {
 }
 
 pub fn main() void {
-    const allocator = std.heap.page_allocator;
-
     var io = IO.init(32, 0) catch |e| {
         std.debug.print("[processor] IO init failed: {}\n", .{e});
         return;
     };
     defer io.deinit();
 
-    var raw_sub = glu.Subscriber.init(allocator, topic_raw, @sizeOf(msgs.TemperatureReading), capacity) catch |e| {
+    var raw_sub = glu.Subscriber.init(topic_raw, @sizeOf(msgs.TemperatureReading), capacity) catch |e| {
         std.debug.print("[processor] subscriber init failed: {}\n", .{e});
         return;
     };
     defer raw_sub.deinit();
 
-    var filtered_pub = glu.Publisher.init(allocator, topic_filtered, @sizeOf(msgs.FilteredTemperature), capacity, .reliable) catch |e| {
+    var filtered_pub = glu.Publisher.init(topic_filtered, @sizeOf(msgs.FilteredTemperature), capacity, .reliable) catch |e| {
         std.debug.print("[processor] publisher init failed: {}\n", .{e});
         return;
     };
     defer filtered_pub.deinit();
 
-    glu.registry.register(node_name) catch {};
+    glu.registry.register(node_name) catch |e| {
+        std.debug.print("[processor] warning: failed to register node: {}\n", .{e});
+    };
     defer glu.registry.unregister(node_name);
 
     std.debug.print(
@@ -107,7 +109,7 @@ pub fn main() void {
             const slot: *msgs.FilteredTemperature = @ptrCast(@alignCast(filtered_pub.reserve()));
             slot.* = msgs.FilteredTemperature{
                 .seq = seq,
-                .timestamp = milliTimestamp(),
+                .timestamp = milli_timestamp(),
                 .raw_temp = msg.temperature,
                 .filtered_temp = filtered,
                 .humidity = msg.humidity,
@@ -135,7 +137,9 @@ pub fn main() void {
 
         if (alert_cooldown > 0) alert_cooldown -= 1;
 
-        io.run(0) catch {};
+        io.run(0) catch |e| {
+            std.debug.print("[processor] IO run error: {}\n", .{e});
+        };
         sleep(1000 / rate_hz);
     }
 }

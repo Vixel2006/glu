@@ -59,19 +59,20 @@ pub const Channel = struct {
     /// The first call with a given `name` creates the segment and
     /// initialises the header. Subsequent calls attach to the existing
     /// segment and bump the connection counter.
-    pub fn open(allocator: std.mem.Allocator, name: []const u8, msg_size: u32, capacity: u32, tos: ToS) ShmErr!Channel {
+    pub fn open(name: []const u8, msg_size: u32, capacity: u32, tos: ToS) ShmErr!Channel {
         assert(msg_size > 0);
         assert(capacity > 0);
         assert(name.len > 0);
         // POSIX shm_open requires the name to start with '/' and contain
         // no other '/' characters.  Replace inner slashes with '_' so that
         // topic names like "/farm/weather" produce a valid shm name.
-        const shm_name = try allocator.alloc(u8, name.len + 1);
-        defer allocator.free(shm_name);
+        var shm_name_buf: [256:0]u8 = undefined;
+        if (name.len >= shm_name_buf.len) return ShmErr.ShmOpenFailed;
         for (name, 0..) |ch, i| {
-            shm_name[i] = if (i > 0 and ch == '/') '_' else ch;
+            shm_name_buf[i] = if (i > 0 and ch == '/') '_' else ch;
         }
-        shm_name[name.len] = 0;
+        shm_name_buf[name.len] = 0;
+        const shm_name = shm_name_buf[0..name.len :0];
 
         // Attempt to create the segment exclusively.
         const excl_flags: c_int = @as(c_int, @bitCast(os.O{
@@ -100,7 +101,10 @@ pub const Channel = struct {
 
         // Only the creator sets the size. Attachers trust the existing layout.
         if (created) {
-            _ = c.ftruncate(fd, @intCast(total_size));
+            if (c.ftruncate(fd, @intCast(total_size)) == -1) {
+                _ = c.close(fd);
+                return ShmErr.ShmOpenFailed;
+            }
         }
 
         const mapped = os.mmap(
@@ -112,7 +116,10 @@ pub const Channel = struct {
             0,
         );
 
-        if (mapped == ~@as(usize, 0)) return ShmErr.MmapFailed;
+        if (mapped == ~@as(usize, 0)) {
+            _ = c.close(fd);
+            return ShmErr.MmapFailed;
+        }
 
         const ptr: [*]u8 = @ptrFromInt(mapped);
         const hdr: *Header = @ptrCast(@alignCast(ptr));
@@ -292,16 +299,15 @@ test "sweep_dead_readers: leaves unowned slots unchanged" {
 
 test "writer not blocked when no active readers" {
     const TestMsg = packed struct { x: u32, y: u32 };
-    const allocator = std.heap.page_allocator;
 
     _ = c.shm_unlink("/glu_test_nowriterblock");
 
-    var chan = try Channel.open(allocator, "/glu_test_nowriterblock", @sizeOf(TestMsg), 2, .reliable);
+    var chan = try Channel.open("/glu_test_nowriterblock", @sizeOf(TestMsg), 2, .reliable);
     defer chan.close();
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open(allocator, "/glu_test_nowriterblock", @sizeOf(TestMsg), 2, .reliable) catch c.exit(1);
+        var child_chan = Channel.open("/glu_test_nowriterblock", @sizeOf(TestMsg), 2, .reliable) catch c.exit(1);
         write(&child_chan, @ptrCast(&TestMsg{ .x = 1, .y = 1 }));
         write(&child_chan, @ptrCast(&TestMsg{ .x = 2, .y = 2 }));
         write(&child_chan, @ptrCast(&TestMsg{ .x = 3, .y = 3 }));
@@ -320,18 +326,17 @@ test "writer not blocked when no active readers" {
 
 test "two readers read independently from the same channel" {
     const TestMsg = packed struct { x: u32, y: u32 };
-    const allocator = std.heap.page_allocator;
 
     _ = c.shm_unlink("/glu_test_two_readers");
 
-    var chan = try Channel.open(allocator, "/glu_test_two_readers", @sizeOf(TestMsg), 8, .reliable);
+    var chan = try Channel.open("/glu_test_two_readers", @sizeOf(TestMsg), 8, .reliable);
     defer chan.close();
 
     @atomicStore(u32, &chan.header.read[0], 0, .release);
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open(allocator, "/glu_test_two_readers", @sizeOf(TestMsg), 8, .reliable) catch c.exit(1);
+        var child_chan = Channel.open("/glu_test_two_readers", @sizeOf(TestMsg), 8, .reliable) catch c.exit(1);
         @atomicStore(u32, &child_chan.header.read[1], 0, .release);
 
         {
@@ -368,16 +373,15 @@ test "two readers read independently from the same channel" {
 
 test "cross-process: producer writes, consumer reads via fork" {
     const TestMsg = packed struct { x: u32, y: u32 };
-    const allocator = std.heap.page_allocator;
 
     _ = c.shm_unlink("/glu_test_fork");
 
-    var chan = try Channel.open(allocator, "/glu_test_fork", @sizeOf(TestMsg), 5, .reliable);
+    var chan = try Channel.open("/glu_test_fork", @sizeOf(TestMsg), 5, .reliable);
     defer chan.close();
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open(allocator, "/glu_test_fork", @sizeOf(TestMsg), 5, .reliable) catch c.exit(1);
+        var child_chan = Channel.open("/glu_test_fork", @sizeOf(TestMsg), 5, .reliable) catch c.exit(1);
         write(&child_chan, @ptrCast(&TestMsg{ .x = 42, .y = 99 }));
         child_chan.close();
         c.exit(0);

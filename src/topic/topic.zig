@@ -7,7 +7,6 @@ const GLU_MAGIC = @import("../channel.zig").GLU_MAGIC;
 const Header = @import("../channel.zig").Header;
 
 pub const TopicErr = error{
-    OutOfMemory,
     TopicNotFound,
     InvalidTopic,
     MmapFailed,
@@ -27,14 +26,14 @@ pub const Topic = struct {
     /// Open an existing topic for read-only inspection.
     ///
     /// Validates the magic number to ensure it's a glu channel.
-    pub fn open(allocator: std.mem.Allocator, name: []const u8) TopicErr!Topic {
+    pub fn open(name: []const u8) TopicErr!Topic {
         assert(name.len > 0);
-        const name_z = try allocator.alloc(u8, name.len + 1);
-        defer allocator.free(name_z);
-        @memcpy(name_z[0..name.len], name);
-        name_z[name.len] = 0;
+        var name_buf: [256:0]u8 = undefined;
+        if (name.len >= name_buf.len) return error.InvalidTopic;
+        @memcpy(name_buf[0..name.len], name);
+        name_buf[name.len] = 0;
 
-        const fd = c.shm_open(name_z[0..name.len :0], @as(c_int, @bitCast(os.O{ .ACCMODE = .RDWR })), 0);
+        const fd = c.shm_open(name_buf[0..name.len :0], @as(c_int, @bitCast(os.O{ .ACCMODE = .RDWR })), 0);
         if (fd == -1) return error.TopicNotFound;
         errdefer _ = os.close(fd);
 

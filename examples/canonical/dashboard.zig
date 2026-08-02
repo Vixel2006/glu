@@ -11,7 +11,7 @@ const capacity = 4096;
 const tcp_port: u16 = 9999;
 const tick_rate_hz = 200;
 
-fn sendToSync(io: *IO, socket: glu.udp.Socket, host: []const u8, port: u16, data: []const u8) !void {
+fn send_to_sync(io: *IO, socket: glu.udp.Socket, host: []const u8, port: u16, data: []const u8) !void {
     const SyncState = struct {
         done: bool = false,
         result: IO.SendToError!usize = undefined,
@@ -33,7 +33,7 @@ fn sendToSync(io: *IO, socket: glu.udp.Socket, host: []const u8, port: u16, data
     _ = try state.result;
 }
 
-fn acceptSync(io: *IO, server: *glu.tcp.Server) !glu.tcp.Stream {
+fn accept_sync(io: *IO, server: *glu.tcp.Server) !glu.tcp.Stream {
     const SyncState = struct {
         done: bool = false,
         result: IO.AcceptError!glu.tcp.Stream = undefined,
@@ -63,20 +63,20 @@ fn sleep(ms: u64) void {
     _ = std.os.linux.nanosleep(&ts, null);
 }
 
-fn runDisplay(allocator: std.mem.Allocator) void {
+fn run_display() void {
     var io = IO.init(32, 0) catch |e| {
         std.debug.print("[dashboard/tx] IO init failed: {}\n", .{e});
         return;
     };
     defer io.deinit();
 
-    var filtered_sub = glu.Subscriber.init(allocator, topic_filtered, @sizeOf(msgs.FilteredTemperature), capacity) catch |e| {
+    var filtered_sub = glu.Subscriber.init(topic_filtered, @sizeOf(msgs.FilteredTemperature), capacity) catch |e| {
         std.debug.print("[dashboard/tx] subscriber init failed: {}\n", .{e});
         return;
     };
     defer filtered_sub.deinit();
 
-    var status_sub = glu.Subscriber.init(allocator, topic_status, @sizeOf(msgs.SensorStatus), 128) catch |e| {
+    var status_sub = glu.Subscriber.init(topic_status, @sizeOf(msgs.SensorStatus), 128) catch |e| {
         std.debug.print("[dashboard/tx] status subscriber init failed: {}\n", .{e});
         return;
     };
@@ -119,37 +119,38 @@ fn runDisplay(allocator: std.mem.Allocator) void {
                 );
             }
 
-            if (glu.registry.list_alive(allocator)) |entries| {
-                if (entries.len > 0) {
+            var entry_buf: [128]glu.registry.NodeEntry = undefined;
+            if (glu.registry.list_alive(&entry_buf)) |count| {
+                if (count > 0) {
                     std.debug.print("[dashboard] nodes:", .{});
-                    for (entries) |entry| {
+                    for (entry_buf[0..count]) |entry| {
                         const s = if (entry.alive) "\x1b[32malive\x1b[0m" else "\x1b[31mdead\x1b[0m";
-                        std.debug.print("  {s}(pid={d},{s})", .{ entry.name, entry.pid, s });
-                        allocator.free(entry.name);
+                        std.debug.print("  {s}(pid={d},{s})", .{ entry.name[0..entry.name_len], entry.pid, s });
                     }
                     std.debug.print("\n", .{});
                 }
-                allocator.free(entries);
             } else |_| {}
 
-            sendToSync(&io, udp_sock, "127.0.0.1", 9997, "dashboard_alive") catch {};
+            send_to_sync(&io, udp_sock, "127.0.0.1", 9997, "dashboard_alive") catch |e| {
+                std.debug.print("[dashboard/tx] warning: failed to send UDP heartbeat: {}\n", .{e});
+            };
         }
 
-        io.run(0) catch {};
+        io.run(0) catch |e| {
+            std.debug.print("[dashboard/tx] IO run error: {}\n", .{e});
+        };
         sleep(1000 / tick_rate_hz);
     }
 }
 
-fn runTcpServer() void {
-    const allocator = std.heap.page_allocator;
-
+fn run_tcp_server() void {
     var io = IO.init(32, 0) catch |e| {
         std.debug.print("[dashboard/tcp] IO init failed: {}\n", .{e});
         return;
     };
     defer io.deinit();
 
-    var sub = glu.Subscriber.init(allocator, topic_filtered, @sizeOf(msgs.FilteredTemperature), capacity) catch |e| {
+    var sub = glu.Subscriber.init(topic_filtered, @sizeOf(msgs.FilteredTemperature), capacity) catch |e| {
         std.debug.print("[dashboard/tcp] subscriber init failed: {}\n", .{e});
         return;
     };
@@ -164,7 +165,7 @@ fn runTcpServer() void {
     std.debug.print("[dashboard/tcp] listening on :{d} (glu)\n", .{tcp_port});
 
     while (true) {
-        var stream = acceptSync(&io, &server) catch |e| {
+        var stream = accept_sync(&io, &server) catch |e| {
             std.debug.print("[dashboard/tcp] accept error: {}\n", .{e});
             sleep(100);
             continue;
@@ -183,7 +184,9 @@ fn runTcpServer() void {
                 glu.tcp.send(&io, &stream, std.mem.asBytes(&data)) catch break;
             }
 
-            io.run(0) catch {};
+            io.run(0) catch |e| {
+                std.debug.print("[dashboard/tcp] IO run error: {}\n", .{e});
+            };
             sleep(1000 / tick_rate_hz);
         }
         glu.tcp.close(&stream);
@@ -191,7 +194,9 @@ fn runTcpServer() void {
 }
 
 pub fn main() void {
-    glu.registry.register(node_name) catch {};
+    glu.registry.register(node_name) catch |e| {
+        std.debug.print("[dashboard] warning: failed to register node: {}\n", .{e});
+    };
     defer glu.registry.unregister(node_name);
 
     std.debug.print(
@@ -206,11 +211,10 @@ pub fn main() void {
     const pid = std.c.fork();
 
     if (pid == 0) {
-        runTcpServer();
+        run_tcp_server();
         std.c.exit(0);
     } else if (pid > 0) {
-        const allocator = std.heap.page_allocator;
-        runDisplay(allocator);
+        run_display();
         _ = std.c.kill(pid, std.posix.SIG.TERM);
         _ = std.c.waitpid(pid, null, 0);
     } else {

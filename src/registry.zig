@@ -13,7 +13,8 @@ const REGISTRY_DIR = "/tmp/glu/nodes";
 
 /// A discovered node with its PID and health status.
 pub const NodeEntry = struct {
-    name: []const u8,
+    name: [64]u8,
+    name_len: u32,
     pid: u32,
     alive: bool,
 };
@@ -27,7 +28,10 @@ pub fn register_pid(name: []const u8, pid: u32) RegistryErr!void {
     assert(pid > 0);
     const io = std.Io.Threaded.global_single_threaded.io();
     const cwd = std.Io.Dir.cwd();
-    cwd.createDirPath(io, REGISTRY_DIR) catch {};
+    cwd.createDirPath(io, REGISTRY_DIR) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return RegistryErr.FileSystem,
+    };
 
     var path_buf: [256]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "{s}/{s}.pid", .{ REGISTRY_DIR, name });
@@ -44,7 +48,10 @@ pub fn register(name: []const u8) RegistryErr!void {
     assert(name.len > 0);
     const io = std.Io.Threaded.global_single_threaded.io();
     const cwd = std.Io.Dir.cwd();
-    cwd.createDirPath(io, REGISTRY_DIR) catch {};
+    cwd.createDirPath(io, REGISTRY_DIR) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return RegistryErr.FileSystem,
+    };
 
     var path_buf: [256]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, "{s}/{s}.pid", .{ REGISTRY_DIR, name });
@@ -60,8 +67,14 @@ pub fn unregister(name: []const u8) void {
     const io = std.Io.Threaded.global_single_threaded.io();
     const cwd = std.Io.Dir.cwd();
     var path_buf: [256]u8 = undefined;
-    const path = std.fmt.bufPrint(&path_buf, "{s}/{s}.pid", .{ REGISTRY_DIR, name }) catch return;
-    cwd.deleteFile(io, path) catch {};
+    const path = std.fmt.bufPrint(&path_buf, "{s}/{s}.pid", .{ REGISTRY_DIR, name }) catch |err| {
+        std.log.err("unregister: failed to format path for node '{s}': {}", .{ name, err });
+        return;
+    };
+    cwd.deleteFile(io, path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => |e| std.log.err("unregister: failed to delete file '{s}': {}", .{ path, e }),
+    };
 }
 
 /// Check if a process with the given PID is still alive.
@@ -79,14 +92,14 @@ pub fn is_alive(pid: u32) bool {
 ///
 /// Scans `/tmp/glu/nodes/*.pid` files, reads each PID, and calls
 /// `is_alive` to determine if the process is still running.
-/// Returns an owned slice allocated with `allocator`.
-pub fn list_alive(allocator: std.mem.Allocator) RegistryErr![]NodeEntry {
-    var entries = std.ArrayList(NodeEntry).empty;
-
-    const dirp = c.opendir(REGISTRY_DIR) orelse return entries.toOwnedSlice(allocator);
+/// Writes up to `entries.len` elements into the provided slice.
+/// Returns the number of nodes found and written.
+pub fn list_alive(entries: []NodeEntry) RegistryErr!usize {
+    const dirp = c.opendir(REGISTRY_DIR) orelse return 0;
     defer _ = c.closedir(dirp);
 
-    while (true) {
+    var count: usize = 0;
+    while (count < entries.len) {
         const entry = c.readdir(dirp) orelse break;
         const name = std.mem.sliceTo(@as([]const u8, entry.name[0..]), 0);
         if (name.len <= 4) continue;
@@ -109,30 +122,34 @@ pub fn list_alive(allocator: std.mem.Allocator) RegistryErr![]NodeEntry {
         const content = buf[0..@as(usize, @intCast(nread))];
         const pid = std.fmt.parseInt(u32, std.mem.trim(u8, content, " \n\r"), 10) catch continue;
 
-        const name_copy = try allocator.dupe(u8, node_name);
-        try entries.append(allocator, .{ .name = name_copy, .pid = pid, .alive = is_alive(pid) });
+        var name_arr = std.mem.zeroes([64]u8);
+        const name_len = @min(@as(u32, @intCast(node_name.len)), 63);
+        @memcpy(name_arr[0..name_len], node_name[0..name_len]);
+
+        entries[count] = .{
+            .name = name_arr,
+            .name_len = name_len,
+            .pid = pid,
+            .alive = is_alive(pid),
+        };
+        count += 1;
     }
 
-    return entries.toOwnedSlice(allocator);
+    return count;
 }
 
 test "register and list_alive" {
-    const allocator = std.testing.allocator;
-
     const name = "glu-test-register-alive";
     defer unregister(name);
 
     try register(name);
 
-    const entries = try list_alive(allocator);
-    defer {
-        for (entries) |e| allocator.free(e.name);
-        allocator.free(entries);
-    }
+    var entries: [16]NodeEntry = undefined;
+    const count = try list_alive(&entries);
 
     var found = false;
-    for (entries) |e| {
-        if (std.mem.eql(u8, e.name, name)) {
+    for (entries[0..count]) |e| {
+        if (std.mem.eql(u8, e.name[0..e.name_len], name)) {
             found = true;
             try std.testing.expectEqual(@as(u32, @intCast(os.getpid())), e.pid);
             try std.testing.expect(e.alive);
@@ -142,22 +159,17 @@ test "register and list_alive" {
 }
 
 test "register_pid with explicit PID" {
-    const allocator = std.testing.allocator;
-
     const name = "glu-test-register-pid";
     defer unregister(name);
 
     try register_pid(name, 42);
 
-    const entries = try list_alive(allocator);
-    defer {
-        for (entries) |e| allocator.free(e.name);
-        allocator.free(entries);
-    }
+    var entries: [16]NodeEntry = undefined;
+    const count = try list_alive(&entries);
 
     var found = false;
-    for (entries) |e| {
-        if (std.mem.eql(u8, e.name, name)) {
+    for (entries[0..count]) |e| {
+        if (std.mem.eql(u8, e.name[0..e.name_len], name)) {
             found = true;
             try std.testing.expectEqual(@as(u32, 42), e.pid);
         }
@@ -166,21 +178,16 @@ test "register_pid with explicit PID" {
 }
 
 test "unregister removes entry" {
-    const allocator = std.testing.allocator;
-
     const name = "glu-test-unregister";
     try register(name);
 
     // Verify it exists
     {
-        const entries = try list_alive(allocator);
-        defer {
-            for (entries) |e| allocator.free(e.name);
-            allocator.free(entries);
-        }
+        var entries: [16]NodeEntry = undefined;
+        const count = try list_alive(&entries);
         var found = false;
-        for (entries) |e| {
-            if (std.mem.eql(u8, e.name, name)) {
+        for (entries[0..count]) |e| {
+            if (std.mem.eql(u8, e.name[0..e.name_len], name)) {
                 found = true;
             }
         }
@@ -191,13 +198,10 @@ test "unregister removes entry" {
 
     // Verify it's gone
     {
-        const entries = try list_alive(allocator);
-        defer {
-            for (entries) |e| allocator.free(e.name);
-            allocator.free(entries);
-        }
-        for (entries) |e| {
-            try std.testing.expect(!std.mem.eql(u8, e.name, name));
+        var entries: [16]NodeEntry = undefined;
+        const count = try list_alive(&entries);
+        for (entries[0..count]) |e| {
+            try std.testing.expect(!std.mem.eql(u8, e.name[0..e.name_len], name));
         }
     }
 }
@@ -207,18 +211,13 @@ test "unregister nonexistent name does not crash" {
 }
 
 test "list_alive empty when no matching nodes" {
-    const allocator = std.testing.allocator;
-
     const name = "glu-test-list-empty";
     defer unregister(name);
 
-    const entries = try list_alive(allocator);
-    defer {
-        for (entries) |e| allocator.free(e.name);
-        allocator.free(entries);
-    }
+    var entries: [16]NodeEntry = undefined;
+    const count = try list_alive(&entries);
 
-    for (entries) |e| {
-        try std.testing.expect(!std.mem.eql(u8, e.name, name));
+    for (entries[0..count]) |e| {
+        try std.testing.expect(!std.mem.eql(u8, e.name[0..e.name_len], name));
     }
 }

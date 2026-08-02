@@ -15,7 +15,7 @@ pub const LaunchedNode = struct {
     child: std.process.Child,
 };
 
-fn buildArgv(allocator: std.mem.Allocator, cfg: *const NodeConfig) LaunchErr![]const []const u8 {
+fn build_argv(allocator: std.mem.Allocator, cfg: *const NodeConfig) LaunchErr![]const []const u8 {
     if (cfg.bin.len > 0) {
         const args = try allocator.alloc([]const u8, 1 + cfg.extra_cfg.len);
         args[0] = cfg.bin;
@@ -45,7 +45,7 @@ pub fn launch(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig
     }
 
     for (cfgs) |cfg| {
-        const argv = try buildArgv(allocator, &cfg);
+        const argv = try build_argv(allocator, &cfg);
         const child = std.process.spawn(io, .{
             .argv = argv,
             .stdout = .inherit,
@@ -53,7 +53,11 @@ pub fn launch(io: std.Io, allocator: std.mem.Allocator, cfgs: []const NodeConfig
             .stderr = .inherit,
         }) catch return LaunchErr.FileSystem;
         allocator.free(argv);
-        if (child.id) |pid| Registry.register_pid(cfg.name, @intCast(pid)) catch {};
+        if (child.id) |pid| {
+            Registry.register_pid(cfg.name, @intCast(pid)) catch |err| {
+                std.log.warn("failed to register pid {} for node '{s}': {}", .{ pid, cfg.name, err });
+            };
+        }
         launched.appendAssumeCapacity(.{ .name = cfg.name, .child = child });
     }
 
@@ -70,7 +74,7 @@ pub fn launch_detached(io: std.Io, allocator: std.mem.Allocator, cfgs: []const N
     cwd.createDirPath(io, logs_dir) catch return LaunchErr.FileSystem;
 
     for (cfgs) |cfg| {
-        const argv = buildArgv(allocator, &cfg) catch continue;
+        const argv = build_argv(allocator, &cfg) catch continue;
 
         var path_buf: [256]u8 = undefined;
         const path = try std.fmt.bufPrint(&path_buf, "{s}/{s}.log", .{ logs_dir, cfg.name });
@@ -90,11 +94,15 @@ pub fn launch_detached(io: std.Io, allocator: std.mem.Allocator, cfgs: []const N
             continue;
         };
         allocator.free(argv);
-        if (child.id) |pid| Registry.register_pid(cfg.name, @intCast(pid)) catch {};
+        if (child.id) |pid| {
+            Registry.register_pid(cfg.name, @intCast(pid)) catch |err| {
+                std.log.warn("failed to register pid {} for node '{s}': {}", .{ pid, cfg.name, err });
+            };
+        }
     }
 }
 
-fn testNodePath(allocator: std.mem.Allocator, dir: std.testing.TmpDir, name: []const u8) LaunchErr![]const u8 {
+fn test_node_path(allocator: std.mem.Allocator, dir: std.testing.TmpDir, name: []const u8) LaunchErr![]const u8 {
     return std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/{s}", .{ &dir.sub_path, name });
 }
 
@@ -106,7 +114,7 @@ test "launch and wait" {
     defer dir.cleanup();
 
     try dir.dir.writeFile(io, .{ .sub_path = "ok.zig", .data = "pub fn main() u8 { return 0; }" });
-    const path = try testNodePath(allocator, dir, "ok.zig");
+    const path = try test_node_path(allocator, dir, "ok.zig");
     defer allocator.free(path);
 
     const cfgs = &[_]NodeConfig{.{ .name = "ok", .path = path }};
@@ -143,7 +151,7 @@ test "launch with extra arguments" {
         \\}
     ;
     try dir.dir.writeFile(io, .{ .sub_path = "args.zig", .data = node_src });
-    const path = try testNodePath(allocator, dir, "args.zig");
+    const path = try test_node_path(allocator, dir, "args.zig");
     defer allocator.free(path);
 
     const extra = &[_][]const u8{ "--fps", "30" };

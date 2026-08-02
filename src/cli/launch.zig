@@ -10,7 +10,7 @@ const Registry = @import("../registry.zig");
 var launched_children: []launch_mod.LaunchedNode = &.{};
 var launch_io: std.Io = undefined;
 
-fn handleSigint(_: os.SIG) callconv(.c) void {
+fn handle_sigint(_: os.SIG) callconv(.c) void {
     for (launched_children) |*n| {
         n.child.kill(launch_io);
         Registry.unregister(n.name);
@@ -57,7 +57,7 @@ pub fn cmd_launch(init: std.process.Init, args: *std.process.Args.Iterator) !voi
     launch_io = init.io;
 
     var sa: os.Sigaction = .{
-        .handler = .{ .handler = handleSigint },
+        .handler = .{ .handler = handle_sigint },
         .mask = os.sigemptyset(),
         .flags = 0,
     };

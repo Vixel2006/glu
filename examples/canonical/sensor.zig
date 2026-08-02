@@ -10,7 +10,7 @@ const capacity = 4096;
 const rate_hz = 50;
 const node_name = "temperature_sensor";
 
-fn sendToSync(io: *IO, socket: glu.udp.Socket, host: []const u8, port: u16, data: []const u8) !void {
+fn send_to_sync(io: *IO, socket: glu.udp.Socket, host: []const u8, port: u16, data: []const u8) !void {
     const SyncState = struct {
         done: bool = false,
         result: IO.SendToError!usize = undefined,
@@ -32,7 +32,7 @@ fn sendToSync(io: *IO, socket: glu.udp.Socket, host: []const u8, port: u16, data
     _ = try state.result;
 }
 
-fn milliTimestamp() i64 {
+fn milli_timestamp() i64 {
     var ts: std.os.linux.timespec = undefined;
     _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.REALTIME, &ts);
     return @as(i64, @intCast(ts.sec)) * 1000 + @divTrunc(@as(i64, @intCast(ts.nsec)), 1_000_000);
@@ -47,27 +47,27 @@ fn sleep(ms: u64) void {
 }
 
 pub fn main() void {
-    const allocator = std.heap.page_allocator;
-
     var io = IO.init(32, 0) catch |e| {
         std.debug.print("[sensor] IO init failed: {}\n", .{e});
         return;
     };
     defer io.deinit();
 
-    var temp_pub = glu.Publisher.init(allocator, topic_temp, @sizeOf(msgs.TemperatureReading), capacity, .reliable) catch |e| {
+    var temp_pub = glu.Publisher.init(topic_temp, @sizeOf(msgs.TemperatureReading), capacity, .reliable) catch |e| {
         std.debug.print("[sensor] publisher init failed: {}\n", .{e});
         return;
     };
     defer temp_pub.deinit();
 
-    var status_pub = glu.Publisher.init(allocator, topic_status, @sizeOf(msgs.SensorStatus), 128, .reliable) catch |e| {
+    var status_pub = glu.Publisher.init(topic_status, @sizeOf(msgs.SensorStatus), 128, .reliable) catch |e| {
         std.debug.print("[sensor] status publisher init failed: {}\n", .{e});
         return;
     };
     defer status_pub.deinit();
 
-    glu.registry.register(node_name) catch {};
+    glu.registry.register(node_name) catch |e| {
+        std.debug.print("[sensor] warning: failed to register node: {}\n", .{e});
+    };
     defer glu.registry.unregister(node_name);
 
     var udp_sock = glu.udp.bind(&io, 0, .{}) catch |e| {
@@ -107,7 +107,7 @@ pub fn main() void {
         const slot: *msgs.TemperatureReading = @ptrCast(@alignCast(temp_pub.reserve()));
         slot.* = msgs.TemperatureReading{
             .seq = seq_temp,
-            .timestamp = milliTimestamp(),
+            .timestamp = milli_timestamp(),
             .temperature = temperature,
             .humidity = humidity,
             .sensor_id = 1,
@@ -119,7 +119,7 @@ pub fn main() void {
             const voltage = 12.5 - @as(f32, @floatFromInt(uptime)) * 0.001;
             const status = msgs.SensorStatus{
                 .seq = seq_status,
-                .timestamp = milliTimestamp(),
+                .timestamp = milli_timestamp(),
                 .uptime_sec = uptime,
                 .battery_voltage = @max(10.0, voltage),
                 .error_count = 0,
@@ -127,7 +127,9 @@ pub fn main() void {
             status_pub.publish(@ptrCast(&status));
             seq_status += 1;
 
-            sendToSync(&io, udp_sock, "127.0.0.1", 9997, "sensor_alive") catch {};
+            send_to_sync(&io, udp_sock, "127.0.0.1", 9997, "sensor_alive") catch |e| {
+                std.debug.print("[sensor] warning: failed to send UDP heartbeat: {}\n", .{e});
+            };
         }
 
         if (seq_temp > 0 and seq_temp % (rate_hz * 5) == 0) {
@@ -137,7 +139,9 @@ pub fn main() void {
             );
         }
 
-        io.run(0) catch {};
+        io.run(0) catch |e| {
+            std.debug.print("[sensor] IO run error: {}\n", .{e});
+        };
         sleep(interval_ms);
     }
 }
