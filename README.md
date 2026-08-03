@@ -52,7 +52,7 @@ Each topic is backed by a POSIX shared memory file mapped into each node's addre
                  |                     (/dev/shm/topic)                 |
                  |                                                      |
                  |  +--------------------+---------------------------+  |
-                 |  |    Header (160B)   |       Ring Buffer         |  |
+                 |  |    Header (168B)   |       Ring Buffer         |  |
                  |  |                    |                           |  |
                  |  |  Write Cursor (W)  |  +------+------+------+   |  |
 +-----------+    |  |  Read Cursors:     |  |Slot 0|Slot 1|Slot 2|   |  |  +------------+
@@ -64,7 +64,7 @@ Each topic is backed by a POSIX shared memory file mapped into each node's addre
   .commit()      +------------------------------------------------------+
 ```
 
-*   **Header (160 Bytes)**: Stores operational metadata, active connections, Type of Service, subscriber read cursors (up to 8), and subscriber PIDs.
+*   **Header (168 Bytes)**: Stores operational metadata, active connections, Type of Service, the segment owner's PID, and subscriber reader entries. Each entry packs the subscriber PID and read cursor into one 64-bit word, so a slot is claimed with a single atomic operation.
 *   **Write**: The publisher claims slot `W % capacity`, writes fields directly, and atomically increments the write cursor.
 *   **Read**: Each subscriber reads from its own reader index. If the subscriber's cursor lags behind the write cursor, it reads directly from the slot.
 
@@ -169,11 +169,12 @@ pub fn main() !void {
     defer subscriber.deinit();
 
     while (true) {
-        if (subscriber.receive()) |raw| {
+        if (subscriber.peek()) |raw| {
             const msg: *Telemetry = @ptrCast(@alignCast(raw));
             std.debug.print("Received: seq={d}, temp={d:.2}°C, hum={d:.1}%\n", .{
                 msg.seq, msg.temperature, msg.humidity,
             });
+            subscriber.ack();
         }
         sleepMs(10);
     }

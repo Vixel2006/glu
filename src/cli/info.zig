@@ -30,9 +30,9 @@ pub fn cmd_info(init: std.process.Init, args: *std.process.Args.Iterator) !void 
     const hdr = t.header;
 
     const name_slice = hdr.name[0..hdr.name_len];
-    const data_size = hdr.msg_size * hdr.capacity;
-    var read_vals: [MAX_READERS]u32 = undefined;
-    @memcpy(&read_vals, &hdr.read);
+    const data_size = @as(u64, hdr.msg_size) * @as(u64, hdr.capacity);
+    var read_vals: [MAX_READERS]u64 = undefined;
+    @memcpy(&read_vals, &hdr.readers);
     const slowest = slowest_reader(&read_vals, hdr.write);
     const depth = hdr.write -% slowest;
     const pct = if (hdr.capacity > 0) @as(f64, @floatFromInt(depth)) / @as(f64, @floatFromInt(hdr.capacity)) * 100.0 else 0.0;
@@ -47,10 +47,11 @@ pub fn cmd_info(init: std.process.Init, args: *std.process.Args.Iterator) !void 
     try w.print("Write Pos:   {d}\n", .{hdr.write % hdr.capacity});
     try w.print("Queued:      {d} ({d:.1}% full)\n", .{ depth, pct });
     try w.print("Readers:\n", .{});
-    for (&read_vals, 0..) |r, i| {
-        if (r == std.math.maxInt(u32)) {
+    for (&read_vals, 0..) |entry, i| {
+        if (entry == 0) {
             try w.print("  [{d}] inactive\n", .{i});
         } else {
+            const r: u32 = @truncate(entry);
             const behind = hdr.write -% r;
             try w.print("  [{d}] {d} ({d} behind)\n", .{ i, r % hdr.capacity, behind });
         }

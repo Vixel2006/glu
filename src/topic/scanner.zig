@@ -49,8 +49,8 @@ pub fn scan_topics(entries: []TopicEntry) ScanErr!usize {
         const name_len = @min(@as(u32, @intCast(hdr.name_len)), 63);
         @memcpy(name_arr[0..name_len], hdr.name[0..name_len]);
 
-        var read_vals: [MAX_READERS]u32 = undefined;
-        @memcpy(&read_vals, &hdr.read);
+        var read_vals: [MAX_READERS]u64 = undefined;
+        @memcpy(&read_vals, &hdr.readers);
 
         entries[count] = .{
             .name = name_arr,

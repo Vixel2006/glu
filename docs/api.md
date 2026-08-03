@@ -124,12 +124,19 @@ pub fn deinit(self: *Subscriber) void
 ```
 *   **Description**: Marks the reader slot as inactive so the publisher no longer waits for it, closes the segment, and unmaps the memory.
 
-#### `receive`
+#### `peek`
 ```zig
-pub fn receive(self: *Subscriber) ?*anyopaque
+pub fn peek(self: *Subscriber) ?*anyopaque
 ```
-*   **Description**: Non-blocking retrieve. Compares the subscriber's private read cursor against the publisher's global write cursor. If new data is available, it advances the cursor and returns a direct pointer to the slot.
+*   **Description**: Non-blocking retrieve. Compares the subscriber's private read cursor against the publisher's global write cursor. If new data is available, returns a direct pointer to the slot *without consuming it*.
 *   **Returns**: An aligned pointer (`*anyopaque`) to the slot if a new message is available; otherwise, `null`.
+*   **Note**: The returned pointer stays valid until `ack` is called. Copy the message before acknowledging, otherwise the publisher may wrap around and overwrite the slot.
+
+#### `ack`
+```zig
+pub fn ack(self: *Subscriber) void
+```
+*   **Description**: Marks the most recently peeked message as consumed, advancing the read cursor so the publisher may reuse the slot.
 
 #### Example: Subscribing to Data
 ```zig
@@ -149,9 +156,10 @@ pub fn main() !void {
     defer sub.deinit();
 
     while (true) {
-        if (sub.receive()) |raw| {
+        if (sub.peek()) |raw| {
             const msg: *JointState = @ptrCast(@alignCast(raw));
             std.debug.print("Received: seq={d}, pos={d:.2}\n", .{ msg.seq, msg.position });
+            sub.ack();
         }
         sleepMs(10);
     }
