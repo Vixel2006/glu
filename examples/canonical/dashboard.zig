@@ -11,7 +11,6 @@ const capacity = 4096;
 const tcp_port: u16 = 9999;
 const tick_rate_hz = 200;
 
-
 fn sleep(ms: u64) void {
     var ts = std.os.linux.timespec{
         .sec = @as(i64, @intCast(ms / 1000)),
@@ -58,14 +57,16 @@ fn run_display() void {
     var heartbeat_active = false;
 
     while (true) {
-        while (filtered_sub.receive()) |raw| {
+        while (filtered_sub.peek()) |raw| {
             const msg: *msgs.FilteredTemperature = @ptrCast(@alignCast(raw));
             latest_filtered = msg.*;
+            filtered_sub.ack();
         }
 
-        while (status_sub.receive()) |raw| {
+        while (status_sub.peek()) |raw| {
             const msg: *msgs.SensorStatus = @ptrCast(@alignCast(raw));
             _ = msg;
+            status_sub.ack();
         }
 
         tick += 1;
@@ -150,9 +151,10 @@ fn run_tcp_server() void {
         var send_pending = false;
 
         while (true) {
-            while (sub.receive()) |raw| {
+            while (sub.peek()) |raw| {
                 const msg: *msgs.FilteredTemperature = @ptrCast(@alignCast(raw));
                 latest = msg.*;
+                sub.ack();
             }
 
             if (send_pending and compl_send.done) {

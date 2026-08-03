@@ -9,15 +9,19 @@ const Registry = @import("../registry.zig");
 
 var launched_children: []launch_mod.LaunchedNode = &.{};
 var launch_io: std.Io = undefined;
+var g_interrupted: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
+/// Async-signal-safe SIGINT handler.
+///
+/// Only sets a flag and kills the children (both async-signal-safe).
+/// All file I/O cleanup (registry unregister, topic/log cleanup) is
+/// deferred to the main thread in `cmd_launch`; doing file operations
+/// from a signal handler is not async-signal-safe and can deadlock.
 fn handle_sigint(_: os.SIG) callconv(.c) void {
+    g_interrupted.store(true, .seq_cst);
     for (launched_children) |*n| {
         n.child.kill(launch_io);
-        Registry.unregister(n.name);
     }
-    topic.cleanup_topics();
-    debug.cleanup_logs(launch_io);
-    std.process.exit(1);
 }
 
 /// Launch nodes from a TOML config (`glu launch -f <file> [-d]`).
@@ -70,6 +74,7 @@ pub fn cmd_launch(init: std.process.Init, args: *std.process.Args.Iterator) !voi
 
     for (launched_children) |*n| {
         const term = n.child.wait(init.io) catch |err| {
+            if (g_interrupted.load(.seq_cst)) break;
             var fw = utils.writer(init);
             fw.interface.print("error waiting for node '{s}': {}\n", .{ n.name, err }) catch {};
             continue;
@@ -80,6 +85,16 @@ pub fn cmd_launch(init: std.process.Init, args: *std.process.Args.Iterator) !voi
             .signal => |sig| fw.interface.print("node '{s}' killed by signal {}\n", .{ n.name, sig }) catch {},
             else => fw.interface.print("node '{s}' terminated unexpectedly\n", .{n.name}) catch {},
         }
+        if (g_interrupted.load(.seq_cst)) break;
+    }
+
+    // Cleanup must run on the main thread: the signal handler only flags
+    // the interrupt and kills the children.
+    if (g_interrupted.load(.seq_cst)) {
+        for (launched_children) |*n| {
+            Registry.unregister(n.name);
+        }
+        topic.cleanup_topics();
     }
 
     debug.cleanup_logs(init.io);

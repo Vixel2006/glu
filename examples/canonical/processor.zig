@@ -84,7 +84,7 @@ pub fn main() void {
     var alert_cooldown: u32 = 0;
 
     while (true) {
-        while (raw_sub.receive()) |raw| {
+        while (raw_sub.peek()) |raw| {
             const msg: *msgs.TemperatureReading = @ptrCast(@alignCast(raw));
 
             window[window_idx] = msg.temperature;
@@ -122,6 +122,8 @@ pub fn main() void {
                     .{ seq, msg.temperature, filtered, window_count },
                 );
             }
+
+            raw_sub.ack();
         }
 
         if (alert_cooldown > 0) alert_cooldown -= 1;

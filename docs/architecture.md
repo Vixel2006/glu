@@ -14,12 +14,12 @@ The shared memory layout looks like this:
 
 ```
 +-------------------------------------------------------+
-|                    Header (160B)                      |
+|                    Header (168B)                      |
 |  - magic (u32)        - write cursor (u32)            |
 |  - connections (u32)  - msg_size / capacity (u32)     |
 |  - tos (u32)          - name length & name (68B)      |
-|  - read cursors (8 x u32)                             |
-|  - registered PIDs (8 x u32)                          |
+|  - owner_pid (u32)    - reader entries (8 x u64)      |
+|    (PID + cursor packed per subscriber)               |
 +-------------------------------------------------------+
 |                      Slot 0                           |
 |                      Slot 1                           |
@@ -28,16 +28,16 @@ The shared memory layout looks like this:
 +-------------------------------------------------------+
 ```
 
-### The `Header` Struct (160 Bytes)
+### The `Header` Struct (168 Bytes)
 At the very beginning (offset 0) of the shared memory file sits a strictly laid-out `Header` structure:
 *   `magic`: `0x474C5500` (ASCII for `GLU\0`). Used to verify that the segment is a valid `glu` channel.
 *   `write`: The publisher's write cursor (monotonically increasing counter).
 *   `conns`: The active connection count. The last process to close the segment unlinks the file from `/dev/shm/`.
 *   `msg_size` & `capacity`: Setup options defined at topic creation.
 *   `tos`: Type of Service (0 = `.reliable`, 1 = `.best_effort`).
-*   `name`: The topic path name (up to 64 bytes). Pushed to align the read cursor arrays.
-*   `read`: An array of 8 integers representing the current read cursor of each active subscriber.
-*   `pids`: An array of 8 PIDs representing the active process IDs of the subscribers.
+*   `name`: The topic path name (up to 64 bytes). Pushed to align the reader entry array.
+*   `owner_pid`: The PID of the process that created the segment (used to scope stale-segment cleanup).
+*   `readers`: An array of 8 entries, each packing the owning subscriber's PID (high 32 bits) and read cursor (low 32 bits). A zero entry is an unclaimed slot; a subscriber claims one with a single atomic compare-and-swap.
 
 ---
 
@@ -58,13 +58,15 @@ At the very beginning (offset 0) of the shared memory file sits a strictly laid-
 ### Subscribing to a Message (Zero-Copy)
 1.  **Read Cursors**: The subscriber reads its own read cursor `r = read[id]` and the publisher's write cursor `w = write` using acquire semantics:
     ```zig
-    const r = @atomicLoad(u32, &self.channel.header.read[self.id], .monotonic);
+    const entry = @atomicLoad(u64, &self.channel.header.readers[self.id], .acquire);
+    const r: u32 = @truncate(entry); // low 32 bits = read cursor
     const w = @atomicLoad(u32, &self.channel.header.write, .acquire);
     ```
 2.  **Consume**: If `r < w` (new data is available), the subscriber reads the slot directly from `/dev/shm/` by dereferencing the pointer to the slot.
-3.  **Atomic Advance**: Once processed, the read cursor is incremented using acquire semantics:
+3.  **Atomic Advance**: Once processed, the read cursor is incremented (keeping the PID in the high 32 bits untouched):
     ```zig
-    @atomicStore(u32, &self.channel.header.read[self.id], r + 1, .release);
+    // atomic compare-and-swap loop on the 64-bit reader entry,
+    // advancing only the low 32 bits
     ```
 4.  **No Data**: If `r == w`, the subscriber gets `null` and yields or polls.
 
