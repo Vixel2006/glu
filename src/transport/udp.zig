@@ -43,7 +43,7 @@ fn set_int(fd: i32, level: c_int, opt: u32, val: c_int) void {
 fn set_timeval(fd: i32, level: c_int, opt: u32, ms: u32) void {
     const tv = std.c.timeval{
         .sec = @as(c_int, @intCast(ms / 1000)),
-        .usec = @as(c_int, @intCast((ms % 1000) * 1000)),
+        .usec = @as(c_int, @intCast((ms % 1000) * 1_000_000)),
     };
     if (c.setsockopt(fd, level, opt, &tv, @sizeOf(std.c.timeval)) == -1) {
         std.log.warn("setsockopt timeval failed for fd {} level {} opt {}", .{ fd, level, opt });
@@ -75,14 +75,7 @@ pub fn bind(io: *IO, port: u16, config: SocketConfig) !Socket {
 
 pub fn send_to(
     io: *IO,
-    comptime Context: type,
-    context: Context,
-    comptime callback: fn (
-        context: Context,
-        completion: *IO.Completion,
-        result: IO.SendToError!usize,
-    ) void,
-    completion: *IO.Completion,
+    future: *IO.Future,
     socket: Socket,
     host: []const u8,
     port: u16,
@@ -101,8 +94,9 @@ pub fn send_to(
         .ip6 => return error.AddressFamilyNotSupported,
     };
 
-    try io.send_to(Context, context, callback, completion, socket, data, addr);
+    try io.send_to(future, socket, data, addr);
 }
+
 
 pub fn close(socket: *Socket) void {
     _ = c.close(socket.*);
@@ -110,49 +104,18 @@ pub fn close(socket: *Socket) void {
 
 pub fn receive_from(
     io: *IO,
-    comptime Context: type,
-    context: Context,
-    comptime callback: fn (
-        context: Context,
-        completion: *IO.Completion,
-        result: IO.RecvFromError!ReceiveResult,
-    ) void,
-    completion: *IO.Completion,
+    future: *IO.Future,
     socket: Socket,
     buffer: []u8,
 ) !void {
     assert(buffer.len > 0);
-
-    const wrapper = struct {
-        fn call(ctx: Context, compl: *IO.Completion, res: IO.RecvFromError!usize) void {
-            const result: IO.RecvFromError!ReceiveResult = blk: {
-                if (res) |n| {
-                    const addr = compl.operation.recv_from.address;
-                    break :blk ReceiveResult{
-                        .data = compl.operation.recv_from.buffer[0..n],
-                        .sender = net.address_to_endpoint(addr),
-                    };
-                } else |err| {
-                    break :blk err;
-                }
-            };
-            callback(ctx, compl, result);
-        }
-    }.call;
-
-    try io.recv_from(Context, context, wrapper, completion, socket, buffer);
+    try io.recv_from(future, socket, buffer);
 }
+
 
 pub fn connect(
     io: *IO,
-    comptime Context: type,
-    context: Context,
-    comptime callback: fn (
-        context: Context,
-        completion: *IO.Completion,
-        result: IO.ConnectError!void,
-    ) void,
-    completion: *IO.Completion,
+    future: *IO.Future,
     socket: Socket,
     host: []const u8,
     port: u16,
@@ -167,42 +130,31 @@ pub fn connect(
         },
         .ip6 => return error.AddressFamilyNotSupported,
     };
-    try io.connect(Context, context, callback, completion, socket, addr);
+    try io.connect(future, socket, addr);
 }
+
 
 pub fn send(
     io: *IO,
-    comptime Context: type,
-    context: Context,
-    comptime callback: fn (
-        context: Context,
-        completion: *IO.Completion,
-        result: IO.SendError!usize,
-    ) void,
-    completion: *IO.Completion,
+    future: *IO.Future,
     socket: Socket,
     data: []const u8,
 ) !void {
     assert(data.len > 0);
-    try io.send(Context, context, callback, completion, socket, data);
+    try io.send(future, socket, data);
 }
+
 
 pub fn receive(
     io: *IO,
-    comptime Context: type,
-    context: Context,
-    comptime callback: fn (
-        context: Context,
-        completion: *IO.Completion,
-        result: IO.RecvError!usize,
-    ) void,
-    completion: *IO.Completion,
+    future: *IO.Future,
     socket: Socket,
     buffer: []u8,
 ) !void {
     assert(buffer.len > 0);
-    try io.recv(Context, context, callback, completion, socket, buffer);
+    try io.recv(future, socket, buffer);
 }
+
 
 pub fn join_multicast(socket: Socket, group: []const u8) void {
     assert(group.len > 0);
@@ -238,50 +190,23 @@ test "send_to and receive_from round-trip" {
     _ = c.getsockname(socket1, @ptrCast(&addr1), &len1);
     const port1 = std.mem.bigToNative(u16, addr1.port);
 
-    const TestContext = struct {
-        send_done: bool = false,
-        recv_done: bool = false,
-        send_result: ?IO.SendToError!usize = null,
-        recv_result: ?IO.RecvFromError!ReceiveResult = null,
-    };
-
-    var ctx = TestContext{};
-
-    const send_cb = struct {
-        fn call(c_ctx: *TestContext, compl: *IO.Completion, res: IO.SendToError!usize) void {
-            _ = compl;
-            c_ctx.send_result = res;
-            c_ctx.send_done = true;
-        }
-    }.call;
-
-    const recv_cb = struct {
-        fn call(c_ctx: *TestContext, compl: *IO.Completion, res: IO.RecvFromError!ReceiveResult) void {
-            _ = compl;
-            c_ctx.recv_result = res;
-            c_ctx.recv_done = true;
-        }
-    }.call;
-
-    var compl_send: IO.Completion = undefined;
-    var compl_recv: IO.Completion = undefined;
+    var compl_send: IO.Future = undefined;
+    var compl_recv: IO.Future = undefined;
 
     const msg = "hello udp";
-    try send_to(&io, *TestContext, &ctx, send_cb, &compl_send, socket2, "127.0.0.1", port1, msg);
+    try send_to(&io, &compl_send, socket2, "127.0.0.1", port1, msg);
 
     var buf: [64]u8 = undefined;
-    try receive_from(&io, *TestContext, &ctx, recv_cb, &compl_recv, socket1, &buf);
+    try receive_from(&io, &compl_recv, socket1, &buf);
 
-    while (!ctx.send_done or !ctx.recv_done) {
-        try io.submit(1);
-        try io.complete(1);
-        try io.run_callback();
-    }
-
-    const sent_bytes = try ctx.send_result.?;
+    const sent_bytes = try io.wait(&compl_send, usize);
     try std.testing.expectEqual(msg.len, sent_bytes);
 
-    const recv_res = try ctx.recv_result.?;
+    const n = try io.wait(&compl_recv, usize);
+    const recv_res = ReceiveResult{
+        .data = buf[0..n],
+        .sender = net.address_to_endpoint(compl_recv.operation.recv_from.address),
+    };
     try std.testing.expectEqual(@as(usize, msg.len), recv_res.data.len);
     try std.testing.expect(std.mem.eql(u8, msg, recv_res.data));
 }

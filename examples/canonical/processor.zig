@@ -17,28 +17,17 @@ fn send_tcp_alert(io: *IO, temp: f32, seq_in: u32) void {
     var buf: [128]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "ALERT seq={d} temp={d:.1}°C\n", .{ seq_in, temp }) catch return;
 
-    const SyncState = struct {
-        done: bool = false,
-        result: IO.ConnectError!glu.tcp.Stream = undefined,
-    };
-    const cb = struct {
-        fn call(ctx: *SyncState, _: *IO.Completion, res: IO.ConnectError!glu.tcp.Stream) void {
-            ctx.result = res;
-            ctx.done = true;
-        }
-    }.call;
-
-    var compl: IO.Completion = undefined;
-    var state = SyncState{};
-    glu.tcp.connect(io, *SyncState, &state, cb, &compl, "127.0.0.1", alert_port, .{}) catch return;
-    while (!state.done) {
-        io.submit(1) catch return;
-        io.complete(1) catch return;
-        io.run_callback() catch return;
-    }
-    var stream = state.result catch return;
+    var compl_connect: IO.Future = undefined;
+    glu.tcp.connect(io, &compl_connect, "127.0.0.1", alert_port) catch return;
+    io.wait(&compl_connect, void) catch return;
+    const sock = compl_connect.operation.connect.socket;
+    glu.tcp.apply_socket_opts(sock, .{});
+    var stream = glu.tcp.Stream{ .socket = sock, .handle = sock };
     defer glu.tcp.close(&stream);
-    glu.tcp.send(io, &stream, msg) catch |e| {
+
+    var compl_send: IO.Future = undefined;
+    glu.tcp.send(io, &compl_send, &stream, msg) catch return;
+    _ = io.wait(&compl_send, usize) catch |e| {
         std.debug.print("[processor] warning: failed to send TCP alert: {}\n", .{e});
     };
 }

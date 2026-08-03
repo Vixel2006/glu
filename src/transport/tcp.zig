@@ -20,33 +20,19 @@ pub const Stream = struct {
     pub fn write(
         self: *Stream,
         io: *IO,
-        comptime Context: type,
-        context: Context,
-        comptime callback: fn (
-            context: Context,
-            completion: *IO.Completion,
-            result: IO.WriteError!usize,
-        ) void,
-        completion: *IO.Completion,
+        future: *IO.Future,
         buf: []const u8,
     ) !void {
-        try io.write(Context, context, callback, completion, self.handle, buf, 0);
+        try io.write(future, self.handle, buf, 0);
     }
 
     pub fn read(
         self: *Stream,
         io: *IO,
-        comptime Context: type,
-        context: Context,
-        comptime callback: fn (
-            context: Context,
-            completion: *IO.Completion,
-            result: IO.ReadError!usize,
-        ) void,
-        completion: *IO.Completion,
+        future: *IO.Future,
         buf: []u8,
     ) !void {
-        try io.read(Context, context, callback, completion, self.handle, buf, 0);
+        try io.read(future, self.handle, buf, 0);
     }
 };
 
@@ -124,46 +110,18 @@ pub fn listen(io: *IO, port: u16, config: Config) !Server {
 
 pub fn accept(
     io: *IO,
-    comptime Context: type,
-    context: Context,
-    comptime callback: fn (
-        context: Context,
-        completion: *IO.Completion,
-        result: IO.AcceptError!Stream,
-    ) void,
-    completion: *IO.Completion,
+    future: *IO.Future,
     server: *Server,
-    comptime config: Config,
 ) !void {
-    const wrapper = struct {
-        fn call(ctx: Context, compl: *IO.Completion, res: IO.AcceptError!posix.socket_t) void {
-            const stream_res: IO.AcceptError!Stream = blk: {
-                if (res) |sock| {
-                    apply_socket_opts(sock, config);
-                    break :blk Stream{ .socket = sock, .handle = sock };
-                } else |err| {
-                    break :blk err;
-                }
-            };
-            callback(ctx, compl, stream_res);
-        }
-    }.call;
-    try io.accept(Context, context, wrapper, completion, server.socket);
+    try io.accept(future, server.socket);
 }
+
 
 pub fn connect(
     io: *IO,
-    comptime Context: type,
-    context: Context,
-    comptime callback: fn (
-        context: Context,
-        completion: *IO.Completion,
-        result: IO.ConnectError!Stream,
-    ) void,
-    completion: *IO.Completion,
+    future: *IO.Future,
     host: []const u8,
     port: u16,
-    comptime config: Config,
 ) !void {
     assert(host.len > 0);
     assert(port > 0);
@@ -180,142 +138,31 @@ pub fn connect(
     const socket = try io.socket(posix.AF.INET, posix.SOCK.STREAM, 0);
     errdefer _ = c.close(socket);
 
-    const wrapper = struct {
-        fn call(ctx: Context, compl: *IO.Completion, res: IO.ConnectError!void) void {
-            const stream_res: IO.ConnectError!Stream = blk: {
-                if (res) |_| {
-                    const sock = compl.operation.connect.socket;
-                    apply_socket_opts(sock, config);
-                    break :blk Stream{ .socket = sock, .handle = sock };
-                } else |err| {
-                    break :blk err;
-                }
-            };
-            callback(ctx, compl, stream_res);
-        }
-    }.call;
-
-    try io.connect(Context, context, wrapper, completion, socket, addr);
+    try io.connect(future, socket, addr);
 }
 
-pub fn send(io: *IO, stream: *Stream, data: []const u8) !void {
-    assert(data.len <= std.math.maxInt(u32));
-    const len: u32 = @intCast(data.len);
-    var len_buf: [4]u8 = undefined;
-    mem.writeInt(u32, &len_buf, len, .little);
 
-    const SyncState = struct {
-        done: bool = false,
-        result: IO.WriteError!usize = undefined,
-    };
-
-    const cb = struct {
-        fn call(ctx: *SyncState, compl: *IO.Completion, res: IO.WriteError!usize) void {
-            _ = compl;
-            ctx.result = res;
-            ctx.done = true;
-        }
-    }.call;
-
-    {
-        var compl: IO.Completion = undefined;
-        var state = SyncState{};
-        try stream.write(io, *SyncState, &state, cb, &compl, &len_buf);
-        while (!state.done) {
-            try io.submit(1);
-            try io.complete(1);
-            try io.run_callback();
-        }
-        _ = try state.result;
-    }
-
-    {
-        var compl: IO.Completion = undefined;
-        var state = SyncState{};
-        try stream.write(io, *SyncState, &state, cb, &compl, data);
-        while (!state.done) {
-            try io.submit(1);
-            try io.complete(1);
-            try io.run_callback();
-        }
-        _ = try state.result;
-    }
+pub fn send(
+    io: *IO,
+    future: *IO.Future,
+    stream: *Stream,
+    data: []const u8,
+) !void {
+    assert(data.len > 0);
+    try io.send(future, stream.handle, data);
 }
 
-pub fn receive(io: *IO, stream: *Stream, buffer: []u8) !usize {
+
+pub fn receive(
+    io: *IO,
+    future: *IO.Future,
+    stream: *Stream,
+    buffer: []u8,
+) !void {
     assert(buffer.len > 0);
-    var len_buf: [4]u8 = undefined;
-
-    const SyncState = struct {
-        done: bool = false,
-        result: IO.ReadError!usize = undefined,
-    };
-
-    const cb = struct {
-        fn call(ctx: *SyncState, compl: *IO.Completion, res: IO.ReadError!usize) void {
-            _ = compl;
-            ctx.result = res;
-            ctx.done = true;
-        }
-    }.call;
-
-    var len_read: usize = 0;
-    while (len_read < 4) {
-        var compl: IO.Completion = undefined;
-        var state = SyncState{};
-        try stream.read(io, *SyncState, &state, cb, &compl, len_buf[len_read..]);
-        while (!state.done) {
-            try io.submit(1);
-            try io.complete(1);
-            try io.run_callback();
-        }
-        const n = try state.result;
-        if (n == 0) return error.ConnectionResetByPeer;
-        len_read += n;
-    }
-
-    const msg_len = mem.readInt(u32, &len_buf, .little);
-    if (msg_len == 0) return 0;
-    if (msg_len > buffer.len) {
-        var discard: [4096]u8 = undefined;
-        var remaining = msg_len;
-        while (remaining > 0) {
-            const chunk = @min(remaining, @as(u32, @intCast(discard.len)));
-            var chunk_read: usize = 0;
-            while (chunk_read < chunk) {
-                var compl: IO.Completion = undefined;
-                var state = SyncState{};
-                try stream.read(io, *SyncState, &state, cb, &compl, discard[chunk_read..chunk]);
-                while (!state.done) {
-                    try io.submit(1);
-                    try io.complete(1);
-                    try io.run_callback();
-                }
-                const n = try state.result;
-                if (n == 0) return error.ConnectionResetByPeer;
-                chunk_read += n;
-            }
-            remaining -= @as(u32, @intCast(chunk_read));
-        }
-        return error.MessageTooLarge;
-    }
-
-    var data_read: usize = 0;
-    while (data_read < msg_len) {
-        var compl: IO.Completion = undefined;
-        var state = SyncState{};
-        try stream.read(io, *SyncState, &state, cb, &compl, buffer[data_read..msg_len]);
-        while (!state.done) {
-            try io.submit(1);
-            try io.complete(1);
-            try io.run_callback();
-        }
-        const n = try state.result;
-        if (n == 0) return error.ConnectionResetByPeer;
-        data_read += n;
-    }
-    return msg_len;
+    try io.recv(future, stream.handle, buffer);
 }
+
 
 pub fn close(stream: *Stream) void {
     _ = c.close(stream.handle);
@@ -327,11 +174,13 @@ pub fn close_server(server: *Server) void {
 
 fn getPort(fd: i32) u16 {
     var sockname: std.posix.sockaddr.in = undefined;
-    var namelen: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.in);
-    if (c.getsockname(fd, @ptrCast(&sockname), &namelen) == 0)
+    var poollen: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.in);
+    if (c.getsockname(fd, @ptrCast(&sockname), &poollen) == 0)
         return mem.bigToNative(u16, sockname.port);
     return 0;
 }
+
+const testing = std.testing;
 
 test "listen: bind and close cleanly" {
     var io = try IO.init(32, 0);
@@ -350,47 +199,21 @@ test "listen + connect + accept round-trip" {
 
     const port = getPort(server.handle);
 
-    const TestContext = struct {
-        connect_done: bool = false,
-        accept_done: bool = false,
-        connect_result: ?IO.ConnectError!Stream = null,
-        accept_result: ?IO.AcceptError!Stream = null,
-    };
+    var compl_connect: IO.Future = undefined;
+    var compl_accept: IO.Future = undefined;
 
-    var ctx = TestContext{};
+    try connect(&io, &compl_connect, "127.0.0.1", port);
+    try accept(&io, &compl_accept, &server);
 
-    const connect_cb = struct {
-        fn call(c_ctx: *TestContext, compl: *IO.Completion, res: IO.ConnectError!Stream) void {
-            _ = compl;
-            c_ctx.connect_result = res;
-            c_ctx.connect_done = true;
-        }
-    }.call;
-
-    const accept_cb = struct {
-        fn call(c_ctx: *TestContext, compl: *IO.Completion, res: IO.AcceptError!Stream) void {
-            _ = compl;
-            c_ctx.accept_result = res;
-            c_ctx.accept_done = true;
-        }
-    }.call;
-
-    var compl_connect: IO.Completion = undefined;
-    var compl_accept: IO.Completion = undefined;
-
-    try connect(&io, *TestContext, &ctx, connect_cb, &compl_connect, "127.0.0.1", port, .{});
-    try accept(&io, *TestContext, &ctx, accept_cb, &compl_accept, &server, .{});
-
-    while (!ctx.connect_done or !ctx.accept_done) {
-        try io.submit(1);
-        try io.complete(1);
-        try io.run_callback();
-    }
-
-    var stream = try ctx.connect_result.?;
+    try io.wait(&compl_connect, void);
+    const client_sock = compl_connect.operation.connect.socket;
+    apply_socket_opts(client_sock, .{});
+    var stream = Stream{ .socket = client_sock, .handle = client_sock };
     defer close(&stream);
 
-    var accepted = try ctx.accept_result.?;
+    const server_sock = try io.wait(&compl_accept, posix.socket_t);
+    apply_socket_opts(server_sock, .{});
+    var accepted = Stream{ .socket = server_sock, .handle = server_sock };
     defer close(&accepted);
 }
 
@@ -402,117 +225,39 @@ test "send and receive data" {
     defer close_server(&server);
 
     const port = getPort(server.handle);
-
     const msg = "hello glu!";
 
-    const TestContext = struct {
-        connect_done: bool = false,
-        accept_done: bool = false,
-        connect_result: ?IO.ConnectError!Stream = null,
-        accept_result: ?IO.AcceptError!Stream = null,
-    };
+    var compl_connect: IO.Future = undefined;
+    var compl_accept: IO.Future = undefined;
 
-    var ctx = TestContext{};
+    try connect(&io, &compl_connect, "127.0.0.1", port);
+    try accept(&io, &compl_accept, &server);
 
-    const connect_cb = struct {
-        fn call(c_ctx: *TestContext, compl: *IO.Completion, res: IO.ConnectError!Stream) void {
-            _ = compl;
-            c_ctx.connect_result = res;
-            c_ctx.connect_done = true;
-        }
-    }.call;
-
-    const accept_cb = struct {
-        fn call(c_ctx: *TestContext, compl: *IO.Completion, res: IO.AcceptError!Stream) void {
-            _ = compl;
-            c_ctx.accept_result = res;
-            c_ctx.accept_done = true;
-        }
-    }.call;
-
-    var compl_connect: IO.Completion = undefined;
-    var compl_accept: IO.Completion = undefined;
-
-    try connect(&io, *TestContext, &ctx, connect_cb, &compl_connect, "127.0.0.1", port, .{});
-    try accept(&io, *TestContext, &ctx, accept_cb, &compl_accept, &server, .{});
-
-    while (!ctx.connect_done or !ctx.accept_done) {
-        try io.submit(1);
-        try io.complete(1);
-        try io.run_callback();
-    }
-
-    var stream = try ctx.connect_result.?;
+    try io.wait(&compl_connect, void);
+    const client_sock = compl_connect.operation.connect.socket;
+    apply_socket_opts(client_sock, .{});
+    var stream = Stream{ .socket = client_sock, .handle = client_sock };
     defer close(&stream);
 
-    var accepted = try ctx.accept_result.?;
+    const server_sock = try io.wait(&compl_accept, posix.socket_t);
+    apply_socket_opts(server_sock, .{});
+    var accepted = Stream{ .socket = server_sock, .handle = server_sock };
     defer close(&accepted);
 
-    try send(&io, &stream, msg);
+    var compl_send: IO.Future = undefined;
+    var compl_recv: IO.Future = undefined;
+
+    try send(&io, &compl_send, &stream, msg);
 
     var buf: [64]u8 = undefined;
-    const n = try receive(&io, &accepted, &buf);
-    try std.testing.expectEqual(@as(usize, msg.len), n);
-    try std.testing.expect(std.mem.eql(u8, msg, buf[0..n]));
-}
+    try receive(&io, &compl_recv, &accepted, &buf);
 
-test "empty message round-trip" {
-    var io = try IO.init(32, 0);
-    defer io.deinit();
+    const sent_bytes = try io.wait(&compl_send, usize);
+    try std.testing.expectEqual(msg.len, sent_bytes);
 
-    var server = try listen(&io, 0, .{});
-    defer close_server(&server);
-
-    const port = getPort(server.handle);
-
-    const TestContext = struct {
-        connect_done: bool = false,
-        accept_done: bool = false,
-        connect_result: ?IO.ConnectError!Stream = null,
-        accept_result: ?IO.AcceptError!Stream = null,
-    };
-
-    var ctx = TestContext{};
-
-    const connect_cb = struct {
-        fn call(c_ctx: *TestContext, compl: *IO.Completion, res: IO.ConnectError!Stream) void {
-            _ = compl;
-            c_ctx.connect_result = res;
-            c_ctx.connect_done = true;
-        }
-    }.call;
-
-    const accept_cb = struct {
-        fn call(c_ctx: *TestContext, compl: *IO.Completion, res: IO.AcceptError!Stream) void {
-            _ = compl;
-            c_ctx.accept_result = res;
-            c_ctx.accept_done = true;
-        }
-    }.call;
-
-    var compl_connect: IO.Completion = undefined;
-    var compl_accept: IO.Completion = undefined;
-
-    try connect(&io, *TestContext, &ctx, connect_cb, &compl_connect, "127.0.0.1", port, .{});
-    try accept(&io, *TestContext, &ctx, accept_cb, &compl_accept, &server, .{});
-
-    while (!ctx.connect_done or !ctx.accept_done) {
-        try io.submit(1);
-        try io.complete(1);
-        try io.run_callback();
-    }
-
-    var stream = try ctx.connect_result.?;
-    defer close(&stream);
-
-    var accepted = try ctx.accept_result.?;
-    defer close(&accepted);
-
-    try send(&io, &stream, "");
-
-    var buf: [1]u8 = undefined;
-    const n = try receive(&io, &accepted, &buf);
-    try std.testing.expectEqual(@as(usize, 0), n);
+    const recv_bytes = try io.wait(&compl_recv, usize);
+    try std.testing.expectEqual(msg.len, recv_bytes);
+    try std.testing.expect(std.mem.eql(u8, msg, buf[0..recv_bytes]));
 }
 
 test "socket options apply on a real socket" {
