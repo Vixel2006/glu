@@ -10,27 +10,6 @@ const capacity = 4096;
 const rate_hz = 50;
 const node_name = "temperature_sensor";
 
-fn send_to_sync(io: *IO, socket: glu.udp.Socket, host: []const u8, port: u16, data: []const u8) !void {
-    const SyncState = struct {
-        done: bool = false,
-        result: IO.SendToError!usize = undefined,
-    };
-    const cb = struct {
-        fn call(ctx: *SyncState, _: *IO.Completion, res: IO.SendToError!usize) void {
-            ctx.result = res;
-            ctx.done = true;
-        }
-    }.call;
-    var compl: IO.Completion = undefined;
-    var state = SyncState{};
-    try glu.udp.send_to(io, *SyncState, &state, cb, &compl, socket, host, port, data);
-    while (!state.done) {
-        try io.submit(1);
-        try io.complete(1);
-        try io.run_callback();
-    }
-    _ = try state.result;
-}
 
 fn milli_timestamp() i64 {
     var ts: std.os.linux.timespec = undefined;
@@ -94,6 +73,9 @@ pub fn main() void {
     var humidity: f32 = 45.0;
     var uptime: u32 = 0;
 
+    var compl_heartbeat: IO.Future = undefined;
+    var heartbeat_active = false;
+
     while (true) : (seq_temp += 1) {
         const t: f32 = @as(f32, @floatFromInt(seq_temp)) * dt;
 
@@ -127,9 +109,12 @@ pub fn main() void {
             status_pub.publish(@ptrCast(&status));
             seq_status += 1;
 
-            send_to_sync(&io, udp_sock, "127.0.0.1", 9997, "sensor_alive") catch |e| {
-                std.debug.print("[sensor] warning: failed to send UDP heartbeat: {}\n", .{e});
-            };
+            if (!heartbeat_active or compl_heartbeat.done) {
+                glu.udp.send_to(&io, &compl_heartbeat, udp_sock, "127.0.0.1", 9997, "sensor_alive") catch |e| {
+                    std.debug.print("[sensor] warning: failed to send UDP heartbeat: {}\n", .{e});
+                };
+                heartbeat_active = true;
+            }
         }
 
         if (seq_temp > 0 and seq_temp % (rate_hz * 5) == 0) {

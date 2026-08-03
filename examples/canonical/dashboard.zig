@@ -11,49 +11,6 @@ const capacity = 4096;
 const tcp_port: u16 = 9999;
 const tick_rate_hz = 200;
 
-fn send_to_sync(io: *IO, socket: glu.udp.Socket, host: []const u8, port: u16, data: []const u8) !void {
-    const SyncState = struct {
-        done: bool = false,
-        result: IO.SendToError!usize = undefined,
-    };
-    const cb = struct {
-        fn call(ctx: *SyncState, _: *IO.Completion, res: IO.SendToError!usize) void {
-            ctx.result = res;
-            ctx.done = true;
-        }
-    }.call;
-    var compl: IO.Completion = undefined;
-    var state = SyncState{};
-    try glu.udp.send_to(io, *SyncState, &state, cb, &compl, socket, host, port, data);
-    while (!state.done) {
-        try io.submit(1);
-        try io.complete(1);
-        try io.run_callback();
-    }
-    _ = try state.result;
-}
-
-fn accept_sync(io: *IO, server: *glu.tcp.Server) !glu.tcp.Stream {
-    const SyncState = struct {
-        done: bool = false,
-        result: IO.AcceptError!glu.tcp.Stream = undefined,
-    };
-    const cb = struct {
-        fn call(ctx: *SyncState, _: *IO.Completion, res: IO.AcceptError!glu.tcp.Stream) void {
-            ctx.result = res;
-            ctx.done = true;
-        }
-    }.call;
-    var compl: IO.Completion = undefined;
-    var state = SyncState{};
-    try glu.tcp.accept(io, *SyncState, &state, cb, &compl, server, .{});
-    while (!state.done) {
-        try io.submit(1);
-        try io.complete(1);
-        try io.run_callback();
-    }
-    return state.result;
-}
 
 fn sleep(ms: u64) void {
     var ts = std.os.linux.timespec{
@@ -97,6 +54,9 @@ fn run_display() void {
     var latest_filtered: ?msgs.FilteredTemperature = null;
     var tick: u32 = 0;
 
+    var compl_heartbeat: IO.Future = undefined;
+    var heartbeat_active = false;
+
     while (true) {
         while (filtered_sub.receive()) |raw| {
             const msg: *msgs.FilteredTemperature = @ptrCast(@alignCast(raw));
@@ -131,9 +91,12 @@ fn run_display() void {
                 }
             } else |_| {}
 
-            send_to_sync(&io, udp_sock, "127.0.0.1", 9997, "dashboard_alive") catch |e| {
-                std.debug.print("[dashboard/tx] warning: failed to send UDP heartbeat: {}\n", .{e});
-            };
+            if (!heartbeat_active or compl_heartbeat.done) {
+                glu.udp.send_to(&io, &compl_heartbeat, udp_sock, "127.0.0.1", 9997, "dashboard_alive") catch |e| {
+                    std.debug.print("[dashboard/tx] warning: failed to send UDP heartbeat: {}\n", .{e});
+                };
+                heartbeat_active = true;
+            }
         }
 
         io.run(0) catch |e| {
@@ -165,23 +128,47 @@ fn run_tcp_server() void {
     std.debug.print("[dashboard/tcp] listening on :{d} (glu)\n", .{tcp_port});
 
     while (true) {
-        var stream = accept_sync(&io, &server) catch |e| {
-            std.debug.print("[dashboard/tcp] accept error: {}\n", .{e});
+        var compl_accept: IO.Future = undefined;
+        glu.tcp.accept(&io, &compl_accept, &server) catch |e| {
+            std.debug.print("[dashboard/tcp] accept queue error: {}\n", .{e});
             sleep(100);
             continue;
         };
+        const sock = io.wait(&compl_accept, std.posix.socket_t) catch |e| {
+            std.debug.print("[dashboard/tcp] accept wait error: {}\n", .{e});
+            sleep(100);
+            continue;
+        };
+        glu.tcp.apply_socket_opts(sock, .{});
+        var stream = glu.tcp.Stream{ .socket = sock, .handle = sock };
+        defer glu.tcp.close(&stream);
 
         std.debug.print("[dashboard/tcp] client connected\n", .{});
 
         var latest: ?msgs.FilteredTemperature = null;
+        var compl_send: IO.Future = undefined;
+        var send_pending = false;
+
         while (true) {
             while (sub.receive()) |raw| {
                 const msg: *msgs.FilteredTemperature = @ptrCast(@alignCast(raw));
                 latest = msg.*;
             }
 
+            if (send_pending and compl_send.done) {
+                _ = compl_send.result.send catch |e| {
+                    std.debug.print("[dashboard/tcp] send error: {}\n", .{e});
+                    break;
+                };
+                send_pending = false;
+            }
+
             if (latest) |data| {
-                glu.tcp.send(&io, &stream, std.mem.asBytes(&data)) catch break;
+                if (!send_pending) {
+                    glu.tcp.send(&io, &compl_send, &stream, std.mem.asBytes(&data)) catch break;
+                    send_pending = true;
+                    latest = null;
+                }
             }
 
             io.run(0) catch |e| {
@@ -189,7 +176,6 @@ fn run_tcp_server() void {
             };
             sleep(1000 / tick_rate_hz);
         }
-        glu.tcp.close(&stream);
     }
 }
 

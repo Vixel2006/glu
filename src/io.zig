@@ -17,7 +17,7 @@ fn unexpected_errno(name: []const u8, err: posix.E) posix.UnexpectedError {
 
 pub const IO = struct {
     ring: IoUring,
-    completed: Queue(Completion),
+    completed: Queue(Future),
     inflight: u32 = 0,
 
     pub fn init(entries: u16, flags: u32) !IO {
@@ -26,13 +26,12 @@ pub const IO = struct {
 
         return .{
             .ring = ring,
-            .completed = Queue(Completion).init(),
+            .completed = Queue(Future).init(),
         };
     }
 
     pub fn deinit(self: *IO) void {
         while (!self.completed.is_empty()) {
-            // Dequeue is guaranteed to succeed because of the non-empty check.
             _ = self.completed.dequeue() catch unreachable;
         }
         self.ring.deinit();
@@ -41,7 +40,7 @@ pub const IO = struct {
     pub fn run(self: *IO, nanoseconds: u64) !void {
         const deadline = time.monotonic() + nanoseconds;
 
-        while (time.monotonic() >= deadline) {
+        while (time.monotonic() < deadline) {
             try self.submit(0);
             if (self.inflight == 0) break;
             try self.complete(1);
@@ -82,26 +81,31 @@ pub const IO = struct {
             self.inflight -|= @intCast(completed);
 
             for (cqes[0..completed]) |cqe| {
-                const completion: *Completion = @ptrFromInt(cqe.user_data);
-                completion.result = cqe.res;
-                self.completed.enqueue(completion);
+                const future: *Future = @ptrFromInt(cqe.user_data);
+                future.result_raw = cqe.res;
+                self.completed.enqueue(future);
             }
             break;
         }
     }
 
-    pub fn enqueue(self: *IO, completion: *Completion) !void {
+    pub fn enqueue(self: *IO, future: *Future) !void {
         const sqe = try self.ring.get_sqe();
         self.inflight += 1;
-        completion.prep(sqe);
+        future.prep(sqe);
     }
 
     pub fn run_callback(self: *IO) !void {
         while (true) {
             if (self.completed.is_empty()) return;
             const completed = try self.completed.dequeue();
-            Completion.complete(completed);
+            Future.complete(completed);
         }
+    }
+
+    pub fn wait(self: *IO, future: *Future, comptime T: type) anyerror!T {
+        _ = self;
+        return future.wait(T);
     }
 
     pub const NextTickResult = struct {};
@@ -233,37 +237,33 @@ pub const IO = struct {
         },
     };
 
-    pub const Completion = struct {
+    pub const Future = struct {
         io: *IO,
-        result: i32 = undefined,
+        result_raw: i32 = undefined,
+        result: Result = undefined,
         operation: Operation,
-        context: *anyopaque,
-        callback: *const fn (
-            context: *anyopaque,
-            completion: *Completion,
-            result: *const anyopaque,
-        ) void,
-        next: ?*Completion = null,
+        done: bool = false,
+        next: ?*Future = null,
 
-        fn check(completion: *Completion) !void {
-            if (completion.result >= 0) return;
-            const err: posix.E = @enumFromInt(-completion.result);
-            switch (err) {
-                .AGAIN, .INTR => return error.WouldBlock,
-                .BADF => return error.FileDescriptorInvalid,
-                .FAULT => unreachable,
-                .INVAL => return error.InvalidInput,
-                .NOMEM, .NOBUFS => return error.SystemResources,
-                .PERM, .ACCES => return error.AccessDenied,
-                .CONNRESET => return error.ConnectionResetByPeer,
-                .NOTSOCK => return error.FileDescriptorNotASocket,
-                .OPNOTSUPP => return error.OperationNotSupported,
-                else => return error.UnexpectedSystemError,
-            }
-        }
+        pub const Result = union(enum) {
+            accept: AcceptError!posix.socket_t,
+            close: CloseError!void,
+            connect: ConnectError!void,
+            read: ReadError!usize,
+            recv: RecvError!usize,
+            send: SendError!usize,
+            write: WriteError!usize,
+            fsync: FsyncError!void,
+            openat: OpenatError!posix.fd_t,
+            statx: StatxError!void,
+            timeout: TimeoutError!void,
+            next_tick: NextTickResult,
+            send_to: SendToError!usize,
+            recv_from: RecvFromError!usize,
+        };
 
-        fn prep(completion: *Completion, sqe: *io_uring_sqe) void {
-            switch (completion.operation) {
+        fn prep(future: *Future, sqe: *io_uring_sqe) void {
+            switch (future.operation) {
                 .accept => |*op| {
                     sqe.prep_accept(
                         op.socket,
@@ -351,17 +351,17 @@ pub const IO = struct {
                     sqe.prep_recvmsg(op.socket, &op.msg, 0);
                 },
             }
-            sqe.user_data = @intFromPtr(completion);
+            sqe.user_data = @intFromPtr(future);
         }
 
-        fn complete(completion: *Completion) void {
-            switch (completion.operation) {
+        fn complete(future: *Future) void {
+            switch (future.operation) {
                 .accept => {
                     const result: AcceptError!posix.socket_t = blk: {
-                        if (completion.result < 0) {
-                            const err = switch (@as(posix.E, @enumFromInt(-completion.result))) {
+                        if (future.result_raw < 0) {
+                            const err = switch (@as(posix.E, @enumFromInt(-future.result_raw))) {
                                 .INTR => {
-                                    completion.io.enqueue(completion) catch {
+                                    future.io.enqueue(future) catch {
                                         break :blk error.SystemResources;
                                     };
                                     return;
@@ -383,16 +383,16 @@ pub const IO = struct {
                             };
                             break :blk err;
                         } else {
-                            break :blk @intCast(completion.result);
+                            break :blk @intCast(future.result_raw);
                         }
                     };
-                    completion.callback(completion.context, completion, &result);
+                    future.result = .{ .accept = result };
+                    future.done = true;
                 },
                 .close => {
                     const result: CloseError!void = blk: {
-                        if (completion.result < 0) {
-                            const err = switch (@as(posix.E, @enumFromInt(-completion.result))) {
-                                // A success, see https://github.com/ziglang/zig/issues/2425.
+                        if (future.result_raw < 0) {
+                            const err = switch (@as(posix.E, @enumFromInt(-future.result_raw))) {
                                 .INTR => {},
                                 .BADF => error.FileDescriptorInvalid,
                                 .DQUOT => error.DiskQuota,
@@ -402,17 +402,18 @@ pub const IO = struct {
                             };
                             break :blk err;
                         } else {
-                            assert(completion.result == 0);
+                            assert(future.result_raw == 0);
                         }
                     };
-                    completion.callback(completion.context, completion, &result);
+                    future.result = .{ .close = result };
+                    future.done = true;
                 },
                 .connect => {
                     const result: ConnectError!void = blk: {
-                        if (completion.result < 0) {
-                            const err = switch (@as(posix.E, @enumFromInt(-completion.result))) {
+                        if (future.result_raw < 0) {
+                            const err = switch (@as(posix.E, @enumFromInt(-future.result_raw))) {
                                 .INTR => {
-                                    completion.io.enqueue(completion) catch {
+                                    future.io.enqueue(future) catch {
                                         break :blk error.SystemResources;
                                     };
                                     return;
@@ -440,17 +441,18 @@ pub const IO = struct {
                             };
                             break :blk err;
                         } else {
-                            assert(completion.result == 0);
+                            assert(future.result_raw == 0);
                         }
                     };
-                    completion.callback(completion.context, completion, &result);
+                    future.result = .{ .connect = result };
+                    future.done = true;
                 },
                 .fsync => {
                     const result: FsyncError!void = blk: {
-                        if (completion.result < 0) {
-                            const err = switch (@as(posix.E, @enumFromInt(-completion.result))) {
+                        if (future.result_raw < 0) {
+                            const err = switch (@as(posix.E, @enumFromInt(-future.result_raw))) {
                                 .INTR => {
-                                    completion.io.enqueue(completion) catch {
+                                    future.io.enqueue(future) catch {
                                         break :blk error.SystemResources;
                                     };
                                     return;
@@ -462,17 +464,18 @@ pub const IO = struct {
                             };
                             break :blk err;
                         } else {
-                            assert(completion.result == 0);
+                            assert(future.result_raw == 0);
                         }
                     };
-                    completion.callback(completion.context, completion, &result);
+                    future.result = .{ .fsync = result };
+                    future.done = true;
                 },
                 .openat => {
                     const result: OpenatError!posix.fd_t = blk: {
-                        if (completion.result < 0) {
-                            const err = switch (@as(posix.E, @enumFromInt(-completion.result))) {
+                        if (future.result_raw < 0) {
+                            const err = switch (@as(posix.E, @enumFromInt(-future.result_raw))) {
                                 .INTR => {
-                                    completion.io.enqueue(completion) catch {
+                                    future.io.enqueue(future) catch {
                                         break :blk error.SystemResources;
                                     };
                                     return;
@@ -503,19 +506,18 @@ pub const IO = struct {
                             };
                             break :blk err;
                         } else {
-                            break :blk @intCast(completion.result);
+                            break :blk @intCast(future.result_raw);
                         }
                     };
-                    completion.callback(completion.context, completion, &result);
+                    future.result = .{ .openat = result };
+                    future.done = true;
                 },
                 .read => {
                     const result: ReadError!usize = blk: {
-                        if (completion.result < 0) {
-                            const err = switch (@as(posix.E, @enumFromInt(-completion.result))) {
+                        if (future.result_raw < 0) {
+                            const err = switch (@as(posix.E, @enumFromInt(-future.result_raw))) {
                                 .INTR, .AGAIN => {
-                                    // Some file systems, like XFS, can return EAGAIN even when
-                                    // reading from a blocking file without flags like RWF_NOWAIT.
-                                    completion.io.enqueue(completion) catch {
+                                    future.io.enqueue(future) catch {
                                         break :blk error.SystemResources;
                                     };
                                     return;
@@ -536,17 +538,18 @@ pub const IO = struct {
                             };
                             break :blk err;
                         } else {
-                            break :blk @intCast(completion.result);
+                            break :blk @intCast(future.result_raw);
                         }
                     };
-                    completion.callback(completion.context, completion, &result);
+                    future.result = .{ .read = result };
+                    future.done = true;
                 },
                 .recv => {
                     const result: RecvError!usize = blk: {
-                        if (completion.result < 0) {
-                            const err = switch (@as(posix.E, @enumFromInt(-completion.result))) {
+                        if (future.result_raw < 0) {
+                            const err = switch (@as(posix.E, @enumFromInt(-future.result_raw))) {
                                 .INTR => {
-                                    completion.io.enqueue(completion) catch {
+                                    future.io.enqueue(future) catch {
                                         break :blk error.SystemResources;
                                     };
                                     return;
@@ -567,17 +570,18 @@ pub const IO = struct {
                             };
                             break :blk err;
                         } else {
-                            break :blk @intCast(completion.result);
+                            break :blk @intCast(future.result_raw);
                         }
                     };
-                    completion.callback(completion.context, completion, &result);
+                    future.result = .{ .recv = result };
+                    future.done = true;
                 },
                 .send => {
                     const result: SendError!usize = blk: {
-                        if (completion.result < 0) {
-                            const err = switch (@as(posix.E, @enumFromInt(-completion.result))) {
+                        if (future.result_raw < 0) {
+                            const err = switch (@as(posix.E, @enumFromInt(-future.result_raw))) {
                                 .INTR => {
-                                    completion.io.enqueue(completion) catch {
+                                    future.io.enqueue(future) catch {
                                         break :blk error.SystemResources;
                                     };
                                     return;
@@ -587,7 +591,6 @@ pub const IO = struct {
                                 .ALREADY => error.FastOpenAlreadyInProgress,
                                 .AFNOSUPPORT => error.AddressFamilyNotSupported,
                                 .BADF => error.FileDescriptorInvalid,
-                                // Can happen when send()'ing to a UDP socket.
                                 .CONNREFUSED => error.ConnectionRefused,
                                 .CONNRESET => error.ConnectionResetByPeer,
                                 .DESTADDRREQ => unreachable,
@@ -607,17 +610,18 @@ pub const IO = struct {
                             };
                             break :blk err;
                         } else {
-                            break :blk @intCast(completion.result);
+                            break :blk @intCast(future.result_raw);
                         }
                     };
-                    completion.callback(completion.context, completion, &result);
+                    future.result = .{ .send = result };
+                    future.done = true;
                 },
                 .statx => {
                     const result: StatxError!void = blk: {
-                        if (completion.result < 0) {
-                            const err = switch (@as(posix.E, @enumFromInt(-completion.result))) {
+                        if (future.result_raw < 0) {
+                            const err = switch (@as(posix.E, @enumFromInt(-future.result_raw))) {
                                 .INTR => {
-                                    completion.io.enqueue(completion) catch {
+                                    future.io.enqueue(future) catch {
                                         break :blk error.SystemResources;
                                     };
                                     return;
@@ -635,18 +639,20 @@ pub const IO = struct {
                             };
                             break :blk err;
                         } else {
-                            assert(completion.result == 0);
+                            assert(future.result_raw == 0);
                         }
                     };
-                    completion.callback(completion.context, completion, &result);
+                    future.result = .{ .statx = result };
+                    future.done = true;
                 },
                 .timeout => {
-                    assert(completion.result < 0);
-                    const err = switch (@as(posix.E, @enumFromInt(-completion.result))) {
+                    assert(future.result_raw < 0);
+                    const err = switch (@as(posix.E, @enumFromInt(-future.result_raw))) {
                         .INTR => {
-                            completion.io.enqueue(completion) catch {
+                            future.io.enqueue(future) catch {
                                 const result: TimeoutError!void = error.Unexpected;
-                                completion.callback(completion.context, completion, &result);
+                                future.result = .{ .timeout = result };
+                                future.done = true;
                                 return;
                             };
                             return;
@@ -656,14 +662,15 @@ pub const IO = struct {
                         else => |errno| unexpected_errno("timeout", errno),
                     };
                     const result: TimeoutError!void = err;
-                    completion.callback(completion.context, completion, &result);
+                    future.result = .{ .timeout = result };
+                    future.done = true;
                 },
                 .write => {
                     const result: WriteError!usize = blk: {
-                        if (completion.result < 0) {
-                            const err = switch (@as(posix.E, @enumFromInt(-completion.result))) {
+                        if (future.result_raw < 0) {
+                            const err = switch (@as(posix.E, @enumFromInt(-future.result_raw))) {
                                 .INTR => {
-                                    completion.io.enqueue(completion) catch {
+                                    future.io.enqueue(future) catch {
                                         break :blk error.Unexpected;
                                     };
                                     return;
@@ -686,21 +693,23 @@ pub const IO = struct {
                             };
                             break :blk err;
                         } else {
-                            break :blk @intCast(completion.result);
+                            break :blk @intCast(future.result_raw);
                         }
                     };
-                    completion.callback(completion.context, completion, &result);
+                    future.result = .{ .write = result };
+                    future.done = true;
                 },
                 .next_tick => {
                     const result: NextTickResult = .{};
-                    completion.callback(completion.context, completion, &result);
+                    future.result = .{ .next_tick = result };
+                    future.done = true;
                 },
                 .send_to => {
                     const result: SendToError!usize = blk: {
-                        if (completion.result < 0) {
-                            const err = switch (@as(posix.E, @enumFromInt(-completion.result))) {
+                        if (future.result_raw < 0) {
+                            const err = switch (@as(posix.E, @enumFromInt(-future.result_raw))) {
                                 .INTR => {
-                                    completion.io.enqueue(completion) catch {
+                                    future.io.enqueue(future) catch {
                                         break :blk error.NoMemory;
                                     };
                                     return;
@@ -726,17 +735,18 @@ pub const IO = struct {
                             };
                             break :blk err;
                         } else {
-                            break :blk @intCast(completion.result);
+                            break :blk @intCast(future.result_raw);
                         }
                     };
-                    completion.callback(completion.context, completion, &result);
+                    future.result = .{ .send_to = result };
+                    future.done = true;
                 },
                 .recv_from => {
                     const result: RecvFromError!usize = blk: {
-                        if (completion.result < 0) {
-                            const err = switch (@as(posix.E, @enumFromInt(-completion.result))) {
+                        if (future.result_raw < 0) {
+                            const err = switch (@as(posix.E, @enumFromInt(-future.result_raw))) {
                                 .INTR => {
-                                    completion.io.enqueue(completion) catch {
+                                    future.io.enqueue(future) catch {
                                         break :blk error.NoMemory;
                                     };
                                     return;
@@ -756,10 +766,94 @@ pub const IO = struct {
                             };
                             break :blk err;
                         } else {
-                            break :blk @intCast(completion.result);
+                            break :blk @intCast(future.result_raw);
                         }
                     };
-                    completion.callback(completion.context, completion, &result);
+                    future.result = .{ .recv_from = result };
+                    future.done = true;
+                },
+            }
+        }
+
+        fn wait_loop(self: *Future) !void {
+            while (!self.done) {
+                try self.io.submit(1);
+                try self.io.complete(1);
+                try self.io.run_callback();
+            }
+        }
+
+        pub fn wait(self: *Future, comptime T: type) anyerror!T {
+            try self.wait_loop();
+            switch (self.result) {
+                .accept => |res| {
+                    const val = try res;
+                    if (comptime T == void) return;
+                    return @intCast(val);
+                },
+                .close => |res| {
+                    try res;
+                    if (comptime T == void) return;
+                    return error.TypeMismatch;
+                },
+                .connect => |res| {
+                    try res;
+                    if (comptime T == void) return;
+                    return error.TypeMismatch;
+                },
+                .read => |res| {
+                    const val = try res;
+                    if (comptime T == void) return;
+                    return @intCast(val);
+                },
+                .recv => |res| {
+                    const val = try res;
+                    if (comptime T == void) return;
+                    return @intCast(val);
+                },
+                .send => |res| {
+                    const val = try res;
+                    if (comptime T == void) return;
+                    return @intCast(val);
+                },
+                .write => |res| {
+                    const val = try res;
+                    if (comptime T == void) return;
+                    return @intCast(val);
+                },
+                .fsync => |res| {
+                    try res;
+                    if (comptime T == void) return;
+                    return error.TypeMismatch;
+                },
+                .openat => |res| {
+                    const val = try res;
+                    if (comptime T == void) return;
+                    return @intCast(val);
+                },
+                .statx => |res| {
+                    try res;
+                    if (comptime T == void) return;
+                    return error.TypeMismatch;
+                },
+                .timeout => |res| {
+                    try res;
+                    if (comptime T == void) return;
+                    return error.TypeMismatch;
+                },
+                .next_tick => {
+                    if (comptime T == void) return;
+                    return error.TypeMismatch;
+                },
+                .send_to => |res| {
+                    const val = try res;
+                    if (comptime T == void) return;
+                    return @intCast(val);
+                },
+                .recv_from => |res| {
+                    const val = try res;
+                    if (comptime T == void) return;
+                    return @intCast(val);
                 },
             }
         }
@@ -781,31 +875,14 @@ pub const IO = struct {
 
     pub fn accept(
         self: *IO,
-        comptime Context: type,
-        context: Context,
-        comptime callback: fn (
-            context: Context,
-            completion: *Completion,
-            result: AcceptError!posix.socket_t,
-        ) void,
-        completion: *Completion,
+        future: *Future,
         sock: posix.socket_t,
     ) !void {
-        const wrapper = struct {
-            fn call(ctx: *anyopaque, compl: *Completion, res_ptr: *const anyopaque) void {
-                const typed_context: Context = @ptrCast(@alignCast(ctx));
-                const typed_result: *const AcceptError!posix.socket_t = @ptrCast(@alignCast(res_ptr));
-                callback(typed_context, compl, typed_result.*);
-            }
-        }.call;
-
-        completion.* = .{
+        future.* = .{
             .io = self,
-            .context = @ptrCast(context),
-            .callback = wrapper,
             .operation = .{ .accept = .{ .socket = sock } },
         };
-        try self.enqueue(completion);
+        try self.enqueue(future);
     }
 
     pub const ConnectError = error{
@@ -832,29 +909,12 @@ pub const IO = struct {
 
     pub fn connect(
         self: *IO,
-        comptime Context: type,
-        context: Context,
-        comptime callback: fn (
-            context: Context,
-            completion: *Completion,
-            result: ConnectError!void,
-        ) void,
-        completion: *Completion,
+        future: *Future,
         sock: posix.socket_t,
         address: posix.sockaddr.in,
     ) !void {
-        const wrapper = struct {
-            fn call(ctx: *anyopaque, compl: *Completion, res_ptr: *const anyopaque) void {
-                const typed_context: Context = @ptrCast(@alignCast(ctx));
-                const typed_result: *const ConnectError!void = @ptrCast(@alignCast(res_ptr));
-                callback(typed_context, compl, typed_result.*);
-            }
-        }.call;
-
-        completion.* = .{
+        future.* = .{
             .io = self,
-            .context = @ptrCast(context),
-            .callback = wrapper,
             .operation = .{
                 .connect = .{
                     .socket = sock,
@@ -862,7 +922,7 @@ pub const IO = struct {
                 },
             },
         };
-        try self.enqueue(completion);
+        try self.enqueue(future);
     }
 
     pub const ReadError = error{
@@ -879,30 +939,13 @@ pub const IO = struct {
 
     pub fn read(
         self: *IO,
-        comptime Context: type,
-        context: Context,
-        comptime callback: fn (
-            context: Context,
-            completion: *Completion,
-            result: ReadError!usize,
-        ) void,
-        completion: *Completion,
+        future: *Future,
         fd: posix.fd_t,
         buffer: []u8,
         offset: u64,
     ) !void {
-        const wrapper = struct {
-            fn call(ctx: *anyopaque, compl: *Completion, res_ptr: *const anyopaque) void {
-                const typed_context: Context = @ptrCast(@alignCast(ctx));
-                const typed_result: *const ReadError!usize = @ptrCast(@alignCast(res_ptr));
-                callback(typed_context, compl, typed_result.*);
-            }
-        }.call;
-
-        completion.* = .{
+        future.* = .{
             .io = self,
-            .context = @ptrCast(context),
-            .callback = wrapper,
             .operation = .{
                 .read = .{
                     .fd = fd,
@@ -911,7 +954,7 @@ pub const IO = struct {
                 },
             },
         };
-        try self.enqueue(completion);
+        try self.enqueue(future);
     }
 
     pub const WriteError = error{
@@ -930,30 +973,13 @@ pub const IO = struct {
 
     pub fn write(
         self: *IO,
-        comptime Context: type,
-        context: Context,
-        comptime callback: fn (
-            context: Context,
-            completion: *Completion,
-            result: WriteError!usize,
-        ) void,
-        completion: *Completion,
+        future: *Future,
         fd: posix.fd_t,
         buffer: []const u8,
         offset: u64,
     ) !void {
-        const wrapper = struct {
-            fn call(ctx: *anyopaque, compl: *Completion, res_ptr: *const anyopaque) void {
-                const typed_context: Context = @ptrCast(@alignCast(ctx));
-                const typed_result: *const WriteError!usize = @ptrCast(@alignCast(res_ptr));
-                callback(typed_context, compl, typed_result.*);
-            }
-        }.call;
-
-        completion.* = .{
+        future.* = .{
             .io = self,
-            .context = @ptrCast(context),
-            .callback = wrapper,
             .operation = .{
                 .write = .{
                     .fd = fd,
@@ -962,7 +988,7 @@ pub const IO = struct {
                 },
             },
         };
-        try self.enqueue(completion);
+        try self.enqueue(future);
     }
 
     pub const RecvError = error{
@@ -980,29 +1006,12 @@ pub const IO = struct {
 
     pub fn recv(
         self: *IO,
-        comptime Context: type,
-        context: Context,
-        comptime callback: fn (
-            context: Context,
-            completion: *Completion,
-            result: RecvError!usize,
-        ) void,
-        completion: *Completion,
+        future: *Future,
         sock: posix.socket_t,
         buffer: []u8,
     ) !void {
-        const wrapper = struct {
-            fn call(ctx: *anyopaque, compl: *Completion, res_ptr: *const anyopaque) void {
-                const typed_context: Context = @ptrCast(@alignCast(ctx));
-                const typed_result: *const RecvError!usize = @ptrCast(@alignCast(res_ptr));
-                callback(typed_context, compl, typed_result.*);
-            }
-        }.call;
-
-        completion.* = .{
+        future.* = .{
             .io = self,
-            .context = @ptrCast(context),
-            .callback = wrapper,
             .operation = .{
                 .recv = .{
                     .socket = sock,
@@ -1010,7 +1019,7 @@ pub const IO = struct {
                 },
             },
         };
-        try self.enqueue(completion);
+        try self.enqueue(future);
     }
 
     pub const SendError = error{
@@ -1033,29 +1042,12 @@ pub const IO = struct {
 
     pub fn send(
         self: *IO,
-        comptime Context: type,
-        context: Context,
-        comptime callback: fn (
-            context: Context,
-            completion: *Completion,
-            result: SendError!usize,
-        ) void,
-        completion: *Completion,
+        future: *Future,
         sock: posix.socket_t,
         buffer: []const u8,
     ) !void {
-        const wrapper = struct {
-            fn call(ctx: *anyopaque, compl: *Completion, res_ptr: *const anyopaque) void {
-                const typed_context: Context = @ptrCast(@alignCast(ctx));
-                const typed_result: *const SendError!usize = @ptrCast(@alignCast(res_ptr));
-                callback(typed_context, compl, typed_result.*);
-            }
-        }.call;
-
-        completion.* = .{
+        future.* = .{
             .io = self,
-            .context = @ptrCast(context),
-            .callback = wrapper,
             .operation = .{
                 .send = .{
                     .socket = sock,
@@ -1063,7 +1055,7 @@ pub const IO = struct {
                 },
             },
         };
-        try self.enqueue(completion);
+        try self.enqueue(future);
     }
 
     pub const CloseError = error{
@@ -1075,35 +1067,18 @@ pub const IO = struct {
 
     pub fn close(
         self: *IO,
-        comptime Context: type,
-        context: Context,
-        comptime callback: fn (
-            context: Context,
-            completion: *Completion,
-            result: CloseError!void,
-        ) void,
-        completion: *Completion,
+        future: *Future,
         fd: posix.fd_t,
     ) !void {
-        const wrapper = struct {
-            fn call(ctx: *anyopaque, compl: *Completion, res_ptr: *const anyopaque) void {
-                const typed_context: Context = @ptrCast(@alignCast(ctx));
-                const typed_result: *const CloseError!void = @ptrCast(@alignCast(res_ptr));
-                callback(typed_context, compl, typed_result.*);
-            }
-        }.call;
-
-        completion.* = .{
+        future.* = .{
             .io = self,
-            .context = @ptrCast(context),
-            .callback = wrapper,
             .operation = .{
                 .close = .{
                     .fd = fd,
                 },
             },
         };
-        try self.enqueue(completion);
+        try self.enqueue(future);
     }
 
     pub const SendToError = error{
@@ -1128,30 +1103,13 @@ pub const IO = struct {
 
     pub fn send_to(
         self: *IO,
-        comptime Context: type,
-        context: Context,
-        comptime callback: fn (
-            context: Context,
-            completion: *Completion,
-            result: SendToError!usize,
-        ) void,
-        completion: *Completion,
+        future: *Future,
         sock: posix.socket_t,
         buffer: []const u8,
         address: posix.sockaddr.in,
     ) !void {
-        const wrapper = struct {
-            fn call(ctx: *anyopaque, compl: *Completion, res_ptr: *const anyopaque) void {
-                const typed_context: Context = @ptrCast(@alignCast(ctx));
-                const typed_result: *const SendToError!usize = @ptrCast(@alignCast(res_ptr));
-                callback(typed_context, compl, typed_result.*);
-            }
-        }.call;
-
-        completion.* = .{
+        future.* = .{
             .io = self,
-            .context = @ptrCast(context),
-            .callback = wrapper,
             .operation = .{
                 .send_to = .{
                     .socket = sock,
@@ -1160,7 +1118,7 @@ pub const IO = struct {
                 },
             },
         };
-        try self.enqueue(completion);
+        try self.enqueue(future);
     }
 
     pub const RecvFromError = error{
@@ -1179,29 +1137,12 @@ pub const IO = struct {
 
     pub fn recv_from(
         self: *IO,
-        comptime Context: type,
-        context: Context,
-        comptime callback: fn (
-            context: Context,
-            completion: *Completion,
-            result: RecvFromError!usize,
-        ) void,
-        completion: *Completion,
+        future: *Future,
         sock: posix.socket_t,
         buffer: []u8,
     ) !void {
-        const wrapper = struct {
-            fn call(ctx: *anyopaque, compl: *Completion, res_ptr: *const anyopaque) void {
-                const typed_context: Context = @ptrCast(@alignCast(ctx));
-                const typed_result: *const RecvFromError!usize = @ptrCast(@alignCast(res_ptr));
-                callback(typed_context, compl, typed_result.*);
-            }
-        }.call;
-
-        completion.* = .{
+        future.* = .{
             .io = self,
-            .context = @ptrCast(context),
-            .callback = wrapper,
             .operation = .{
                 .recv_from = .{
                     .socket = sock,
@@ -1210,7 +1151,7 @@ pub const IO = struct {
                 },
             },
         };
-        try self.enqueue(completion);
+        try self.enqueue(future);
     }
 
     pub const FsyncError = error{
@@ -1221,66 +1162,32 @@ pub const IO = struct {
 
     pub fn fsync(
         self: *IO,
-        comptime Context: type,
-        context: Context,
-        comptime callback: fn (
-            context: Context,
-            completion: *Completion,
-            result: FsyncError!void,
-        ) void,
-        completion: *Completion,
+        future: *Future,
         fd: posix.fd_t,
     ) !void {
-        const wrapper = struct {
-            fn call(ctx: *anyopaque, compl: *Completion, res_ptr: *const anyopaque) void {
-                const typed_context: Context = @ptrCast(@alignCast(ctx));
-                const typed_result: *const FsyncError!void = @ptrCast(@alignCast(res_ptr));
-                callback(typed_context, compl, typed_result.*);
-            }
-        }.call;
-
-        completion.* = .{
+        future.* = .{
             .io = self,
-            .context = @ptrCast(context),
-            .callback = wrapper,
             .operation = .{
                 .fsync = .{
                     .fd = fd,
                 },
             },
         };
-        try self.enqueue(completion);
+        try self.enqueue(future);
     }
 
     pub const OpenatError = posix.OpenError || posix.UnexpectedError;
 
     pub fn openat(
         self: *IO,
-        comptime Context: type,
-        context: Context,
-        comptime callback: fn (
-            context: Context,
-            completion: *Completion,
-            result: OpenatError!posix.fd_t,
-        ) void,
-        completion: *Completion,
+        future: *Future,
         fd: posix.fd_t,
         path: [*:0]const u8,
         flags: posix.O,
         mode: u32,
     ) !void {
-        const wrapper = struct {
-            fn call(ctx: *anyopaque, compl: *Completion, res_ptr: *const anyopaque) void {
-                const typed_context: Context = @ptrCast(@alignCast(ctx));
-                const typed_result: *const OpenatError!posix.fd_t = @ptrCast(@alignCast(res_ptr));
-                callback(typed_context, compl, typed_result.*);
-            }
-        }.call;
-
-        completion.* = .{
+        future.* = .{
             .io = self,
-            .context = @ptrCast(context),
-            .callback = wrapper,
             .operation = .{
                 .openat = .{
                     .fd = fd,
@@ -1290,7 +1197,7 @@ pub const IO = struct {
                 },
             },
         };
-        try self.enqueue(completion);
+        try self.enqueue(future);
     }
 
     pub const StatxError = error{
@@ -1302,32 +1209,15 @@ pub const IO = struct {
 
     pub fn statx(
         self: *IO,
-        comptime Context: type,
-        context: Context,
-        comptime callback: fn (
-            context: Context,
-            completion: *Completion,
-            result: StatxError!void,
-        ) void,
-        completion: *Completion,
+        future: *Future,
         fd: posix.fd_t,
         path: [*:0]const u8,
         flags: u32,
         mask: os.linux.STATX,
         buffer: *std.os.linux.Statx,
     ) !void {
-        const wrapper = struct {
-            fn call(ctx: *anyopaque, compl: *Completion, res_ptr: *const anyopaque) void {
-                const typed_context: Context = @ptrCast(@alignCast(ctx));
-                const typed_result: *const StatxError!void = @ptrCast(@alignCast(res_ptr));
-                callback(typed_context, compl, typed_result.*);
-            }
-        }.call;
-
-        completion.* = .{
+        future.* = .{
             .io = self,
-            .context = @ptrCast(context),
-            .callback = wrapper,
             .operation = .{
                 .statx = .{
                     .fd = fd,
@@ -1338,36 +1228,19 @@ pub const IO = struct {
                 },
             },
         };
-        try self.enqueue(completion);
+        try self.enqueue(future);
     }
 
     pub const TimeoutError = error{Canceled} || posix.UnexpectedError;
 
     pub fn timeout(
         self: *IO,
-        comptime Context: type,
-        context: Context,
-        comptime callback: fn (
-            context: Context,
-            completion: *Completion,
-            result: TimeoutError!void,
-        ) void,
-        completion: *Completion,
+        future: *Future,
         timespec: *std.os.linux.kernel_timespec,
         flags: u32,
     ) !void {
-        const wrapper = struct {
-            fn call(ctx: *anyopaque, compl: *Completion, res_ptr: *const anyopaque) void {
-                const typed_context: Context = @ptrCast(@alignCast(ctx));
-                const typed_result: *const TimeoutError!void = @ptrCast(@alignCast(res_ptr));
-                callback(typed_context, compl, typed_result.*);
-            }
-        }.call;
-
-        completion.* = .{
+        future.* = .{
             .io = self,
-            .context = @ptrCast(context),
-            .callback = wrapper,
             .operation = .{
                 .timeout = .{
                     .timeout = timespec,
@@ -1375,35 +1248,18 @@ pub const IO = struct {
                 },
             },
         };
-        try self.enqueue(completion);
+        try self.enqueue(future);
     }
 
     pub fn next_tick(
         self: *IO,
-        comptime Context: type,
-        context: Context,
-        comptime callback: fn (
-            context: Context,
-            completion: *Completion,
-            result: NextTickResult,
-        ) void,
-        completion: *Completion,
+        future: *Future,
     ) !void {
-        const wrapper = struct {
-            fn call(ctx: *anyopaque, compl: *Completion, res_ptr: *const anyopaque) void {
-                const typed_context: Context = @ptrCast(@alignCast(ctx));
-                const typed_result: *const NextTickResult = @ptrCast(@alignCast(res_ptr));
-                callback(typed_context, compl, typed_result.*);
-            }
-        }.call;
-
-        completion.* = .{
+        future.* = .{
             .io = self,
-            .context = @ptrCast(context),
-            .callback = wrapper,
             .operation = .next_tick,
         };
-        try self.enqueue(completion);
+        try self.enqueue(future);
     }
 };
 
@@ -1416,42 +1272,20 @@ test "init and deinit across entry sizes" {
     }
 }
 
-fn Sync(comptime ResultType: type) type {
-    return struct {
-        done: bool = false,
-        result: ResultType = undefined,
-
-        pub fn cb(ctx: *@This(), _: *IO.Completion, res: ResultType) void {
-            ctx.result = res;
-            ctx.done = true;
-        }
-    };
-}
-
-fn wait_completion(io: *IO, state: anytype) !void {
-    while (!state.done) {
-        try io.submit(1);
-        try io.complete(1);
-        try io.run_callback();
-    }
-}
-
 test "deinit with pending unsent completion does not crash" {
     var io = try IO.init(8, 0);
-    var ctx = Sync(IO.NextTickResult){};
-    var compl: IO.Completion = undefined;
-    try io.next_tick(@TypeOf(&ctx), &ctx, @TypeOf(ctx).cb, &compl);
+    var compl: IO.Future = undefined;
+    try io.next_tick(&compl);
     io.deinit();
 }
 
 test "enqueue beyond ring capacity returns error.SQFull" {
     var io = try IO.init(2, 0);
     defer io.deinit();
-    var ctx = Sync(IO.NextTickResult){};
-    var compls: [4]IO.Completion = undefined;
+    var compls: [4]IO.Future = undefined;
     var saw_full = false;
     for (&compls) |*compl| {
-        io.next_tick(@TypeOf(&ctx), &ctx, @TypeOf(ctx).cb, compl) catch |err| {
+        io.next_tick(compl) catch |err| {
             try testing.expectEqual(error.SubmissionQueueFull, err);
             saw_full = true;
             break;
@@ -1472,48 +1306,36 @@ test "file ops: openat, write, fsync, statx, read, close" {
     const path_z: [*:0]const u8 = path_buf[0..];
 
     const data = "hello io_uring file io";
-    var compl: IO.Completion = undefined;
+    var compl: IO.Future = undefined;
 
     // openat: create + truncate + read-write
-    var open_sync = Sync(IO.OpenatError!posix.fd_t){};
-    try io.openat(@TypeOf(&open_sync), &open_sync, @TypeOf(open_sync).cb, &compl, posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDWR, .CREAT = true, .TRUNC = true }, 0o644);
-    try wait_completion(&io, &open_sync);
-    const fd = try open_sync.result;
+    try io.openat(&compl, posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDWR, .CREAT = true, .TRUNC = true }, 0o644);
+    const fd = try io.wait(&compl, posix.fd_t);
 
     // write
-    var write_sync = Sync(IO.WriteError!usize){};
-    try io.write(@TypeOf(&write_sync), &write_sync, @TypeOf(write_sync).cb, &compl, fd, data, 0);
-    try wait_completion(&io, &write_sync);
-    try testing.expectEqual(data.len, try write_sync.result);
+    try io.write(&compl, fd, data, 0);
+    try testing.expectEqual(data.len, try io.wait(&compl, usize));
 
     // fsync
-    var fsync_sync = Sync(IO.FsyncError!void){};
-    try io.fsync(@TypeOf(&fsync_sync), &fsync_sync, @TypeOf(fsync_sync).cb, &compl, fd);
-    try wait_completion(&io, &fsync_sync);
-    try fsync_sync.result;
+    try io.fsync(&compl, fd);
+    try io.wait(&compl, void);
 
     // statx: verify size
     var stx: std.os.linux.Statx = undefined;
-    var statx_sync = Sync(IO.StatxError!void){};
-    try io.statx(@TypeOf(&statx_sync), &statx_sync, @TypeOf(statx_sync).cb, &compl, posix.AT.FDCWD, path_z, 0, std.os.linux.STATX.BASIC_STATS, &stx);
-    try wait_completion(&io, &statx_sync);
-    try statx_sync.result;
+    try io.statx(&compl, posix.AT.FDCWD, path_z, 0, std.os.linux.STATX.BASIC_STATS, &stx);
+    try io.wait(&compl, void);
     try testing.expectEqual(@as(u64, data.len), stx.size);
 
     // read back
-    var read_sync = Sync(IO.ReadError!usize){};
     var buf: [64]u8 = undefined;
-    try io.read(@TypeOf(&read_sync), &read_sync, @TypeOf(read_sync).cb, &compl, fd, &buf, 0);
-    try wait_completion(&io, &read_sync);
-    const n = try read_sync.result;
+    try io.read(&compl, fd, &buf, 0);
+    const n = try io.wait(&compl, usize);
     try testing.expectEqual(data.len, n);
     try testing.expectEqualStrings(data, buf[0..n]);
 
     // close
-    var close_sync = Sync(IO.CloseError!void){};
-    try io.close(@TypeOf(&close_sync), &close_sync, @TypeOf(close_sync).cb, &compl, fd);
-    try wait_completion(&io, &close_sync);
-    try close_sync.result;
+    try io.close(&compl, fd);
+    try io.wait(&compl, void);
 }
 
 test "tcp connect accept send recv round-trip" {
@@ -1536,51 +1358,35 @@ test "tcp connect accept send recv round-trip" {
     const client = try io.socket(posix.AF.INET, posix.SOCK.STREAM, 0);
     defer _ = std.c.close(client);
 
-    var accept_sync = Sync(IO.AcceptError!posix.socket_t){};
-    var connect_sync = Sync(IO.ConnectError!void){};
-    var compl_accept: IO.Completion = undefined;
-    var compl_connect: IO.Completion = undefined;
+    var compl_accept: IO.Future = undefined;
+    var compl_connect: IO.Future = undefined;
 
-    try io.accept(@TypeOf(&accept_sync), &accept_sync, @TypeOf(accept_sync).cb, &compl_accept, listener);
+    try io.accept(&compl_accept, listener);
     const addr: posix.sockaddr.in = .{
         .port = @byteSwap(port),
         .addr = @bitCast(@as([4]u8, .{ 127, 0, 0, 1 })),
     };
-    try io.connect(@TypeOf(&connect_sync), &connect_sync, @TypeOf(connect_sync).cb, &compl_connect, client, addr);
+    try io.connect(&compl_connect, client, addr);
 
-    while (!accept_sync.done or !connect_sync.done) {
-        try io.submit(1);
-        try io.complete(1);
-        try io.run_callback();
-    }
-    try connect_sync.result;
-    const server_fd = try accept_sync.result;
+    try io.wait(&compl_connect, void);
+    const server_fd = try io.wait(&compl_accept, posix.socket_t);
 
     const msg = "glu io_uring tcp";
-    var send_sync = Sync(IO.SendError!usize){};
-    var recv_sync = Sync(IO.RecvError!usize){};
-    var compl_send: IO.Completion = undefined;
-    var compl_recv: IO.Completion = undefined;
+    var compl_send: IO.Future = undefined;
+    var compl_recv: IO.Future = undefined;
     var recv_buf: [64]u8 = undefined;
 
-    try io.send(@TypeOf(&send_sync), &send_sync, @TypeOf(send_sync).cb, &compl_send, client, msg);
-    try io.recv(@TypeOf(&recv_sync), &recv_sync, @TypeOf(recv_sync).cb, &compl_recv, server_fd, &recv_buf);
+    try io.send(&compl_send, client, msg);
+    try io.recv(&compl_recv, server_fd, &recv_buf);
 
-    while (!send_sync.done or !recv_sync.done) {
-        try io.submit(1);
-        try io.complete(1);
-        try io.run_callback();
-    }
-    try testing.expectEqual(@as(usize, msg.len), try send_sync.result);
-    const rn = try recv_sync.result;
+    try testing.expectEqual(@as(usize, msg.len), try io.wait(&compl_send, usize));
+    const rn = try io.wait(&compl_recv, usize);
     try testing.expectEqual(@as(usize, msg.len), rn);
     try testing.expectEqualStrings(msg, recv_buf[0..rn]);
 
-    var close_sync = Sync(IO.CloseError!void){};
-    var compl_close: IO.Completion = undefined;
-    try io.close(@TypeOf(&close_sync), &close_sync, @TypeOf(close_sync).cb, &compl_close, server_fd);
-    try wait_completion(&io, &close_sync);
-    try close_sync.result;
+    var compl_close: IO.Future = undefined;
+    try io.close(&compl_close, server_fd);
+    try io.wait(&compl_close, void);
 }
 
 test "udp send_to recv_from round-trip" {
@@ -1607,22 +1413,15 @@ test "udp send_to recv_from round-trip" {
         .addr = @bitCast(@as([4]u8, .{ 127, 0, 0, 1 })),
     };
 
-    var send_sync = Sync(IO.SendToError!usize){};
-    var recv_sync = Sync(IO.RecvFromError!usize){};
-    var compl_send: IO.Completion = undefined;
-    var compl_recv: IO.Completion = undefined;
+    var compl_send: IO.Future = undefined;
+    var compl_recv: IO.Future = undefined;
     var buf: [64]u8 = undefined;
 
-    try io.send_to(@TypeOf(&send_sync), &send_sync, @TypeOf(send_sync).cb, &compl_send, s2, msg, addr);
-    try io.recv_from(@TypeOf(&recv_sync), &recv_sync, @TypeOf(recv_sync).cb, &compl_recv, s1, &buf);
+    try io.send_to(&compl_send, s2, msg, addr);
+    try io.recv_from(&compl_recv, s1, &buf);
 
-    while (!send_sync.done or !recv_sync.done) {
-        try io.submit(1);
-        try io.complete(1);
-        try io.run_callback();
-    }
-    try testing.expectEqual(@as(usize, msg.len), try send_sync.result);
-    const n = try recv_sync.result;
+    try testing.expectEqual(@as(usize, msg.len), try io.wait(&compl_send, usize));
+    const n = try io.wait(&compl_recv, usize);
     try testing.expectEqual(@as(usize, msg.len), n);
     try testing.expectEqualStrings(msg, buf[0..n]);
 }
@@ -1632,26 +1431,23 @@ test "timeout fires after the requested duration" {
     defer io.deinit();
 
     var ts: std.os.linux.kernel_timespec = .{ .sec = 0, .nsec = 40 * std.time.ns_per_ms };
-    var ctx = Sync(IO.TimeoutError!void){};
-    var compl: IO.Completion = undefined;
-    try io.timeout(@TypeOf(&ctx), &ctx, @TypeOf(ctx).cb, &compl, &ts, 0);
+    var compl: IO.Future = undefined;
+    try io.timeout(&compl, &ts, 0);
 
     const start = time.monotonic();
-    try wait_completion(&io, &ctx);
+    try io.wait(&compl, void);
     const elapsed_ns = time.monotonic() - start;
 
-    try ctx.result;
     try testing.expect(elapsed_ns >= 30 * std.time.ns_per_ms);
 }
 
 test "next_tick completes immediately" {
     var io = try IO.init(8, 0);
     defer io.deinit();
-    var ctx = Sync(IO.NextTickResult){};
-    var compl: IO.Completion = undefined;
-    try io.next_tick(@TypeOf(&ctx), &ctx, @TypeOf(ctx).cb, &compl);
-    try wait_completion(&io, &ctx);
-    try testing.expect(ctx.done);
+    var compl: IO.Future = undefined;
+    try io.next_tick(&compl);
+    try io.wait(&compl, void);
+    try testing.expect(compl.done);
 }
 
 test "openat nonexistent path returns FileNotFound" {
@@ -1664,11 +1460,9 @@ test "openat nonexistent path returns FileNotFound" {
     path_buf[path_len] = 0;
     const path_z: [*:0]const u8 = path_buf[0..];
 
-    var ctx = Sync(IO.OpenatError!posix.fd_t){};
-    var compl: IO.Completion = undefined;
-    try io.openat(@TypeOf(&ctx), &ctx, @TypeOf(ctx).cb, &compl, posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDWR }, 0o644);
-    try wait_completion(&io, &ctx);
-    try testing.expectError(error.FileNotFound, ctx.result);
+    var compl: IO.Future = undefined;
+    try io.openat(&compl, posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDWR }, 0o644);
+    try testing.expectError(error.FileNotFound, io.wait(&compl, posix.fd_t));
 }
 
 test "statx nonexistent path returns FileNotFound" {
@@ -1682,11 +1476,9 @@ test "statx nonexistent path returns FileNotFound" {
     const path_z: [*:0]const u8 = path_buf[0..];
 
     var stx: std.os.linux.Statx = undefined;
-    var ctx = Sync(IO.StatxError!void){};
-    var compl: IO.Completion = undefined;
-    try io.statx(@TypeOf(&ctx), &ctx, @TypeOf(ctx).cb, &compl, posix.AT.FDCWD, path_z, 0, std.os.linux.STATX.BASIC_STATS, &stx);
-    try wait_completion(&io, &ctx);
-    try testing.expectError(error.FileNotFound, ctx.result);
+    var compl: IO.Future = undefined;
+    try io.statx(&compl, posix.AT.FDCWD, path_z, 0, std.os.linux.STATX.BASIC_STATS, &stx);
+    try testing.expectError(error.FileNotFound, io.wait(&compl, void));
 }
 
 test "connect to a closed port returns ConnectionRefused" {
@@ -1708,11 +1500,9 @@ test "connect to a closed port returns ConnectionRefused" {
         .port = @byteSwap(port),
         .addr = @bitCast(@as([4]u8, .{ 127, 0, 0, 1 })),
     };
-    var ctx = Sync(IO.ConnectError!void){};
-    var compl: IO.Completion = undefined;
-    try io.connect(@TypeOf(&ctx), &ctx, @TypeOf(ctx).cb, &compl, s, addr);
-    try wait_completion(&io, &ctx);
-    try testing.expectError(error.ConnectionRefused, ctx.result);
+    var compl: IO.Future = undefined;
+    try io.connect(&compl, s, addr);
+    try testing.expectError(error.ConnectionRefused, io.wait(&compl, void));
 }
 
 test "read from a closed fd returns NotOpenForReading" {
@@ -1725,18 +1515,15 @@ test "read from a closed fd returns NotOpenForReading" {
     path_buf[path_len] = 0;
     const path_z: [*:0]const u8 = path_buf[0..];
 
-    var open_sync = Sync(IO.OpenatError!posix.fd_t){};
-    var compl: IO.Completion = undefined;
-    try io.openat(@TypeOf(&open_sync), &open_sync, @TypeOf(open_sync).cb, &compl, posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDWR, .CREAT = true, .TRUNC = true }, 0o644);
-    try wait_completion(&io, &open_sync);
-    const fd = try open_sync.result;
+    var compl: IO.Future = undefined;
+    try io.openat(&compl, posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDWR, .CREAT = true, .TRUNC = true }, 0o644);
+    const fd = try io.wait(&compl, posix.fd_t);
     _ = std.c.close(fd);
 
-    var read_ctx = Sync(IO.ReadError!usize){};
+    var compl_read: IO.Future = undefined;
     var buf: [16]u8 = undefined;
-    try io.read(@TypeOf(&read_ctx), &read_ctx, @TypeOf(read_ctx).cb, &compl, fd, &buf, 0);
-    try wait_completion(&io, &read_ctx);
-    try testing.expectError(error.NotOpenForReading, read_ctx.result);
+    try io.read(&compl_read, fd, &buf, 0);
+    try testing.expectError(error.NotOpenForReading, io.wait(&compl_read, usize));
 }
 
 test "accept on a non-listening socket returns SocketNotListening" {
@@ -1746,57 +1533,30 @@ test "accept on a non-listening socket returns SocketNotListening" {
     defer _ = std.c.close(s);
     try io.bind(s, .{ .port = 0, .addr = 0 });
 
-    var ctx = Sync(IO.AcceptError!posix.socket_t){};
-    var compl: IO.Completion = undefined;
-    try io.accept(@TypeOf(&ctx), &ctx, @TypeOf(ctx).cb, &compl, s);
-    try wait_completion(&io, &ctx);
-    try testing.expectError(error.SocketNotListening, ctx.result);
+    var compl: IO.Future = undefined;
+    try io.accept(&compl, s);
+    try testing.expectError(error.SocketNotListening, io.wait(&compl, posix.socket_t));
 }
 
 test "batch: enqueue and drain many operations in one submission" {
     var io = try IO.init(8, 0);
     defer io.deinit();
-    const Ctx = struct {
-        done: bool = false,
-        calls: u32 = 0,
-    };
-    const cb = struct {
-        fn call(ctx: *Ctx, _: *IO.Completion, _: IO.NextTickResult) void {
-            ctx.calls += 1;
-            ctx.done = true;
-        }
-    }.call;
-    var ctx = Ctx{};
-    var compls: [8]IO.Completion = undefined;
+    var compls: [8]IO.Future = undefined;
     for (&compls) |*compl| {
-        try io.next_tick(*Ctx, &ctx, cb, compl);
+        try io.next_tick(compl);
     }
-    while (ctx.calls < 8) {
-        try io.submit(1);
-        try io.complete(1);
-        try io.run_callback();
+    for (&compls) |*compl| {
+        try io.wait(compl, void);
     }
-    try testing.expectEqual(@as(u32, 8), ctx.calls);
 }
 
 test "run pumps the event loop to completion" {
     var io = try IO.init(8, 0);
     defer io.deinit();
-    const Ctx = struct {
-        done: bool = false,
-        calls: u32 = 0,
-    };
-    const cb = struct {
-        fn call(ctx: *Ctx, _: *IO.Completion, _: IO.NextTickResult) void {
-            ctx.calls += 1;
-            ctx.done = true;
-        }
-    }.call;
-    var ctx = Ctx{};
-    var compl: IO.Completion = undefined;
-    try io.next_tick(*Ctx, &ctx, cb, &compl);
+    var compl: IO.Future = undefined;
+    try io.next_tick(&compl);
     try io.run(10 * std.time.ns_per_ms);
-    try testing.expectEqual(@as(u32, 1), ctx.calls);
+    try testing.expect(compl.done);
 }
 
 test "timeouts complete asynchronously while the app does work" {
@@ -1811,17 +1571,7 @@ test "timeouts complete asynchronously while the app does work" {
         }
     }.call;
 
-    const TimerCtx = struct {
-        fired: bool = false,
-    };
-    const timer_cb = struct {
-        fn call(ctx: *TimerCtx, _: *IO.Completion, _: IO.TimeoutError!void) void {
-            ctx.fired = true;
-        }
-    }.call;
-
-    var ctxs = [_]TimerCtx{ .{}, .{}, .{} };
-    var compls: [3]IO.Completion = undefined;
+    var compls: [3]IO.Future = undefined;
     var specs = [_]std.os.linux.kernel_timespec{
         .{ .sec = 0, .nsec = 30 * std.time.ns_per_ms },
         .{ .sec = 0, .nsec = 60 * std.time.ns_per_ms },
@@ -1829,35 +1579,32 @@ test "timeouts complete asynchronously while the app does work" {
     };
 
     for (&compls, 0..) |*compl, i| {
-        try io.timeout(*TimerCtx, &ctxs[i], timer_cb, compl, &specs[i], 0);
+        try io.timeout(compl, &specs[i], 0);
     }
 
-    // Submitting hands the ops to the kernel: none complete synchronously.
     try pump(&io);
-    try testing.expect(!ctxs[0].fired and !ctxs[1].fired and !ctxs[2].fired);
+    try testing.expect(!compls[0].done and !compls[1].done and !compls[2].done);
 
-    // The app thread does real work while all three timeouts are in flight;
-    // a blocking pump would let `work` barely advance.
     const started = time.monotonic();
     var work: u64 = 0;
     while (time.monotonic() - started < 40 * std.time.ns_per_ms) {
         work += 1;
         try pump(&io);
     }
-    try testing.expect(ctxs[0].fired);
-    try testing.expect(!ctxs[1].fired and !ctxs[2].fired);
+    try testing.expect(compls[0].done);
+    try testing.expect(!compls[1].done and !compls[2].done);
     try testing.expect(work >= 1000);
 
     while (time.monotonic() - started < 70 * std.time.ns_per_ms) {
         work += 1;
         try pump(&io);
     }
-    try testing.expect(ctxs[1].fired);
-    try testing.expect(!ctxs[2].fired);
+    try testing.expect(compls[1].done);
+    try testing.expect(!compls[2].done);
 
     while (time.monotonic() - started < 120 * std.time.ns_per_ms) {
         work += 1;
         try pump(&io);
     }
-    try testing.expect(ctxs[2].fired);
+    try testing.expect(compls[2].done);
 }
