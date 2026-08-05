@@ -236,11 +236,12 @@ pub fn write(chan: *Channel, msg: *const anyopaque) void {
     const cap = chan.header.capacity;
     const tos: ToS = @enumFromInt(chan.header.tos);
 
-    while (chan.header.write -% slowest_reader(&chan.header.readers, chan.header.write) >= cap) {
-        sweep_dead_readers(&chan.header.readers);
-        if (tos == .best_effort) break;
-        if (chan.header.write -% slowest_reader(&chan.header.readers, chan.header.write) < cap) break;
-        std.atomic.spinLoopHint();
+    if (tos == .reliable) {
+        while (chan.header.write -% slowest_reader(&chan.header.readers, chan.header.write) >= cap) {
+            sweep_dead_readers(&chan.header.readers);
+            if (chan.header.write -% slowest_reader(&chan.header.readers, chan.header.write) < cap) break;
+            std.atomic.spinLoopHint();
+        }
     }
 
     const msg_size = chan.header.msg_size;
@@ -286,20 +287,6 @@ pub fn slowest_reader(readers: []const u64, write_cursor: u32) u32 {
     return min;
 }
 
-/// Advance the read cursor for `sub_id` and return a pointer to the slot.
-///
-/// Each subscriber owns one slot in the `readers` array and their cursor
-/// is advanced atomically. Slots are reused once all subscribers have
-/// read or dropped them.
-pub fn read(chan: *Channel, sub_id: u32) *anyopaque {
-    assert(chan.fd != -1);
-    assert(sub_id < MAX_READERS);
-    const msg_size = chan.header.msg_size;
-    const cursor = bump_cursor(&chan.header.readers[sub_id]);
-    const idx = cursor % chan.header.capacity;
-    const slot = chan.ptr + @sizeOf(Header) + idx * msg_size;
-    return @ptrCast(slot);
-}
 
 /// Return a pointer to the next unread slot for `sub_id` without
 /// advancing the read cursor.
@@ -327,19 +314,13 @@ pub fn peek(chan: *Channel, sub_id: u32) *anyopaque {
 pub fn ack(chan: *Channel, sub_id: u32) void {
     assert(chan.fd != -1);
     assert(sub_id < MAX_READERS);
-    _ = bump_cursor(&chan.header.readers[sub_id]);
-}
 
-/// Atomically advance the low 32-bit cursor of a reader entry, leaving the
-/// owning PID in the high 32 bits untouched. Returns the cursor before the
-/// advance. A compare-and-swap loop keeps the cursor increment from
-/// carrying into the PID field when it wraps.
-fn bump_cursor(entry: *u64) u32 {
+    const entry = &chan.header.readers[sub_id];
     while (true) {
         const cur = @atomicLoad(u64, entry, .monotonic);
         const cursor: u32 = @truncate(cur);
         const next = (cur & ~@as(u64, std.math.maxInt(u32))) | @as(u64, cursor +% 1);
-        if (@cmpxchgWeak(u64, entry, cur, next, .acq_rel, .monotonic) == null) return cursor;
+        if (@cmpxchgWeak(u64, entry, cur, next, .acq_rel, .monotonic) == null) return;
     }
 }
 
@@ -442,8 +423,10 @@ test "two readers read independently from the same channel" {
             _ = c.nanosleep(&ts, null);
         }
 
-        const m0: *const TestMsg = @ptrCast(@alignCast(read(&child_chan, 1)));
-        const m1: *const TestMsg = @ptrCast(@alignCast(read(&child_chan, 1)));
+        const m0: *const TestMsg = @ptrCast(@alignCast(peek(&child_chan, 1)));
+        ack(&child_chan, 1);
+        const m1: *const TestMsg = @ptrCast(@alignCast(peek(&child_chan, 1)));
+        ack(&child_chan, 1);
         if (m0.x != 10 or m0.y != 20) c.exit(1);
         if (m1.x != 30 or m1.y != 40) c.exit(1);
 
@@ -459,12 +442,14 @@ test "two readers read independently from the same channel" {
         _ = c.nanosleep(&ts, null);
     }
 
-    const m0: *const TestMsg = @ptrCast(@alignCast(read(&chan, 0)));
+    const m0: *const TestMsg = @ptrCast(@alignCast(peek(&chan, 0)));
     try std.testing.expect(m0.x == 10);
     try std.testing.expect(m0.y == 20);
-    const m1: *const TestMsg = @ptrCast(@alignCast(read(&chan, 0)));
+    ack(&chan, 0);
+    const m1: *const TestMsg = @ptrCast(@alignCast(peek(&chan, 0)));
     try std.testing.expect(m1.x == 30);
     try std.testing.expect(m1.y == 40);
+    ack(&chan, 0);
 
     _ = c.waitpid(pid, null, 0);
 }
@@ -489,9 +474,10 @@ test "cross-process: producer writes, consumer reads via fork" {
         var ts = std.c.timespec{ .sec = 0, .nsec = 100_000_000 };
         _ = c.nanosleep(&ts, null);
     }
-    const msg: *const TestMsg = @ptrCast(@alignCast(read(&chan, 0)));
+    const msg: *const TestMsg = @ptrCast(@alignCast(peek(&chan, 0)));
     try std.testing.expect(msg.x == 42);
     try std.testing.expect(msg.y == 99);
+    ack(&chan, 0);
 
     _ = c.waitpid(pid, null, 0);
 }
