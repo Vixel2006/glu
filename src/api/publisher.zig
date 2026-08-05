@@ -9,7 +9,8 @@ const is_alive = @import("../registry.zig").is_alive;
 const slowest_reader = @import("../channel.zig").slowest_reader;
 const sweep_dead_readers = @import("../channel.zig").sweep_dead_readers;
 const write = @import("../channel.zig").write;
-const read = @import("../channel.zig").read;
+const peek = @import("../channel.zig").peek;
+const ack = @import("../channel.zig").ack;
 
 const PubErr = error{
     OutOfMemory,
@@ -36,18 +37,21 @@ pub const Publisher = struct {
         assert(name.len > 0);
         var self = Publisher{ .channel = try Channel.open(name, msg_size, capacity, tos) };
 
-        var any_alive = false;
-        for (&self.channel.header.readers) |entry| {
-            const reader_pid: u32 = @intCast(entry >> 32);
-            if (reader_pid != 0 and is_alive(reader_pid)) any_alive = true;
-        }
-        if (!any_alive) {
-            // The refcount can't tell a crashed publisher from a live one,
-            // so base staleness on subscriber liveness instead. Unlink the
-            // orphaned segment and recreate it fresh.
-            force_unlink(name);
-            self.deinit();
-            return Publisher{ .channel = try Channel.open(name, msg_size, capacity, tos) };
+        const my_pid = @as(u32, @intCast(std.os.linux.getpid()));
+        if (self.channel.header.owner_pid != my_pid) {
+            var any_alive = false;
+            for (&self.channel.header.readers) |entry| {
+                const reader_pid: u32 = @intCast(entry >> 32);
+                if (reader_pid != 0 and is_alive(reader_pid)) any_alive = true;
+            }
+            if (!any_alive) {
+                // The refcount can't tell a crashed publisher from a live one,
+                // so base staleness on subscriber liveness instead. Unlink the
+                // orphaned segment and recreate it fresh.
+                force_unlink(name);
+                self.deinit();
+                return Publisher{ .channel = try Channel.open(name, msg_size, capacity, tos) };
+            }
         }
 
         return self;
@@ -66,11 +70,12 @@ pub const Publisher = struct {
         const cap = self.channel.header.capacity;
         const tos: ToS = @enumFromInt(self.channel.header.tos);
 
-        while (self.channel.header.write -% slowest_reader(&self.channel.header.readers, self.channel.header.write) >= cap) {
-            if (tos == .best_effort) break;
-            sweep_dead_readers(&self.channel.header.readers);
-            if (self.channel.header.write -% slowest_reader(&self.channel.header.readers, self.channel.header.write) < cap) break;
-            std.atomic.spinLoopHint();
+        if (tos == .reliable) {
+            while (self.channel.header.write -% slowest_reader(&self.channel.header.readers, self.channel.header.write) >= cap) {
+                sweep_dead_readers(&self.channel.header.readers);
+                if (self.channel.header.write -% slowest_reader(&self.channel.header.readers, self.channel.header.write) < cap) break;
+                std.atomic.spinLoopHint();
+            }
         }
         const slot = self.channel.ptr + @sizeOf(Header) + (self.channel.header.write % self.channel.header.capacity) * self.channel.header.msg_size;
         return @ptrCast(slot);
@@ -81,7 +86,7 @@ pub const Publisher = struct {
     /// Must be paired with a prior `reserve` call. Advances the write
     /// cursor with a release store so readers see the written data.
     pub fn commit(self: *Publisher) void {
-        @atomicStore(u32, &self.channel.header.write, self.channel.header.write + 1, .release);
+        _ = @atomicRmw(u32, &self.channel.header.write, .Add, 1, .release);
     }
 
     /// Write a message in one shot (reserve + copy + commit).
@@ -113,9 +118,10 @@ test "Publisher: reserve and commit directly" {
         var ts = std.c.timespec{ .sec = 0, .nsec = 100_000_000 };
         _ = c.nanosleep(&ts, null);
     }
-    const msg: *const TestMsg = @ptrCast(@alignCast(read(&chan, 0)));
+    const msg: *const TestMsg = @ptrCast(@alignCast(peek(&chan, 0)));
     try std.testing.expect(msg.x == 42);
     try std.testing.expect(msg.y == 99);
+    ack(&chan, 0);
     _ = c.waitpid(pid, null, 0);
 }
 
@@ -138,9 +144,10 @@ test "Publisher: publish a message, read it via raw Channel" {
         var ts = std.c.timespec{ .sec = 0, .nsec = 100_000_000 };
         _ = c.nanosleep(&ts, null);
     }
-    const msg: *const TestMsg = @ptrCast(@alignCast(read(&chan, 0)));
+    const msg: *const TestMsg = @ptrCast(@alignCast(peek(&chan, 0)));
     try std.testing.expect(msg.x == 7);
     try std.testing.expect(msg.y == 13);
+    ack(&chan, 0);
     _ = c.waitpid(pid, null, 0);
 }
 
