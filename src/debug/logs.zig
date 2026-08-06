@@ -1,7 +1,10 @@
 const std = @import("std");
+const posix = std.posix;
+const linux = std.os.linux;
+
+const IO = @import("../io.zig").IO;
 
 const LOGS_DIR = "/tmp/glu/logs";
-const MAX_LOG_BUF: usize = 4096;
 
 /// Clean up the logs directory by deleting it entirely.
 pub fn cleanup_logs(io: std.Io) void {
@@ -47,74 +50,141 @@ pub fn count_tail_lines(buf: []const u8, n: u64) usize {
     return start;
 }
 
-/// Read the first `n` lines from a node's log file.
+/// Open `<logs_dir>/<node>.log` for reading via io_uring.
 ///
-/// Returns an owned slice allocated with `allocator`, or `null` if
-/// no matching log file is found. The caller must free the result.
-pub fn read_log_head(io: std.Io, allocator: std.mem.Allocator, logs_dir: []const u8, node: []const u8, n: u64) !?[]const u8 {
-    const cwd = std.Io.Dir.cwd();
-    const dir = cwd.openDir(io, logs_dir, .{ .iterate = true }) catch return null;
-    defer dir.close(io);
+/// Returns the fd, or `null` when no matching log file exists.
+fn open_log(io: *IO, logs_dir: []const u8, node: []const u8) !?posix.fd_t {
+    var path_buf: [256:0]u8 = undefined;
+    const path_len = (std.fmt.bufPrint(path_buf[0..255], "{s}/{s}.log", .{ logs_dir, node }) catch return error.NameTooLong).len;
+    path_buf[path_len] = 0;
 
-    var iter = dir.iterate();
-    while (try iter.next(io)) |log| {
-        if (log.name.len > 4 and
-            std.mem.eql(u8, log.name[log.name.len - 4 ..], ".log") and
-            std.mem.eql(u8, log.name[0 .. log.name.len - 4], node))
-        {
-            const file = try dir.openFile(io, log.name, .{});
-            defer file.close(io);
-
-            const file_len = try file.length(io);
-            const to_read = @min(file_len, MAX_LOG_BUF);
-            if (to_read == 0) return null;
-
-            var buf: [MAX_LOG_BUF]u8 = undefined;
-            _ = try file.readPositionalAll(io, buf[0..to_read], 0);
-
-            const end = count_head_lines(buf[0..to_read], n);
-            if (end == 0) return null;
-
-            return try allocator.dupe(u8, buf[0..end]);
-        }
-    }
-    return null;
+    var compl: IO.Future = undefined;
+    io.openat(&compl, posix.AT.FDCWD, path_buf[0..], .{ .ACCMODE = .RDONLY }, 0) catch |err| {
+        if (err == error.FileNotFound) return null;
+        return err;
+    };
+    return io.wait(&compl, posix.fd_t) catch |err| {
+        if (err == error.FileNotFound) return null;
+        return err;
+    };
 }
 
-/// Read the last `n` lines from a node's log file.
-///
-/// Returns an owned slice allocated with `allocator`, or `null` if
-/// no matching log file is found. The caller must free the result.
-pub fn read_log_tail(io: std.Io, allocator: std.mem.Allocator, logs_dir: []const u8, node: []const u8, n: u64) !?[]const u8 {
-    const cwd = std.Io.Dir.cwd();
-    const dir = cwd.openDir(io, logs_dir, .{ .iterate = true }) catch return null;
-    defer dir.close(io);
-
-    var iter = dir.iterate();
-    while (try iter.next(io)) |log| {
-        if (log.name.len > 4 and
-            std.mem.eql(u8, log.name[log.name.len - 4 ..], ".log") and
-            std.mem.eql(u8, log.name[0 .. log.name.len - 4], node))
-        {
-            const file = try dir.openFile(io, log.name, .{});
-            defer file.close(io);
-
-            const file_len = try file.length(io);
-            const to_read = @min(file_len, MAX_LOG_BUF);
-            if (to_read == 0) return null;
-
-            const offset = file_len - to_read;
-            var buf: [MAX_LOG_BUF]u8 = undefined;
-            _ = try file.readPositionalAll(io, buf[0..to_read], offset);
-
-            const start = count_tail_lines(buf[0..to_read], n);
-            if (start >= to_read) return null;
-
-            return try allocator.dupe(u8, buf[start..to_read]);
-        }
-    }
-    return null;
+/// Stat an open fd and return its size in bytes.
+fn file_size(io: *IO, fd: posix.fd_t) !u64 {
+    var stx: linux.Statx = undefined;
+    var compl: IO.Future = undefined;
+    try io.statx(&compl, fd, "", posix.AT.EMPTY_PATH, linux.STATX.BASIC_STATS, &stx);
+    try io.wait(&compl, void);
+    return stx.size;
 }
+
+/// Read `buf.len` bytes at `offset` from `fd` via io_uring.
+fn read_chunk(io: *IO, fd: posix.fd_t, offset: u64, buf: []u8) !usize {
+    var compl: IO.Future = undefined;
+    try io.read(&compl, fd, buf, offset);
+    return try io.wait(&compl, usize);
+}
+
+/// Close an fd via io_uring, swallowing errors.
+fn close_fd(io: *IO, fd: posix.fd_t) void {
+    var compl: IO.Future = undefined;
+    io.close(&compl, fd) catch return;
+    io.wait(&compl, void) catch {};
+}
+
+/// Read the first `n` lines from a node's log file into `buf`.
+///
+/// Uses glu's io_uring engine (openat/statx/read) rather than blocking
+/// file I/O. Returns the number of bytes written, or 0 when no matching
+/// log file exists or the file is empty.
+pub fn read_log_head(logs_dir: []const u8, node: []const u8, n: u64, buf: []u8) !usize {
+    var ring = try IO.init(16, 0);
+    defer ring.deinit();
+
+    const fd = (try open_log(&ring, logs_dir, node)) orelse return 0;
+    defer close_fd(&ring, fd);
+
+    const size = try file_size(&ring, fd);
+    const to_read: usize = @intCast(@min(size, @as(u64, buf.len)));
+    const got = try read_chunk(&ring, fd, 0, buf[0..to_read]);
+
+    return count_head_lines(buf[0..got], n);
+}
+
+/// Read the last `n` lines from a node's log file into `buf`.
+///
+/// Uses glu's io_uring engine (openat/statx/read) rather than blocking
+/// file I/O. Returns the number of bytes written, or 0 when no matching
+/// log file exists or the file is empty.
+pub fn read_log_tail(logs_dir: []const u8, node: []const u8, n: u64, buf: []u8) !usize {
+    var ring = try IO.init(16, 0);
+    defer ring.deinit();
+
+    const fd = (try open_log(&ring, logs_dir, node)) orelse return 0;
+    defer close_fd(&ring, fd);
+
+    const size = try file_size(&ring, fd);
+    const to_read: usize = @intCast(@min(size, @as(u64, buf.len)));
+    const got = try read_chunk(&ring, fd, size - to_read, buf[0..to_read]);
+
+    const start = count_tail_lines(buf[0..got], n);
+    const len = got - start;
+    std.mem.copyForwards(u8, buf[0..len], buf[start..got]);
+    return len;
+}
+
+/// A handle for streaming appended log bytes via io_uring.
+///
+/// Holds the log file open, tracks the last-read offset, and reports
+/// newly appended bytes on each `poll`.
+pub const LogFollower = struct {
+    ring: IO,
+    fd: posix.fd_t,
+    offset: u64,
+
+    /// Open a node's log file for following. Errors with
+    /// `error.FileNotFound` if no matching log exists.
+    pub fn init(logs_dir: []const u8, node: []const u8) !LogFollower {
+        var ring = try IO.init(16, 0);
+        errdefer ring.deinit();
+
+        const fd = (try open_log(&ring, logs_dir, node)) orelse {
+            ring.deinit();
+            return error.FileNotFound;
+        };
+        // Start from the current end so only newly-appended bytes are streamed.
+        const size = try file_size(&ring, fd);
+        return .{ .ring = ring, .fd = fd, .offset = size };
+    }
+
+    pub fn deinit(self: *LogFollower) void {
+        close_fd(&self.ring, self.fd);
+        self.ring.deinit();
+    }
+
+    /// Read any bytes appended since the last poll into `buf`.
+    ///
+    /// Returns the number of new bytes, or 0 when nothing new has arrived
+    /// (after sleeping on `sleep_io` so the caller does not busy-loop).
+    /// If the file is truncated or rotated, reading resumes from the top.
+    pub fn poll(self: *LogFollower, sleep_io: std.Io, buf: []u8) !usize {
+        const size = try file_size(&self.ring, self.fd);
+
+        if (size < self.offset) {
+            // Truncated or rotated: restart from the beginning.
+            self.offset = 0;
+        }
+        if (size <= self.offset) {
+            try std.Io.sleep(sleep_io, std.Io.Duration.fromMilliseconds(100), .awake);
+            return 0;
+        }
+
+        const to_read: usize = @intCast(@min(@as(u64, buf.len), size - self.offset));
+        const n = try read_chunk(&self.ring, self.fd, self.offset, buf[0..to_read]);
+        self.offset += n;
+        return n;
+    }
+};
 
 test "count_head_lines: fewer lines than requested returns full buffer" {
     const buf = "line1\nline2\n";
@@ -149,54 +219,77 @@ test "count_tail_lines: empty buffer" {
     try std.testing.expectEqual(@as(usize, 0), count_tail_lines("", 5));
 }
 
-test "read_log_tail: reads matching log file" {
-    const allocator = std.testing.allocator;
-    const io = std.testing.io;
-
-    var dir = std.testing.tmpDir(.{});
-    defer dir.cleanup();
-
-    try dir.dir.writeFile(io, .{ .sub_path = "mynode.log", .data = "hello from mynode" });
-
-    const logs_dir = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&dir.sub_path});
-    defer allocator.free(logs_dir);
-
-    const result = try read_log_tail(io, allocator, logs_dir, "mynode", 10);
-    try std.testing.expect(result != null);
-    try std.testing.expectEqualStrings("hello from mynode", result.?);
-    allocator.free(result.?);
+fn temp_logs_dir(dir: *std.testing.TmpDir, buf: []u8) ![]const u8 {
+    return std.fmt.bufPrint(buf, ".zig-cache/tmp/{s}", .{&dir.sub_path});
 }
 
-test "read_log_tail: no matching file silently returns null" {
-    const allocator = std.testing.allocator;
-    const io = std.testing.io;
-
+test "read_log_tail: reads matching log file" {
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
 
-    try dir.dir.writeFile(io, .{ .sub_path = "other.log", .data = "hello" });
+    try dir.dir.writeFile(std.testing.io, .{ .sub_path = "mynode.log", .data = "hello from mynode" });
 
-    const logs_dir = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&dir.sub_path});
-    defer allocator.free(logs_dir);
+    var logs_dir_buf: [128]u8 = undefined;
+    const logs_dir = try temp_logs_dir(&dir, &logs_dir_buf);
 
-    const result = try read_log_tail(io, allocator, logs_dir, "mynode", 10);
-    try std.testing.expect(result == null);
+    var buf: [4096]u8 = undefined;
+    const len = try read_log_tail(logs_dir, "mynode", 10, &buf);
+    try std.testing.expectEqualStrings("hello from mynode", buf[0..len]);
+}
+
+test "read_log_tail: no matching file returns zero" {
+    var dir = std.testing.tmpDir(.{});
+    defer dir.cleanup();
+
+    try dir.dir.writeFile(std.testing.io, .{ .sub_path = "other.log", .data = "hello" });
+
+    var logs_dir_buf: [128]u8 = undefined;
+    const logs_dir = try temp_logs_dir(&dir, &logs_dir_buf);
+
+    var buf: [4096]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 0), try read_log_tail(logs_dir, "mynode", 10, &buf));
 }
 
 test "read_log_head: reads first lines of log file" {
+    var dir = std.testing.tmpDir(.{});
+    defer dir.cleanup();
+
+    try dir.dir.writeFile(std.testing.io, .{ .sub_path = "sensor.log", .data = "line1\nline2\nline3\nline4\nline5\n" });
+
+    var logs_dir_buf: [128]u8 = undefined;
+    const logs_dir = try temp_logs_dir(&dir, &logs_dir_buf);
+
+    var buf: [4096]u8 = undefined;
+    const len = try read_log_head(logs_dir, "sensor", 2, &buf);
+    try std.testing.expectEqualStrings("line1\nline2\n", buf[0..len]);
+}
+
+test "LogFollower: streams appended bytes" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
 
-    try dir.dir.writeFile(io, .{ .sub_path = "sensor.log", .data = "line1\nline2\nline3\nline4\nline5\n" });
+    try dir.dir.writeFile(io, .{ .sub_path = "stream.log", .data = "line1\n" });
 
     const logs_dir = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&dir.sub_path});
     defer allocator.free(logs_dir);
 
-    const result = try read_log_head(io, allocator, logs_dir, "sensor", 2);
-    try std.testing.expect(result != null);
-    try std.testing.expectEqualStrings("line1\nline2\n", result.?);
-    allocator.free(result.?);
+    var follower = try LogFollower.init(logs_dir, "stream");
+    defer follower.deinit();
+
+    var buf: [256]u8 = undefined;
+    // Existing content is not re-streamed: nothing new yet.
+    try std.testing.expectEqual(@as(usize, 0), try follower.poll(io, &buf));
+
+    // Append more and poll again.
+    try dir.dir.writeFile(io, .{ .sub_path = "stream.log", .data = "line1\nline2\n" });
+    try std.testing.expectEqual(@as(usize, 6), try follower.poll(io, &buf));
+    try std.testing.expectEqualStrings("line2\n", buf[0..6]);
+
+    // Truncation resumes from the top.
+    try dir.dir.writeFile(io, .{ .sub_path = "stream.log", .data = "fresh\n" });
+    try std.testing.expectEqual(@as(usize, 6), try follower.poll(io, &buf));
+    try std.testing.expectEqualStrings("fresh\n", buf[0..6]);
 }

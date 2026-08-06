@@ -198,31 +198,75 @@ Start the node system using the process runner:
 glu launch -f launch.toml
 ```
 
+### 6. Showcase: Robot Control Room
+
+`examples/canonical` is a full robot-control-room demo that exercises every
+`glu` capability — shared-memory pub/sub (reliable and best-effort QoS),
+multicast and unicast UDP, bidirectional TCP, io_uring timers, async file I/O,
+the node registry, and CLI-driven orchestration.
+
+Build the four nodes and launch them:
+
+```bash
+zig build examples
+glu launch -f examples/canonical/launch.toml -d
+```
+
+| Node | Role | What it demonstrates |
+| :--- | :--- | :--- |
+| `sensor_arm` | telemetry producer | zero-copy `reserve`/`commit` at 100 Hz, one-shot `publish`, UDP heartbeat |
+| `coordinator` | fusion + control | multi-subscribe, raw `glu.write` on a **best-effort** log topic, UDP multicast `join_multicast` + `receive_from`, io_uring `timeout` pacing |
+| `operator` | human-in-the-loop | second subscriber (slowest-reader backpressure), **bidirectional TCP** server, UDP discovery, `registry.list_alive` node table |
+| `logger` | persistence | raw `glu.peek`/`glu.ack` on the best-effort topic, async `io.openat`/`write`/`fsync` → `telemetry.log` |
+
+Topics: `/robot/joint_states`, `/robot/health`, `/robot/fused`,
+`/robot/command`, `/robot/logs`.
+
+Drive the robot from a terminal — the operator listens on TCP `:9998`:
+
+```bash
+printf 'torque 2.5\n' | nc 127.0.0.1 9998   # or: home / velocity <n> / stop
+```
+
+Inspect the live system while it runs:
+
+```bash
+glu nodes list               # registered nodes + liveness   (alias: glu ps)
+glu topics list              # topics in /dev/shm with queue depth
+glu topics info /robot/joint_states   # per-subscriber lag (see the backpressure)
+glu nodes logs operator      # tail a detached node's output (alias: glu logs)
+glu nodes down               # stop everything               (alias: glu down)
+```
+
 ---
 
 ## CLI Reference
+
+Commands are grouped into a tree: `glu nodes ...` manages processes,
+`glu topics ...` inspects shared-memory channels, and `glu status` /
+`glu launch` live at the top level. Legacy flat names still work as aliases.
 
 ```
 usage: glu <command> [args]
 
 commands:
+  status   Overview of nodes and topics
   launch   Launch nodes from a TOML config file
            glu launch -f <file.toml> [-d]
 
-  list     List active topics in shared memory
-           glu list
+  nodes    Manage node processes
+           glu nodes list
+           glu nodes start <node> [node...]
+           glu nodes stop <node> [node...]
+           glu nodes restart <node> [node...]
+           glu nodes logs [--tail <n>] [--head <n>] <node>
+           glu nodes down [node...]
 
-  info     Show detailed info about a topic
-           glu info <topic>
+  topics   Inspect shared-memory topics
+           glu topics list
+           glu topics info <topic>
 
-  ps       List registered nodes
-           glu ps
-
-  logs     Print out logs of a detached node
-           glu logs [--tail <n>] [--head <n>] <node>
-
-  down     Stop all running nodes
-           glu down
+run 'glu help <command>' for usage
 ```
 
 ---

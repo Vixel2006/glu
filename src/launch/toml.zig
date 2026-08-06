@@ -2,36 +2,29 @@ const std = @import("std");
 const assert = std.debug.assert;
 
 const TomlErr = error{
-    OutOfMemory,
     FileSystem,
     UnterminatedString,
     UnterminatedArray,
     InvalidSyntax,
+    TooManyNodes,
+    TooManyArgs,
 };
 
+pub const MAX_NODES = 16;
+pub const MAX_ARGS = 8;
+
+/// A parsed node. String fields reference the caller's file buffer and stay
+/// valid only while that buffer lives.
 pub const NodeConfig = struct {
-    name: []const u8,
+    name: []const u8 = "",
     path: []const u8 = "",
     bin: []const u8 = "",
-    extra_cfg: []const []const u8 = &.{},
-
-    fn free(self: NodeConfig, allocator: std.mem.Allocator) void {
-        if (self.name.len > 0) allocator.free(self.name);
-        if (self.path.len > 0) allocator.free(self.path);
-        if (self.bin.len > 0) allocator.free(self.bin);
-        for (self.extra_cfg) |arg| allocator.free(arg);
-        if (self.extra_cfg.len > 0) allocator.free(self.extra_cfg);
-    }
+    extra_cfg: [MAX_ARGS][]const u8 = undefined,
+    extra_cfg_len: usize = 0,
 };
 
 pub const LaunchConfig = struct {
     nodes: []const NodeConfig,
-
-    pub fn deinit(self: *LaunchConfig, allocator: std.mem.Allocator) void {
-        for (self.nodes) |n| n.free(allocator);
-        allocator.free(self.nodes);
-        self.* = undefined;
-    }
 };
 
 const Parser = struct {
@@ -46,7 +39,7 @@ const Parser = struct {
         return self.pos >= self.buf.len;
     }
 
-    fn skip_whitespace_and_newlines(self: *Parser) void {
+    fn skip_space(self: *Parser) void {
         while (!self.done()) switch (self.buf[self.pos]) {
             ' ', '\t', '\n', '\r' => self.pos += 1,
             else => break,
@@ -70,42 +63,39 @@ const Parser = struct {
         return null;
     }
 
-    fn parse_string(self: *Parser, allocator: std.mem.Allocator) TomlErr![]const u8 {
+    fn parse_string(self: *Parser) TomlErr![]const u8 {
         self.pos += 1;
         const start = self.pos;
-        while (!self.done() and self.buf[self.pos] != '"') {
-            self.pos += 1;
-        }
+        while (!self.done() and self.buf[self.pos] != '"') self.pos += 1;
         if (self.done()) return error.UnterminatedString;
-        const result = try allocator.dupe(u8, self.buf[start..self.pos]);
+        const result = self.buf[start..self.pos];
         self.pos += 1;
         return result;
     }
 
-    fn parse_inline_array(self: *Parser, allocator: std.mem.Allocator) TomlErr![]const []const u8 {
+    fn parse_inline_array(self: *Parser, out: [][]const u8) TomlErr!usize {
         self.pos += 1;
-        var items: std.ArrayListAligned([]const u8, null) = .empty;
+        var count: usize = 0;
         while (!self.done() and self.buf[self.pos] != ']') {
-            self.skip_whitespace_and_newlines();
+            self.skip_space();
             if (self.buf[self.pos] == '"') {
-                const item = try self.parse_string(allocator);
-                try items.append(allocator, item);
+                if (count >= out.len) return error.TooManyArgs;
+                out[count] = try self.parse_string();
+                count += 1;
             }
-            self.skip_whitespace_and_newlines();
+            self.skip_space();
             _ = self.expect(',');
         }
         if (self.done()) return error.UnterminatedArray;
         self.pos += 1;
-        return try items.toOwnedSlice(allocator);
+        return count;
     }
 
     fn parse_table_header(self: *Parser) ?struct { is_array: bool, name: []const u8 } {
         if (!self.expect('[')) return null;
         const is_array = self.expect('[');
         const name_start = self.pos;
-        while (!self.done() and self.buf[self.pos] != ']') {
-            self.pos += 1;
-        }
+        while (!self.done() and self.buf[self.pos] != ']') self.pos += 1;
         if (self.done()) return null;
         const name = std.mem.trim(u8, self.buf[name_start..self.pos], " \t");
         if (!self.expect(']')) return null;
@@ -113,43 +103,39 @@ const Parser = struct {
         return .{ .is_array = is_array, .name = name };
     }
 
-    fn parse_key_value(self: *Parser) ?struct { key: []const u8 } {
+    fn parse_key_value(self: *Parser) ?[]const u8 {
         const key_start = self.pos;
-        while (!self.done() and self.buf[self.pos] != '=') {
-            self.pos += 1;
-        }
+        while (!self.done() and self.buf[self.pos] != '=') self.pos += 1;
         if (self.done()) return null;
         const key = std.mem.trim(u8, self.buf[key_start..self.pos], " \t");
         self.pos += 1;
-        return .{ .key = key };
+        return key;
     }
 };
 
-/// Parse a TOML launch configuration file into a `LaunchConfig`.
+/// Parse a TOML launch config file `content` (read by the caller into
+/// `content`) into `nodes`. `nodes` slices reference `content`.
 ///
-/// Supports `[[node]]` array-of-tables with `name`, `path`, `bin`,
-/// and `extra_cfg` keys. Comments (`#`) and blank lines are ignored.
-pub fn parse(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) TomlErr!LaunchConfig {
+/// Supports `[[node]]` array-of-tables with `name`, `path`, `bin`, and
+/// `extra_cfg` keys. Comments (`#`) and blank lines are ignored.
+/// Returns the number of nodes parsed.
+pub fn parse(io: std.Io, file_path: []const u8, content: []u8, nodes: []NodeConfig) TomlErr!usize {
     assert(file_path.len > 0);
+
     const cwd = std.Io.Dir.cwd();
     const file = cwd.openFile(io, file_path, .{}) catch return TomlErr.FileSystem;
     defer file.close(io);
 
     const size = @as(usize, @intCast(file.length(io) catch return TomlErr.FileSystem));
-    const content = try allocator.alloc(u8, size);
-    defer allocator.free(content);
-    _ = file.readPositionalAll(io, content, 0) catch return TomlErr.FileSystem;
-    var p = Parser.init(content);
-    var nodes: std.ArrayListAligned(NodeConfig, null) = .empty;
-    errdefer {
-        for (nodes.items) |n| n.free(allocator);
-        nodes.deinit(allocator);
-    }
+    if (size > content.len) return TomlErr.FileSystem;
+    const got = file.readPositionalAll(io, content[0..size], 0) catch return TomlErr.FileSystem;
 
-    var current_node: ?NodeConfig = null;
+    var p = Parser.init(content[0..got]);
+    var node_count: usize = 0;
+    var active = false;
 
     while (!p.done()) {
-        p.skip_whitespace_and_newlines();
+        p.skip_space();
         if (p.done()) break;
 
         if (p.peek() == '#') {
@@ -158,72 +144,68 @@ pub fn parse(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) To
         }
 
         if (p.peek() == '[') {
-            if (current_node) |node| try nodes.append(allocator, node);
-            current_node = null;
-
+            if (active) node_count += 1;
+            active = false;
             const header = p.parse_table_header() orelse return error.InvalidSyntax;
             if (header.is_array and std.mem.eql(u8, header.name, "node")) {
-                current_node = NodeConfig{
-                    .name = "",
-                    .path = "",
-                };
+                if (node_count >= nodes.len) return error.TooManyNodes;
+                nodes[node_count] = .{};
+                active = true;
             }
             continue;
         }
 
-        if (current_node) |*node| {
-            const kv = p.parse_key_value() orelse return error.InvalidSyntax;
-            p.skip_whitespace_and_newlines();
-            const ch = p.peek() orelse return error.InvalidSyntax;
-
+        const key = p.parse_key_value() orelse return error.InvalidSyntax;
+        p.skip_space();
+        const ch = p.peek() orelse return error.InvalidSyntax;
+        if (active) {
+            const node = &nodes[node_count];
             if (ch == '"') {
-                const val = try p.parse_string(allocator);
-                if (std.mem.eql(u8, kv.key, "name")) {
+                const val = try p.parse_string();
+                if (std.mem.eql(u8, key, "name")) {
                     node.name = val;
-                } else if (std.mem.eql(u8, kv.key, "path")) {
+                } else if (std.mem.eql(u8, key, "path")) {
                     node.path = val;
-                } else if (std.mem.eql(u8, kv.key, "bin")) {
+                } else if (std.mem.eql(u8, key, "bin")) {
                     node.bin = val;
                 }
             } else if (ch == '[') {
-                node.extra_cfg = try p.parse_inline_array(allocator);
+                node.extra_cfg_len = try p.parse_inline_array(node.extra_cfg[0..]);
             }
         }
     }
 
-    if (current_node) |node| try nodes.append(allocator, node);
-
-    return LaunchConfig{ .nodes = try nodes.toOwnedSlice(allocator) };
+    if (active) node_count += 1;
+    return node_count;
 }
 
-fn test_toml(allocator: std.mem.Allocator, content: []const u8) !LaunchConfig {
+fn parse_tom(content: []const u8, nodes: []NodeConfig, content_buf: []u8) !usize {
     const io = std.testing.io;
     var dir = std.testing.tmpDir(.{});
     defer dir.cleanup();
     const sub = "launch.toml";
     try dir.dir.writeFile(io, .{ .sub_path = sub, .data = content });
-    const full = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/{s}", .{ &dir.sub_path, sub });
-    defer allocator.free(full);
-    return try parse(io, allocator, full);
+    var full_buf: [256]u8 = undefined;
+    const full = try std.fmt.bufPrint(&full_buf, ".zig-cache/tmp/{s}/{s}", .{ &dir.sub_path, sub });
+    return try parse(io, full, content_buf, nodes);
 }
 
 test "parse single node" {
-    const allocator = std.testing.allocator;
     const toml =
         \\[[node]]
         \\name = "motor_driver"
         \\path = "./nodes/motor_driver"
     ;
 
-    var config = try test_toml(allocator, toml);
-    defer config.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 1), config.nodes.len);
-    try std.testing.expectEqualStrings("motor_driver", config.nodes[0].name);
-    try std.testing.expectEqualStrings("./nodes/motor_driver", config.nodes[0].path);
+    var content_buf: [1024]u8 = undefined;
+    var nodes: [MAX_NODES]NodeConfig = undefined;
+    const n = try parse_tom(toml, &nodes, &content_buf);
+    try std.testing.expectEqual(@as(usize, 1), n);
+    try std.testing.expectEqualStrings("motor_driver", nodes[0].name);
+    try std.testing.expectEqualStrings("./nodes/motor_driver", nodes[0].path);
 }
 
 test "parse multiple nodes with extra_cfg" {
-    const allocator = std.testing.allocator;
     const toml =
         \\[[node]]
         \\name = "lidar"
@@ -235,18 +217,18 @@ test "parse multiple nodes with extra_cfg" {
         \\extra_cfg = ["--fps", "30"]
     ;
 
-    var config = try test_toml(allocator, toml);
-    defer config.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 2), config.nodes.len);
-    try std.testing.expectEqualStrings("lidar", config.nodes[0].name);
-    try std.testing.expectEqualStrings("camera", config.nodes[1].name);
-    try std.testing.expectEqual(@as(usize, 2), config.nodes[1].extra_cfg.len);
-    try std.testing.expectEqualStrings("--fps", config.nodes[1].extra_cfg[0]);
-    try std.testing.expectEqualStrings("30", config.nodes[1].extra_cfg[1]);
+    var content_buf: [1024]u8 = undefined;
+    var nodes: [MAX_NODES]NodeConfig = undefined;
+    const n = try parse_tom(toml, &nodes, &content_buf);
+    try std.testing.expectEqual(@as(usize, 2), n);
+    try std.testing.expectEqualStrings("lidar", nodes[0].name);
+    try std.testing.expectEqualStrings("camera", nodes[1].name);
+    try std.testing.expectEqual(@as(usize, 2), nodes[1].extra_cfg_len);
+    try std.testing.expectEqualStrings("--fps", nodes[1].extra_cfg[0]);
+    try std.testing.expectEqualStrings("30", nodes[1].extra_cfg[1]);
 }
 
 test "skip comments and blank lines" {
-    const allocator = std.testing.allocator;
     const toml =
         \\# this is a comment
         \\
@@ -256,8 +238,9 @@ test "skip comments and blank lines" {
         \\path = "./test"
     ;
 
-    var config = try test_toml(allocator, toml);
-    defer config.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 1), config.nodes.len);
-    try std.testing.expectEqualStrings("test", config.nodes[0].name);
+    var content_buf: [1024]u8 = undefined;
+    var nodes: [MAX_NODES]NodeConfig = undefined;
+    const n = try parse_tom(toml, &nodes, &content_buf);
+    try std.testing.expectEqual(@as(usize, 1), n);
+    try std.testing.expectEqualStrings("test", nodes[0].name);
 }

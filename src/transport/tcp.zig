@@ -116,7 +116,6 @@ pub fn accept(
     try io.accept(future, server.socket);
 }
 
-
 pub fn connect(
     io: *IO,
     future: *IO.Future,
@@ -141,7 +140,6 @@ pub fn connect(
     try io.connect(future, socket, addr);
 }
 
-
 pub fn send(
     io: *IO,
     future: *IO.Future,
@@ -152,7 +150,6 @@ pub fn send(
     try io.send(future, stream.handle, data);
 }
 
-
 pub fn receive(
     io: *IO,
     future: *IO.Future,
@@ -162,7 +159,6 @@ pub fn receive(
     assert(buffer.len > 0);
     try io.recv(future, stream.handle, buffer);
 }
-
 
 pub fn close(stream: *Stream) void {
     _ = c.close(stream.handle);

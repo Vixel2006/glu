@@ -12,7 +12,17 @@ To help you get started and master `glu` quickly, we've structured our documenta
 
 *   **[API Reference](file:///home/vixel/code/glu/docs/api.md)**: A complete reference of the `glu` API, featuring detailed signatures and verified code examples for Shared Memory Pub/Sub, `glu.IO` (io_uring), TCP, UDP, and the Node Registry.
 *   **[Architecture & Internals](file:///home/vixel/code/glu/docs/architecture.md)**: Under the hood. Learn how our packed memory layouts, lock-free ring buffers, slowest-reader backpressure, and file-based registry keep things ultra-fast and robust.
-*   **[Orchestration & CLI](file:///home/vixel/code/glu/docs/launch.md)**: Configure your node ecosystem with `launch.toml` and manage live processes easily using CLI commands like `glu launch`, `glu ps`, and `glu info`.
+*   **[Orchestration & CLI](file:///home/vixel/code/glu/docs/launch.md)**: Configure your node ecosystem with `launch.toml` and manage live processes easily using CLI commands like `glu launch`, `glu nodes list`, and `glu topics info`.
+
+---
+
+## Showcase Example
+
+Run the **robot control room** demo under `examples/canonical` to see every
+`glu` feature working together: reliable + best-effort pub/sub, multicast and
+unicast UDP, bidirectional TCP, io_uring timers and file I/O, and the node
+registry. See the README's *Showcase: Robot Control Room* section for a
+walkthrough.
 
 ---
 

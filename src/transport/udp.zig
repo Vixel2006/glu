@@ -97,7 +97,6 @@ pub fn send_to(
     try io.send_to(future, socket, data, addr);
 }
 
-
 pub fn close(socket: *Socket) void {
     _ = c.close(socket.*);
 }
@@ -111,7 +110,6 @@ pub fn receive_from(
     assert(buffer.len > 0);
     try io.recv_from(future, socket, buffer);
 }
-
 
 pub fn connect(
     io: *IO,
@@ -133,7 +131,6 @@ pub fn connect(
     try io.connect(future, socket, addr);
 }
 
-
 pub fn send(
     io: *IO,
     future: *IO.Future,
@@ -144,7 +141,6 @@ pub fn send(
     try io.send(future, socket, data);
 }
 
-
 pub fn receive(
     io: *IO,
     future: *IO.Future,
@@ -154,7 +150,6 @@ pub fn receive(
     assert(buffer.len > 0);
     try io.recv(future, socket, buffer);
 }
-
 
 pub fn join_multicast(socket: Socket, group: []const u8) void {
     assert(group.len > 0);
