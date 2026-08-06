@@ -1,23 +1,29 @@
-# glu launch configuration for the canonical temperature monitoring example
+# glu launch configuration for the "robot control room" showcase
 #
 # Run with:   glu launch -f examples/canonical/launch.toml
 #
-# Nodes launch in order. The dashboard starts first so the TCP
-# server is ready when the processor connects.
+# Launch order matters: consumers start before producers so every shared
+# memory segment is attached before the first message is written.
 #
 # Topics:
-#   /temperature    — raw sensor readings     (TemperatureReading, 50 Hz)
-#   /sensor_status  — sensor health info      (SensorStatus,        1 Hz)
-#   /filtered_temp  — moving-average output   (FilteredTemperature,  50 Hz)
+#   /robot/joint_states  — raw joint telemetry   (sensor_arm → 100 Hz, reliable)
+#   /robot/health        — battery/health        (sensor_arm →   1 Hz, reliable)
+#   /robot/fused         — fused control state   (coordinator → reliable)
+#   /robot/command       — operator commands     (operator   → reliable)
+#   /robot/logs          — best-effort log feed  (coordinator → best_effort)
 
 [[node]]
-name = "temperature_dashboard"
-bin  = "zig-out/bin/glu-canonical-dashboard"
+name = "operator"
+bin  = "zig-out/bin/glu-operator"
 
 [[node]]
-name = "temperature_processor"
-bin  = "zig-out/bin/glu-canonical-processor"
+name = "logger"
+bin  = "zig-out/bin/glu-logger"
 
 [[node]]
-name = "temperature_sensor"
-bin  = "zig-out/bin/glu-canonical-sensor"
+name = "coordinator"
+bin  = "zig-out/bin/glu-coordinator"
+
+[[node]]
+name = "sensor_arm"
+bin  = "zig-out/bin/glu-sensor-arm"

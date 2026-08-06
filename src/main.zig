@@ -1,62 +1,6 @@
 const std = @import("std");
-const utils = @import("cli/utils.zig");
-const list = @import("cli/list.zig");
-const info = @import("cli/info.zig");
-const ps = @import("cli/ps.zig");
-const launch = @import("cli/launch.zig");
-const logs = @import("cli/logs.zig");
-const down = @import("cli/down.zig");
+const dispatch = @import("cli/dispatch.zig");
 
-fn printUsage(init: std.process.Init) void {
-    var fw = utils.writer(init);
-    const w = &fw.interface;
-    w.print(
-        \\usage: glu <command> [args]
-        \\
-        \\commands:
-        \\  launch   Launch nodes from a TOML config file
-        \\           glu launch -f <file.toml> [-d]
-        \\
-        \\  list     List active topics in shared memory
-        \\           glu list
-        \\
-        \\  info     Show detailed info about a topic
-        \\           glu info <topic>
-        \\
-        \\  ps       List registered nodes
-        \\           glu ps
-        \\
-        \\  logs     Print out all the logs for a specific node when launching with -d flag
-        \\           glu logs <node>
-        \\
-        \\  down     Stop all running nodes
-        \\           glu down
-        \\
-    , .{}) catch {};
-}
-
-pub fn main(init: std.process.Init) !void {
-    var args_iter = std.process.Args.Iterator.init(init.minimal.args);
-    _ = args_iter.next();
-
-    const cmd = args_iter.next() orelse {
-        printUsage(init);
-        return;
-    };
-
-    if (std.mem.eql(u8, cmd, "launch")) {
-        launch.cmd_launch(init, &args_iter) catch |err| utils.log_err("launch", err);
-    } else if (std.mem.eql(u8, cmd, "logs")) {
-        logs.cmd_logs(init, &args_iter, "/tmp/glu/logs") catch |err| utils.log_err("logs", err);
-    } else if (std.mem.eql(u8, cmd, "list") or std.mem.eql(u8, cmd, "ls")) {
-        list.cmd_list(init) catch |err| utils.log_err("list", err);
-    } else if (std.mem.eql(u8, cmd, "info")) {
-        info.cmd_info(init, &args_iter) catch |err| utils.log_err("info", err);
-    } else if (std.mem.eql(u8, cmd, "ps")) {
-        ps.cmd_ps(init) catch |err| utils.log_err("ps", err);
-    } else if (std.mem.eql(u8, cmd, "down")) {
-        down.cmd_down(init) catch |err| utils.log_err("down", err);
-    } else {
-        printUsage(init);
-    }
+pub fn main(init: std.process.Init) void {
+    dispatch.run(init);
 }

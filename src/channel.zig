@@ -12,7 +12,7 @@ const ShmErr = error{ OutOfMemory, ShmOpenFailed, MmapFailed, InvalidSegment };
 /// POSIX `shm_open` requires the name to start with '/' and contain no
 /// other '/' characters, so inner slashes (topic paths like
 /// `/farm/weather`) are replaced with '_'.
-fn shm_name(buf: []u8, name: []const u8) ?[:0]u8 {
+pub fn shm_name(buf: []u8, name: []const u8) ?[:0]u8 {
     if (name.len >= buf.len) return null;
     for (name, 0..) |ch, i| {
         buf[i] = if (i > 0 and ch == '/') '_' else ch;
@@ -286,7 +286,6 @@ pub fn slowest_reader(readers: []const u64, write_cursor: u32) u32 {
     }
     return min;
 }
-
 
 /// Return a pointer to the next unread slot for `sub_id` without
 /// advancing the read cursor.

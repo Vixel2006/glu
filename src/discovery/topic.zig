@@ -5,6 +5,7 @@ const os = std.os.linux;
 
 const GLU_MAGIC = @import("../channel.zig").GLU_MAGIC;
 const Header = @import("../channel.zig").Header;
+const shm_name = @import("../channel.zig").shm_name;
 
 pub const TopicErr = error{
     TopicNotFound,
@@ -29,15 +30,13 @@ pub const Topic = struct {
     pub fn open(name: []const u8) TopicErr!Topic {
         assert(name.len > 0);
         var name_buf: [256:0]u8 = undefined;
-        if (name.len >= name_buf.len) return error.InvalidTopic;
-        @memcpy(name_buf[0..name.len], name);
-        name_buf[name.len] = 0;
+        const name_z = shm_name(&name_buf, name) orelse return error.InvalidTopic;
 
-        const fd = c.shm_open(name_buf[0..name.len :0], @as(c_int, @bitCast(os.O{ .ACCMODE = .RDWR })), 0);
+        const fd = c.shm_open(name_z.ptr, @as(c_int, @bitCast(os.O{ .ACCMODE = .RDWR })), 0);
         if (fd == -1) return error.TopicNotFound;
         errdefer _ = os.close(fd);
 
-        const file_size = @as(usize, @intCast(c.lseek(fd, 0, 2)));
+        const file_size = @as(usize, @intCast(c.lseek(fd, 0, @intCast(std.posix.SEEK.END))));
         if (file_size < @sizeOf(Header)) return error.InvalidTopic;
 
         const mapped = os.mmap(null, file_size, os.PROT{ .READ = true }, os.MAP{ .TYPE = .SHARED }, fd, 0);

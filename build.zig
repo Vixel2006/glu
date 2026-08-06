@@ -71,13 +71,15 @@ pub fn build(b: *std.Build) void {
 
     const examples_step = b.step("examples", "Build all example executables");
 
-    // -- canonical temperature monitoring ------------------------------------
+    // -- robot control room showcase -----------------------------------------
     add_example(b, target, optimize, mod, examples_step,
-        "glu-canonical-sensor", "examples/canonical/sensor.zig");
+        "glu-sensor-arm", "examples/canonical/sensor_arm.zig");
     add_example(b, target, optimize, mod, examples_step,
-        "glu-canonical-processor", "examples/canonical/processor.zig");
+        "glu-coordinator", "examples/canonical/coordinator.zig");
     add_example(b, target, optimize, mod, examples_step,
-        "glu-canonical-dashboard", "examples/canonical/dashboard.zig");
+        "glu-operator", "examples/canonical/operator.zig");
+    add_example(b, target, optimize, mod, examples_step,
+        "glu-logger", "examples/canonical/logger.zig");
 }
 
 /// Build and install a single example executable.

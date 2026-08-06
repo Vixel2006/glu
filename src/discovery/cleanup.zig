@@ -2,8 +2,8 @@ const std = @import("std");
 const c = std.c;
 const os = std.os.linux;
 
-const GLU_MAGIC = @import("../channel.zig").GLU_MAGIC;
-const Header = @import("../channel.zig").Header;
+const Topic = @import("topic.zig").Topic;
+const ShmScanner = @import("snapshot.zig").ShmScanner;
 const is_alive = @import("../registry.zig").is_alive;
 
 /// Scan `/dev/shm` for glu topics and unlink the stale ones.
@@ -13,35 +13,21 @@ const is_alive = @import("../registry.zig").is_alive;
 /// dead or unknown are unlinked: a live owner's segment may belong to a
 /// still-running glu node and must not be destroyed.
 pub fn cleanup_topics() void {
-    const dirp = c.opendir("/dev/shm") orelse return;
-    defer _ = c.closedir(dirp);
+    var scan = ShmScanner.init() catch return;
+    defer scan.deinit();
 
-    while (true) {
-        const entry = c.readdir(dirp) orelse break;
-        if (entry.type != 8) continue;
-        const name = std.mem.sliceTo(@as([]const u8, entry.name[0..]), 0);
-        if (name.len == 0) continue;
-        if (std.mem.startsWith(u8, name, "sem.")) continue;
+    while (scan.next()) |name| blk: {
+        var shm_name_buf: [256:0]u8 = undefined;
+        const shm_name_len = (std.fmt.bufPrint(shm_name_buf[0..255], "/{s}", .{name}) catch continue).len;
+        shm_name_buf[shm_name_len] = 0;
 
-        var shm_name_buf: [256]u8 = undefined;
-        const shm_name = std.fmt.bufPrint(&shm_name_buf, "/{s}", .{name}) catch continue;
-        shm_name_buf[shm_name.len] = 0;
+        var topic = Topic.open(shm_name_buf[0..shm_name_len :0]) catch break :blk;
+        defer topic.close();
 
-        const fd = c.shm_open(shm_name_buf[0..shm_name.len :0], 0, 0);
-        if (fd == -1) continue;
-        defer _ = c.close(fd);
-
-        const mapped = os.mmap(null, @sizeOf(Header), os.PROT{ .READ = true }, os.MAP{ .TYPE = .SHARED }, fd, 0);
-        if (mapped == ~@as(usize, 0)) continue;
-
-        const ptr: [*]u8 = @ptrFromInt(mapped);
-        const hdr: *align(1) Header = @ptrCast(ptr);
-        const is_glu = hdr.magic == GLU_MAGIC;
-        const owner_pid: u32 = hdr.owner_pid;
-        const stale = owner_pid == 0 or !is_alive(owner_pid);
-        _ = os.munmap(@ptrFromInt(mapped), @sizeOf(Header));
-
-        if (is_glu and stale) _ = c.shm_unlink(shm_name_buf[0..shm_name.len :0]);
+        const owner_pid: u32 = topic.header.owner_pid;
+        if (owner_pid == 0 or !is_alive(owner_pid)) {
+            _ = c.shm_unlink(shm_name_buf[0..shm_name_len :0]);
+        }
     }
 }
 

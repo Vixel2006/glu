@@ -1,7 +1,8 @@
 const std = @import("std");
 const os = std.os.linux;
 const utils = @import("utils.zig");
-const topic = @import("../topic/mod.zig");
+const parser = @import("parser.zig");
+const discovery = @import("../discovery/mod.zig");
 const debug = @import("../debug/mod.zig");
 const launch_mod = @import("../launch/launcher.zig");
 const toml = @import("../launch/toml.zig");
@@ -25,7 +26,7 @@ fn handle_sigint(_: os.SIG) callconv(.c) void {
 }
 
 /// Launch nodes from a TOML config (`glu launch -f <file> [-d]`).
-pub fn cmd_launch(init: std.process.Init, args: *std.process.Args.Iterator) !void {
+pub fn cmd_launch(init: std.process.Init, args: *parser.Args) !void {
     var file: ?[]const u8 = null;
     var detach = false;
 
@@ -43,21 +44,27 @@ pub fn cmd_launch(init: std.process.Init, args: *std.process.Args.Iterator) !voi
         return error.MissingArgument;
     };
 
-    var config = toml.parse(init.io, init.gpa, file_path) catch |err| {
+    var config_buf: [1024]u8 = undefined;
+    var config_nodes: [toml.MAX_NODES]toml.NodeConfig = undefined;
+    const config_count = toml.parse(init.io, file_path, &config_buf, &config_nodes) catch |err| {
         var ew = utils.err_writer(init);
         ew.interface.print("error parsing launch config '{s}': {}\n", .{ file_path, err }) catch {};
         return err;
     };
-    defer config.deinit(init.gpa);
+    const nodes = config_nodes[0..config_count];
+
+    var fw = utils.writer(init);
+    const w = &fw.interface;
 
     if (detach) {
-        try launch_mod.launch_detached(init.io, init.gpa, config.nodes, "/tmp/glu/logs");
-        var fw = utils.writer(init);
-        fw.interface.print("launched {d} node(s) in background\n", .{config.nodes.len}) catch {};
+        try launch_mod.launch_detached(init.io, nodes, "/tmp/glu/logs");
+        w.print("launched {d} node(s) in background\n", .{nodes.len}) catch {};
         return;
     }
 
-    launched_children = try launch_mod.launch(init.io, init.gpa, config.nodes);
+    var children_buf: [toml.MAX_NODES]launch_mod.LaunchedNode = undefined;
+    const launched_len = try launch_mod.launch(init.io, nodes, &children_buf);
+    launched_children = children_buf[0..launched_len];
     launch_io = init.io;
 
     var sa: os.Sigaction = .{
@@ -67,23 +74,18 @@ pub fn cmd_launch(init: std.process.Init, args: *std.process.Args.Iterator) !voi
     };
     _ = os.sigaction(os.SIG.INT, &sa, null);
 
-    {
-        var fw = utils.writer(init);
-        fw.interface.print("launched {d} node(s)\n", .{launched_children.len}) catch {};
-    }
+    w.print("launched {d} node(s)\n", .{launched_children.len}) catch {};
 
     for (launched_children) |*n| {
         const term = n.child.wait(init.io) catch |err| {
             if (g_interrupted.load(.seq_cst)) break;
-            var fw = utils.writer(init);
-            fw.interface.print("error waiting for node '{s}': {}\n", .{ n.name, err }) catch {};
+            w.print("error waiting for node '{s}': {}\n", .{ n.name, err }) catch {};
             continue;
         };
-        var fw = utils.writer(init);
         switch (term) {
-            .exited => |code| fw.interface.print("node '{s}' exited with code {d}\n", .{ n.name, code }) catch {},
-            .signal => |sig| fw.interface.print("node '{s}' killed by signal {}\n", .{ n.name, sig }) catch {},
-            else => fw.interface.print("node '{s}' terminated unexpectedly\n", .{n.name}) catch {},
+            .exited => |code| w.print("node '{s}' exited with code {d}\n", .{ n.name, code }) catch {},
+            .signal => |sig| w.print("node '{s}' killed by signal {}\n", .{ n.name, sig }) catch {},
+            else => w.print("node '{s}' terminated unexpectedly\n", .{n.name}) catch {},
         }
         if (g_interrupted.load(.seq_cst)) break;
     }
@@ -94,11 +96,8 @@ pub fn cmd_launch(init: std.process.Init, args: *std.process.Args.Iterator) !voi
         for (launched_children) |*n| {
             Registry.unregister(n.name);
         }
-        topic.cleanup_topics();
+        discovery.cleanup_topics();
     }
 
     debug.cleanup_logs(init.io);
-
-    init.gpa.free(launched_children);
-    launched_children = &.{};
 }
