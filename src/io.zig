@@ -38,9 +38,9 @@ pub const IO = struct {
     }
 
     pub fn run(self: *IO, nanoseconds: u64) !void {
-        const deadline = time.monotonic() + nanoseconds;
+        const deadline = try time.monotonic() + nanoseconds;
 
-        while (time.monotonic() < deadline) {
+        while (try time.monotonic() < deadline) {
             try self.submit(0);
             if (self.inflight == 0) break;
             try self.complete(1);
@@ -1434,9 +1434,9 @@ test "timeout fires after the requested duration" {
     var compl: IO.Future = undefined;
     try io.timeout(&compl, &ts, 0);
 
-    const start = time.monotonic();
+    const start = try time.monotonic();
     try io.wait(&compl, void);
-    const elapsed_ns = time.monotonic() - start;
+    const elapsed_ns = try time.monotonic() - start;
 
     try testing.expect(elapsed_ns >= 30 * std.time.ns_per_ms);
 }
@@ -1585,9 +1585,9 @@ test "timeouts complete asynchronously while the app does work" {
     try pump(&io);
     try testing.expect(!compls[0].done and !compls[1].done and !compls[2].done);
 
-    const started = time.monotonic();
+    const started = try time.monotonic();
     var work: u64 = 0;
-    while (time.monotonic() - started < 40 * std.time.ns_per_ms) {
+    while (try time.monotonic() - started < 40 * std.time.ns_per_ms) {
         work += 1;
         try pump(&io);
     }
@@ -1595,14 +1595,14 @@ test "timeouts complete asynchronously while the app does work" {
     try testing.expect(!compls[1].done and !compls[2].done);
     try testing.expect(work >= 1000);
 
-    while (time.monotonic() - started < 70 * std.time.ns_per_ms) {
+    while (try time.monotonic() - started < 70 * std.time.ns_per_ms) {
         work += 1;
         try pump(&io);
     }
     try testing.expect(compls[1].done);
     try testing.expect(!compls[2].done);
 
-    while (time.monotonic() - started < 120 * std.time.ns_per_ms) {
+    while (try time.monotonic() - started < 120 * std.time.ns_per_ms) {
         work += 1;
         try pump(&io);
     }
