@@ -232,6 +232,7 @@ try io.wait(&compl, void);
 pub fn listen(io: *IO, port: u16, config: Config) !Server
 ```
 *   **Description**: Starts a TCP server socket bound to `port` (pass `0` for an ephemeral port) and begins listening with backlog 128.
+*   **Config**: `Config{ .host = "0.0.0.0", .nodelay = true }`. `host` controls the bind address — pass `"127.0.0.1"` (as the canonical demo does) to restrict a control channel to loopback; the transport has no built-in authentication or encryption.
 
 #### `accept`
 ```zig

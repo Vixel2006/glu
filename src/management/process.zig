@@ -50,6 +50,7 @@ pub fn stop_node(io: std.Io, name: []const u8) !bool {
 /// its PID. Returns `true` if spawned, `false` if no manifest exists.
 pub fn start_node(io: std.Io, name: []const u8, logs_dir: []const u8) !bool {
     assert(logs_dir.len > 0);
+    if (!Registry.valid_name(name)) return error.InvalidName;
 
     var args_buf: [Registry.MAX_ARGV][]const u8 = undefined;
     var data_buf: [Registry.MAX_ARGV_LEN]u8 = undefined;
@@ -64,7 +65,16 @@ pub fn start_node(io: std.Io, name: []const u8, logs_dir: []const u8) !bool {
 
     var path_buf: [256]u8 = undefined;
     const log_path = try std.fmt.bufPrint(&path_buf, "{s}/{s}.log", .{ logs_dir, name });
-    const file = cwd.createFile(io, log_path, .{ .read = true }) catch return ProcessErr.FileSystem;
+    var file: std.Io.File = cwd.createFile(io, log_path, .{ .read = true, .exclusive = true, .permissions = .fromMode(0o600) }) catch |err| blk: {
+        switch (err) {
+            error.PathAlreadyExists => {
+                var f = cwd.openFile(io, log_path, .{ .mode = .read_write, .follow_symlinks = false }) catch return error.FileSystem;
+                f.setLength(io, 0) catch return error.FileSystem;
+                break :blk f;
+            },
+            else => return error.FileSystem,
+        }
+    };
     defer file.close(io);
 
     const child = std.process.spawn(io, .{

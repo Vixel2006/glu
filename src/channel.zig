@@ -7,6 +7,13 @@ const is_alive = @import("registry.zig").is_alive;
 
 const ShmErr = error{ OutOfMemory, ShmOpenFailed, MmapFailed, InvalidSegment };
 
+/// Maximum message payload a segment will be trusted to describe.
+pub const MAX_MSG_SIZE: u32 = 1 << 16;
+/// Maximum ring capacity a segment will be trusted to describe.
+pub const MAX_CAPACITY: u32 = 1 << 22;
+/// Maximum topic-name length stored in a segment header.
+pub const MAX_NAME_LEN: u32 = 63;
+
 /// Sanitise a topic name into a valid POSIX shm name.
 ///
 /// POSIX `shm_open` requires the name to start with '/' and contain no
@@ -25,6 +32,46 @@ pub fn shm_name(buf: []u8, name: []const u8) ?[:0]u8 {
 pub const GLU_MAGIC = 0x474C5500;
 /// Maximum number of concurrent readers (subscribers) per channel.
 pub const MAX_READERS = 8;
+
+/// Validate the fields of a shared-memory header before they are trusted.
+///
+/// Headers live in `/dev/shm`, which any process on the machine can read or
+/// overwrite, so the header must be treated as untrusted input. Every field
+/// that will later drive slicing, indexing, or arithmetic is bounds-checked
+/// here instead of being asserted on.
+///
+/// `expected` carries the msg_size/capacity a caller asked for; when provided
+/// the header must match exactly (attach path). When `null` (inspection
+/// paths like `glu topics`), only structural sanity is checked.
+/// `file_size` is the on-disk size of the segment, used to reject truncated
+/// segments before mmap (a mapped-but-shorter file SIGBUSs on access).
+pub fn validate_header(
+    hdr: *align(1) const Header,
+    expected: ?struct { msg_size: u32, capacity: u32 },
+    file_size: ?usize,
+) bool {
+    if (hdr.magic != GLU_MAGIC) return false;
+    if (hdr.msg_size == 0 or hdr.msg_size > MAX_MSG_SIZE) return false;
+    if (hdr.capacity == 0 or hdr.capacity > MAX_CAPACITY) return false;
+    if (hdr.name_len > MAX_NAME_LEN) return false;
+    if (hdr.name_len > 0 and hdr.name[hdr.name_len] != 0) return false;
+    if (hdr.tos != @intFromEnum(ToS.reliable) and hdr.tos != @intFromEnum(ToS.best_effort)) return false;
+
+    if (expected) |geo| {
+        if (hdr.msg_size != geo.msg_size or hdr.capacity != geo.capacity) return false;
+    }
+
+    // The total mapped size must fit in the offset type used by ftruncate
+    // and must fit inside the actual file, otherwise reads past EOF fail
+    // with SIGBUS instead of a clean error.
+    const data_size = std.math.mul(u64, hdr.msg_size, hdr.capacity) catch return false;
+    const total_size = std.math.add(u64, data_size, @sizeOf(Header)) catch return false;
+    if (total_size > std.math.maxInt(std.c.off_t) or total_size > std.math.maxInt(usize)) return false;
+    if (file_size) |fs| {
+        if (fs < total_size) return false;
+    }
+    return true;
+}
 
 /// Type of Service for channel delivery semantics.
 pub const ToS = enum(u32) {
@@ -78,6 +125,12 @@ pub const Channel = struct {
     ptr: [*]u8,
     header: *Header,
     size: usize,
+    /// The validated geometry captured at open time. The shared-memory
+    /// header can be mutated by another process after open, so all indexing
+    /// and mod/div below uses these snapshots instead of the raw header.
+    cap: u32,
+    msg_size: u32,
+    tos: ToS,
 
     /// Open (or attach to) a named shared memory channel.
     ///
@@ -110,7 +163,7 @@ pub const Channel = struct {
             .CREAT = true,
             .EXCL = true,
         }));
-        var fd: i32 = c.shm_open(shm_name_z.ptr, excl_flags, 0o644);
+        var fd: i32 = c.shm_open(shm_name_z.ptr, excl_flags, 0o600);
         var created = true;
 
         if (fd == -1) {
@@ -135,11 +188,46 @@ pub const Channel = struct {
                 return ShmErr.ShmOpenFailed;
             }
         } else {
-            const file_size = c.lseek(fd, 0, 2);
-            if (file_size < @as(std.c.off_t, @intCast(@sizeOf(Header)))) {
+            // Attaching to an existing segment. Read the file size before
+            // mmap so a truncated segment is rejected with a clean error
+            // instead of SIGBUSing on the first access past EOF.
+            var file_size: usize = 0;
+            {
+                const sz = c.lseek(fd, 0, 2);
+                if (sz < @as(std.c.off_t, @intCast(@sizeOf(Header)))) {
+                    _ = c.close(fd);
+                    return ShmErr.InvalidSegment;
+                }
+                file_size = @intCast(sz);
+            }
+
+            const mapped = os.mmap(
+                null,
+                total_size_usize,
+                os.PROT{ .READ = true, .WRITE = true },
+                os.MAP{ .TYPE = .SHARED },
+                fd,
+                0,
+            );
+
+            if (mapped == ~@as(usize, 0)) {
+                _ = c.close(fd);
+                return ShmErr.MmapFailed;
+            }
+
+            const ptr: [*]u8 = @ptrFromInt(mapped);
+            const hdr: *Header = @ptrCast(@alignCast(ptr));
+
+            // Reject anything that doesn't match, instead of reading garbage
+            // as a ring buffer.
+            if (!validate_header(hdr, .{ .msg_size = msg_size, .capacity = capacity }, file_size)) {
+                _ = os.munmap(ptr, total_size_usize);
                 _ = c.close(fd);
                 return ShmErr.InvalidSegment;
             }
+            _ = @atomicRmw(u32, &hdr.conns, .Add, 1, .acq_rel);
+
+            return .{ .fd = fd, .ptr = ptr, .header = hdr, .size = total_size_usize, .cap = capacity, .msg_size = msg_size, .tos = tos };
         }
 
         const mapped = os.mmap(
@@ -185,7 +273,7 @@ pub const Channel = struct {
             _ = @atomicRmw(u32, &hdr.conns, .Add, 1, .acq_rel);
         }
 
-        return .{ .fd = fd, .ptr = ptr, .header = hdr, .size = total_size_usize };
+        return .{ .fd = fd, .ptr = ptr, .header = hdr, .size = total_size_usize, .cap = capacity, .msg_size = msg_size, .tos = tos };
     }
 
     /// Close this channel handle and unmap the shared memory.
@@ -199,7 +287,10 @@ pub const Channel = struct {
         const needs_unlink = prev == 1;
         var name_buf: [256]u8 = undefined;
         const name_z: ?[:0]u8 = if (needs_unlink) blk: {
-            const name_slice = self.header.name[0..self.header.name_len];
+            // The header lives in shared memory and could have been tampered
+            // with since open; clamp the length before slicing `name`.
+            const name_len = @min(self.header.name_len, MAX_NAME_LEN);
+            const name_slice = self.header.name[0..name_len];
             break :blk shm_name(&name_buf, name_slice) orelse null;
         } else null;
 
@@ -233,8 +324,8 @@ pub fn force_unlink(name: []const u8) void {
 /// backpressure).
 pub fn write(chan: *Channel, msg: *const anyopaque) void {
     assert(chan.fd != -1);
-    const cap = chan.header.capacity;
-    const tos: ToS = @enumFromInt(chan.header.tos);
+    const cap = chan.cap;
+    const tos = chan.tos;
 
     if (tos == .reliable) {
         while (chan.header.write -% slowest_reader(&chan.header.readers, chan.header.write) >= cap) {
@@ -244,7 +335,7 @@ pub fn write(chan: *Channel, msg: *const anyopaque) void {
         }
     }
 
-    const msg_size = chan.header.msg_size;
+    const msg_size = chan.msg_size;
     const slot = chan.ptr + @sizeOf(Header) + (chan.header.write % cap) * msg_size;
     @memcpy(slot, @as([*]const u8, @ptrCast(msg))[0..msg_size]);
 
@@ -297,10 +388,10 @@ pub fn slowest_reader(readers: []const u64, write_cursor: u32) u32 {
 pub fn peek(chan: *Channel, sub_id: u32) *anyopaque {
     assert(chan.fd != -1);
     assert(sub_id < MAX_READERS);
-    const msg_size = chan.header.msg_size;
+    const msg_size = chan.msg_size;
     const entry = @atomicLoad(u64, &chan.header.readers[sub_id], .acquire);
     const cursor: u32 = @truncate(entry);
-    const idx = cursor % chan.header.capacity;
+    const idx = cursor % chan.cap;
     const slot = chan.ptr + @sizeOf(Header) + idx * msg_size;
     return @ptrCast(slot);
 }

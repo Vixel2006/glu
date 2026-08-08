@@ -75,13 +75,33 @@ pub fn launch_detached(io: std.Io, cfgs: []const NodeConfig, logs_dir: []const u
     cwd.createDirPath(io, logs_dir) catch return LaunchErr.FileSystem;
 
     for (cfgs) |*cfg| blk: {
+        if (!Registry.valid_name(cfg.name)) {
+            std.log.err("launch_detached: node name '{s}' is not a valid identifier", .{cfg.name});
+            break :blk;
+        }
+
         var argv_buf: [4 + MAX_ARGS][]const u8 = undefined;
         const argv = build_argv(cfg, argv_buf[0..]);
 
         var path_buf: [256]u8 = undefined;
         const path = std.fmt.bufPrint(&path_buf, "{s}/{s}.log", .{ logs_dir, cfg.name }) catch break :blk;
 
-        const file = cwd.createFile(io, path, .{ .read = true }) catch return LaunchErr.FileSystem;
+        // Open-or-create without following a planted symlink. Exclusive first
+        // so we never truncate an attacker's target; if the file already
+        // exists it is reopened for real (truncating it intentionally).
+        var file: std.Io.File = cwd.createFile(io, path, .{ .read = true, .exclusive = true, .permissions = .fromMode(0o600) }) catch |err| fileblk: {
+            // Entry already exists: reopen without following symlinks and
+            // truncate it (matching the old createFile behaviour of resetting
+            // the log on relaunch), without touching an attacker's target.
+            switch (err) {
+                error.PathAlreadyExists => {
+                    var f = cwd.openFile(io, path, .{ .mode = .read_write, .follow_symlinks = false }) catch return LaunchErr.FileSystem;
+                    f.setLength(io, 0) catch return LaunchErr.FileSystem;
+                    break :fileblk f;
+                },
+                else => return LaunchErr.FileSystem,
+            }
+        };
         defer file.close(io);
 
         const child = std.process.spawn(io, .{

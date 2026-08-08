@@ -30,9 +30,8 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
     defer t.close();
 
     const hdr = t.header;
-    std.debug.assert(hdr.name_len <= hdr.name.len);
-
-    const name_slice = hdr.name[0..hdr.name_len];
+    // name_len is attacker-controlled shared memory; clamp before slicing.
+    const name_slice = hdr.name[0..@min(hdr.name_len, hdr.name.len)];
     const data_size = @as(u64, hdr.msg_size) * @as(u64, hdr.capacity);
     var read_vals: [MAX_READERS]u64 = undefined;
     @memcpy(&read_vals, &hdr.readers);
@@ -49,7 +48,8 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
     try w.print("Header:      {d} bytes (v1)\n", .{@sizeOf(Header)});
     try w.print("Total Size:  {d} bytes\n", .{t.file_size});
     try w.print("Connections: {d}\n", .{hdr.conns});
-    try w.print("Write Pos:   {d}\n", .{hdr.write % hdr.capacity});
+    const write_pos = if (hdr.capacity > 0) hdr.write % hdr.capacity else 0;
+    try w.print("Write Pos:   {d}\n", .{write_pos});
     try w.print("Queued:      {d} ({d:.1}% full)\n", .{ depth, pct });
     try w.print("Readers:\n", .{});
     for (&read_vals, 0..) |entry, i| {
@@ -58,7 +58,8 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
         } else {
             const r: u32 = @truncate(entry);
             const behind = hdr.write -% r;
-            try w.print("  [{d}] {d} ({d} behind)\n", .{ i, r % hdr.capacity, behind });
+            const read_pos = if (hdr.capacity > 0) r % hdr.capacity else 0;
+            try w.print("  [{d}] {d} ({d} behind)\n", .{ i, read_pos, behind });
         }
     }
 }

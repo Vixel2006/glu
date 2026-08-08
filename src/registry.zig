@@ -7,9 +7,92 @@ const RegistryErr = error{
     OutOfMemory,
     NoSpaceLeft,
     FileSystem,
+    /// A node name was rejected because it could escape the registry
+    /// directory (path traversal) or is otherwise invalid.
+    InvalidName,
+    /// The registry directory is not owned by the current user. In a
+    /// sticky-bit /tmp, another user may have pre-created it to redirect
+    /// our writes.
+    DirNotOwned,
+    NotFound,
 };
 
 const REGISTRY_DIR = "/tmp/glu/nodes";
+
+const REGISTRY_MODE: u32 = 0o700;
+const FILE_MODE: u32 = 0o600;
+
+/// Validate a node name before it becomes part of a path.
+///
+/// Names are interpolated into `"{dir}/{name}.pid"` and similar, so a name
+/// containing `/`, `..`, or path separators could escape the registry
+/// directory (either writing outside `/tmp/glu` or, on a shared host,
+/// following an attacker's pre-created symlink). Accept only a conservative
+/// charset and length.
+pub fn valid_name(name: []const u8) bool {
+    if (name.len == 0 or name.len > 63) return false;
+    if (name[0] == '.') return false;
+    for (name) |ch| {
+        const ok = (ch >= 'a' and ch <= 'z') or
+            (ch >= 'A' and ch <= 'Z') or
+            (ch >= '0' and ch <= '9') or
+            ch == '_' or ch == '-' or ch == '.';
+        if (!ok) return false;
+    }
+    return true;
+}
+
+fn check_name(name: []const u8) RegistryErr!void {
+    if (!valid_name(name)) return RegistryErr.InvalidName;
+}
+
+/// Ensure the registry directory exists with the right permissions and is
+/// owned by us, returning it as an open handle for subsequent operations.
+///
+/// `/tmp` is normally a sticky world-writable directory, so another user can
+/// pre-create `/tmp/glu/nodes`. We must refuse to operate on a directory we
+/// don't own rather than follow whatever symlinks are planted there.
+fn registry_dir(io: std.Io) RegistryErr!std.Io.Dir {
+    const cwd = std.Io.Dir.cwd();
+    _ = cwd.createDirPathStatus(io, REGISTRY_DIR, std.Io.File.Permissions.fromMode(REGISTRY_MODE)) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return RegistryErr.FileSystem,
+    };
+
+    const dir = cwd.openDir(io, REGISTRY_DIR, .{ .follow_symlinks = false, .iterate = true }) catch return RegistryErr.FileSystem;
+    errdefer dir.close(io);
+
+    // Verify ownership of the directory, not just that it exists.
+    var st: os.Statx = undefined;
+    // statx on an open fd with empty path.
+    const rc = os.statx(dir.handle, "", os.AT.EMPTY_PATH, os.STATX.BASIC_STATS, &st);
+    if (rc != 0) return RegistryErr.FileSystem;
+    if (st.uid != os.geteuid()) return RegistryErr.DirNotOwned;
+
+    return dir;
+}
+
+fn registry_path(name: []const u8, suffix: []const u8, buf: []u8) RegistryErr![]const u8 {
+    check_name(name) catch return RegistryErr.InvalidName;
+    return std.fmt.bufPrint(buf, "{s}/{s}{s}", .{ REGISTRY_DIR, name, suffix }) catch return RegistryErr.FileSystem;
+}
+
+/// Open registry file `basename` for reading, never following symlinks.
+///
+/// Resolution is anchored to the opened (ownership-verified) registry
+/// directory handle, so a planted parent symlink isn't followed.
+fn open_registry_file(io: std.Io, name: []const u8, suffix: []const u8) RegistryErr!std.Io.File {
+    check_name(name) catch return RegistryErr.InvalidName;
+    var sub_path_buf: [128]u8 = undefined;
+    const sub_path = std.fmt.bufPrint(&sub_path_buf, "{s}{s}", .{ name, suffix }) catch return RegistryErr.FileSystem;
+
+    var dir = try registry_dir(io);
+    defer dir.close(io);
+    return dir.openFile(io, sub_path, .{ .follow_symlinks = false, .resolve_beneath = true }) catch |err| switch (err) {
+        error.FileNotFound => return error.NotFound,
+        else => return RegistryErr.FileSystem,
+    };
+}
 
 /// A discovered node with its PID and health status.
 pub const NodeEntry = struct {
@@ -22,28 +105,43 @@ pub const NodeEntry = struct {
     uptime: u64,
 };
 
+/// Create-or-overwrite a registry entry securely.
+///
+/// `exclusive` creation ensures the first write never follows a symlink or
+/// truncates an attacker's planted file; if the entry already exists we
+/// reopen it with `O_NOFOLLOW` (destroying nothing we don't own) and
+/// truncate it before writing. Either way a symlink at that path fails.
+fn write_registry_file(io: std.Io, name: []const u8, suffix: []const u8, content: []const u8) RegistryErr!void {
+    if (!valid_name(name)) return RegistryErr.InvalidName;
+
+    var sub_path_buf: [128]u8 = undefined;
+    const sub_path = std.fmt.bufPrint(&sub_path_buf, "{s}{s}", .{ name, suffix }) catch return RegistryErr.FileSystem;
+
+    var dir = try registry_dir(io);
+    defer dir.close(io);
+
+    var file: std.Io.File = dir.createFile(io, sub_path, .{ .exclusive = true, .permissions = .fromMode(FILE_MODE) }) catch |err| switch (err) {
+        // Entry already exists: reopen without following symlinks.
+        error.PathAlreadyExists => dir.openFile(io, sub_path, .{ .mode = .read_write, .follow_symlinks = false, .resolve_beneath = true }) catch return RegistryErr.FileSystem,
+        else => return RegistryErr.FileSystem,
+    };
+    defer file.close(io);
+
+    file.setLength(io, 0) catch return RegistryErr.FileSystem;
+    var fw: std.Io.File.Writer = file.writerStreaming(io, &.{});
+    const w: *std.Io.Writer = &fw.interface;
+    w.writeAll(content) catch return RegistryErr.FileSystem;
+}
+
 /// Register a node by name with an explicit PID.
 ///
 /// Writes a `.pid` file under `/tmp/glu/nodes/` so other processes can
 /// discover the node via `list_alive`.
 pub fn register_pid(name: []const u8, pid: u32) RegistryErr!void {
-    assert(name.len > 0);
     assert(pid > 0);
-    const io = std.Io.Threaded.global_single_threaded.io();
-    const cwd = std.Io.Dir.cwd();
-    cwd.createDirPath(io, REGISTRY_DIR) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return RegistryErr.FileSystem,
-    };
-
-    var path_buf: [256]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buf, "{s}/{s}.pid", .{ REGISTRY_DIR, name });
-    var file = cwd.createFile(io, path, .{}) catch return RegistryErr.FileSystem;
-    defer file.close(io);
-
-    var fw: std.Io.File.Writer = file.writerStreaming(io, &.{});
-    const w: *std.Io.Writer = &fw.interface;
-    w.print("{d}", .{pid}) catch return RegistryErr.FileSystem;
+    var buf: [32]u8 = undefined;
+    const content = std.fmt.bufPrint(&buf, "{d}", .{pid}) catch return RegistryErr.FileSystem;
+    try write_registry_file(std.Io.Threaded.global_single_threaded.io(), name, ".pid", content);
 }
 
 /// Persist the spawn vector for a node so it can be re-spawned later
@@ -51,25 +149,19 @@ pub fn register_pid(name: []const u8, pid: u32) RegistryErr!void {
 ///
 /// Writes `<name>.argv` under `/tmp/glu/nodes/` as NUL-separated args.
 pub fn register_argv(name: []const u8, argv: []const []const u8) RegistryErr!void {
-    assert(name.len > 0);
-    const io = std.Io.Threaded.global_single_threaded.io();
-    const cwd = std.Io.Dir.cwd();
-    cwd.createDirPath(io, REGISTRY_DIR) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return RegistryErr.FileSystem,
-    };
+    if (!valid_name(name)) return RegistryErr.InvalidName;
 
-    var path_buf: [256]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buf, "{s}/{s}.argv", .{ REGISTRY_DIR, name });
-    var file = cwd.createFile(io, path, .{}) catch return RegistryErr.FileSystem;
-    defer file.close(io);
-
-    var fw: std.Io.File.Writer = file.writerStreaming(io, &.{});
-    const w: *std.Io.Writer = &fw.interface;
+    var data: [MAX_ARGV_LEN]u8 = undefined;
+    var len: usize = 0;
     for (argv) |arg| {
-        w.writeAll(arg) catch return RegistryErr.FileSystem;
-        w.writeByte(0) catch return RegistryErr.FileSystem;
+        if (arg.len > MAX_ARGV_LEN or len + arg.len + 1 > data.len) return RegistryErr.FileSystem;
+        @memcpy(data[len .. len + arg.len], arg);
+        len += arg.len;
+        data[len] = 0;
+        len += 1;
     }
+
+    try write_registry_file(std.Io.Threaded.global_single_threaded.io(), name, ".argv", data[0..len]);
 }
 
 /// Maximum argv entries a persisted manifest may contain.
@@ -82,12 +174,9 @@ pub const MAX_ARGV_LEN = 4096;
 /// Returns the number of arguments written, or 0 when no manifest exists.
 pub fn read_argv(args: [][]const u8, data: []u8, name: []const u8) RegistryErr!usize {
     const io = std.Io.Threaded.global_single_threaded.io();
-    const cwd = std.Io.Dir.cwd();
 
-    var path_buf: [256]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buf, "{s}/{s}.argv", .{ REGISTRY_DIR, name });
-    const file = cwd.openFile(io, path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return 0,
+    const file = open_registry_file(io, name, ".argv") catch |err| switch (err) {
+        error.NotFound => return 0,
         else => return RegistryErr.FileSystem,
     };
     defer file.close(io);
@@ -111,12 +200,9 @@ pub fn read_argv(args: [][]const u8, data: []u8, name: []const u8) RegistryErr!u
 /// Read the PID recorded for `name`, or null when unregistered.
 pub fn get_pid(name: []const u8) RegistryErr!?u32 {
     const io = std.Io.Threaded.global_single_threaded.io();
-    const cwd = std.Io.Dir.cwd();
 
-    var path_buf: [256]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buf, "{s}/{s}.pid", .{ REGISTRY_DIR, name });
-    const file = cwd.openFile(io, path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return null,
+    const file = open_registry_file(io, name, ".pid") catch |err| switch (err) {
+        error.NotFound => return null,
         else => return RegistryErr.FileSystem,
     };
     defer file.close(io);
@@ -129,26 +215,18 @@ pub fn get_pid(name: []const u8) RegistryErr!?u32 {
 
 /// Register the current process under `name`.
 pub fn register(name: []const u8) RegistryErr!void {
-    assert(name.len > 0);
-    const io = std.Io.Threaded.global_single_threaded.io();
-    const cwd = std.Io.Dir.cwd();
-    cwd.createDirPath(io, REGISTRY_DIR) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return RegistryErr.FileSystem,
-    };
-
-    var path_buf: [256]u8 = undefined;
-    const path = try std.fmt.bufPrint(&path_buf, "{s}/{s}.pid", .{ REGISTRY_DIR, name });
-    var file = cwd.createFile(io, path, .{}) catch return RegistryErr.FileSystem;
-    defer file.close(io);
-
-    var fw: std.Io.File.Writer = file.writerStreaming(io, &.{});
-    const w: *std.Io.Writer = &fw.interface;
-    w.print("{d}", .{os.getpid()}) catch return RegistryErr.FileSystem;
+    if (!valid_name(name)) return RegistryErr.InvalidName;
+    var buf: [32]u8 = undefined;
+    const content = std.fmt.bufPrint(&buf, "{d}", .{os.getpid()}) catch return RegistryErr.FileSystem;
+    try write_registry_file(std.Io.Threaded.global_single_threaded.io(), name, ".pid", content);
 }
 
 pub fn unregister(name: []const u8) void {
     const io = std.Io.Threaded.global_single_threaded.io();
+    if (!valid_name(name)) {
+        std.log.warn("unregister: refusing unsafe node name", .{});
+        return;
+    }
     const cwd = std.Io.Dir.cwd();
     var path_buf: [256]u8 = undefined;
     const path = std.fmt.bufPrint(&path_buf, "{s}/{s}.pid", .{ REGISTRY_DIR, name }) catch |err| {
@@ -250,23 +328,27 @@ fn boot_sec() ?u64 {
 /// Writes up to `entries.len` elements into the provided slice.
 /// Returns the number of nodes found and written.
 pub fn list_alive(entries: []NodeEntry) RegistryErr!usize {
-    const dirp = c.opendir(REGISTRY_DIR) orelse return 0;
-    defer _ = c.closedir(dirp);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var dir = try registry_dir(io);
+    defer dir.close(io);
 
+    // Iterate over the opened, ownership-verified directory handle and read
+    // each entry with O_NOFOLLOW so a planted symlink is never followed.
+    var it = dir.iterateAssumeFirstIteration();
     var count: usize = 0;
     while (count < entries.len) {
-        const entry = c.readdir(dirp) orelse break;
-        const name = std.mem.sliceTo(@as([]const u8, entry.name[0..]), 0);
-        if (name.len <= 4) continue;
-        if (!std.mem.eql(u8, name[name.len - 4 ..], ".pid")) continue;
+        const entry = it.next(io) catch |err| switch (err) {
+            error.AccessDenied, error.PermissionDenied => return RegistryErr.FileSystem,
+            else => return RegistryErr.FileSystem,
+        } orelse break;
+        const fname = std.mem.sliceTo(@as([]const u8, entry.name[0..]), 0);
+        if (fname.len <= 4) continue;
+        if (!std.mem.eql(u8, fname[fname.len - 4 ..], ".pid")) continue;
 
-        const node_name = name[0 .. name.len - 4];
+        const node_name = fname[0 .. fname.len - 4];
+        if (!valid_name(node_name)) continue;
 
-        var path_buf: [256]u8 = undefined;
-        const path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ REGISTRY_DIR, name }) catch continue;
-        path_buf[path.len] = 0;
-
-        const fd = c.open(path_buf[0..path.len :0], os.O{ .ACCMODE = .RDONLY });
+        const fd = c.openat(dir.handle, @ptrCast(fname.ptr), os.O{ .ACCMODE = .RDONLY, .NOFOLLOW = true });
         if (fd == -1) continue;
         defer _ = c.close(fd);
 

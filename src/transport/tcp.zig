@@ -37,6 +37,9 @@ pub const Stream = struct {
 };
 
 pub const Config = struct {
+    /// Bind address, e.g. "127.0.0.1" to restrict to loopback. The default
+    /// "0.0.0.0" accepts connections on all interfaces.
+    host: []const u8 = "0.0.0.0",
     nodelay: bool = true,
     quickack: bool = true,
     keepalive: bool = false,
@@ -94,9 +97,14 @@ pub fn listen(io: *IO, port: u16, config: Config) !Server {
     const reuse: i32 = 1;
     _ = c.setsockopt(socket, c.SOL.SOCKET, c.SO.REUSEADDR, &reuse, @sizeOf(c_int));
 
-    const addr: posix.sockaddr.in = .{
-        .port = @byteSwap(port),
-        .addr = 0,
+    // Bind to the configured address. Defaults to all interfaces.
+    const parsed = try std.Io.net.IpAddress.parse(config.host, port);
+    const addr: posix.sockaddr.in = switch (parsed) {
+        .ip4 => |ip4| .{
+            .port = @byteSwap(ip4.port),
+            .addr = @bitCast(ip4.bytes),
+        },
+        .ip6 => return error.AddressFamilyNotSupported,
     };
     try io.bind(socket, addr);
     try io.listen(socket, 128);

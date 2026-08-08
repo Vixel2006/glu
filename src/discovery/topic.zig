@@ -6,6 +6,7 @@ const os = std.os.linux;
 const GLU_MAGIC = @import("../channel.zig").GLU_MAGIC;
 const Header = @import("../channel.zig").Header;
 const shm_name = @import("../channel.zig").shm_name;
+const validate_header = @import("../channel.zig").validate_header;
 
 pub const TopicErr = error{
     TopicNotFound,
@@ -45,7 +46,13 @@ pub const Topic = struct {
 
         const ptr: [*]u8 = @ptrFromInt(mapped);
         const hdr: *align(1) Header = @ptrCast(ptr);
-        if (hdr.magic != GLU_MAGIC) return error.BadMagic;
+        // Reject anything that isn't a structurally sound glu channel,
+        // including segments whose header geometry or name length is
+        // inconsistent. Capacity/msg_size of zero would otherwise corrupt
+        // the CLI's arithmetic, and a bad name_len an OOB slice.
+        if (!validate_header(hdr, null, file_size)) {
+            return if (hdr.magic != GLU_MAGIC) error.BadMagic else error.InvalidTopic;
+        }
 
         return .{ .fd = fd, .mapped = mapped, .header = hdr, .file_size = file_size };
     }

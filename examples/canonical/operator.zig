@@ -73,7 +73,9 @@ fn run_tcp_server() void {
 
     var command_seq: u32 = 0;
 
-    var server = glu.tcp.listen(&io, tcp_port, .{}) catch |e| {
+    // Loopback only: this demo control channel is unauthenticated, so it
+    // must not be reachable off the machine. See docs/SECURITY.md.
+    var server = glu.tcp.listen(&io, tcp_port, .{ .host = "127.0.0.1" }) catch |e| {
         std.debug.print("[op/tcp] listen on {d} failed: {}\n", .{ tcp_port, e });
         return;
     };

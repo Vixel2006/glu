@@ -37,7 +37,7 @@ pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
         var cells: [7][16]u8 = undefined;
         const depth = e.write_pos - e.read_pos;
         const row = [_][]const u8{
-            e.name[0..e.name_len],
+            e.name[0..@min(e.name_len, e.name.len)],
             std.fmt.bufPrint(&cells[1], "{d}", .{e.msg_size}) catch unreachable,
             std.fmt.bufPrint(&cells[2], "{d}", .{e.capacity}) catch unreachable,
             std.fmt.bufPrint(&cells[3], "{d}", .{e.conns}) catch unreachable,

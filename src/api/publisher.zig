@@ -17,6 +17,9 @@ const PubErr = error{
     ShmOpenFailed,
     MmapFailed,
     InvalidSegment,
+    /// The topic's segment is owned by a live publisher. Only one publisher
+    /// per topic is allowed.
+    SegmentOwned,
 };
 
 /// High-level publisher wrapping a raw `Channel`.
@@ -28,7 +31,9 @@ pub const Publisher = struct {
 
     /// Create (or attach to) a shared-memory channel for topic `name`.
     ///
-    /// If the existing segment has no alive subscribers it is treated as
+    /// If the existing segment belongs to a live publisher a
+    /// `SegmentOwned` error is returned: a topic has at most one
+    /// publisher. A segment whose owner is dead or unknown is treated as
     /// a stale leak (crashed publisher whose `conns` count could never be
     /// decremented) and a fresh channel is created.
     pub fn init(name: []const u8, msg_size: u32, capacity: u32, tos: ToS) PubErr!Publisher {
@@ -38,20 +43,19 @@ pub const Publisher = struct {
         var self = Publisher{ .channel = try Channel.open(name, msg_size, capacity, tos) };
 
         const my_pid = @as(u32, @intCast(std.os.linux.getpid()));
-        if (self.channel.header.owner_pid != my_pid) {
-            var any_alive = false;
-            for (&self.channel.header.readers) |entry| {
-                const reader_pid: u32 = @intCast(entry >> 32);
-                if (reader_pid != 0 and is_alive(reader_pid)) any_alive = true;
-            }
-            if (!any_alive) {
-                // The refcount can't tell a crashed publisher from a live one,
-                // so base staleness on subscriber liveness instead. Unlink the
-                // orphaned segment and recreate it fresh.
-                force_unlink(name);
+        const owner_pid = self.channel.header.owner_pid;
+        if (owner_pid != my_pid) {
+            if (owner_pid != 0 and is_alive(owner_pid)) {
+                // The segment belongs to a live publisher; don't destroy it.
                 self.deinit();
-                return Publisher{ .channel = try Channel.open(name, msg_size, capacity, tos) };
+                return error.SegmentOwned;
             }
+            // The refcount can't tell a crashed publisher from a live one,
+            // so base staleness on owner liveness instead. Unlink the
+            // orphaned segment and recreate it fresh.
+            force_unlink(name);
+            self.deinit();
+            return Publisher{ .channel = try Channel.open(name, msg_size, capacity, tos) };
         }
 
         return self;
@@ -67,8 +71,8 @@ pub const Publisher = struct {
     /// Fill the returned pointer then call `commit` to make the
     /// message visible to subscribers. Blocks if the buffer is full.
     pub fn reserve(self: *Publisher) *anyopaque {
-        const cap = self.channel.header.capacity;
-        const tos: ToS = @enumFromInt(self.channel.header.tos);
+        const cap = self.channel.cap;
+        const tos = self.channel.tos;
 
         if (tos == .reliable) {
             while (self.channel.header.write -% slowest_reader(&self.channel.header.readers, self.channel.header.write) >= cap) {
@@ -77,7 +81,7 @@ pub const Publisher = struct {
                 std.atomic.spinLoopHint();
             }
         }
-        const slot = self.channel.ptr + @sizeOf(Header) + (self.channel.header.write % self.channel.header.capacity) * self.channel.header.msg_size;
+        const slot = self.channel.ptr + @sizeOf(Header) + (self.channel.header.write % cap) * self.channel.msg_size;
         return @ptrCast(slot);
     }
 
@@ -149,6 +153,50 @@ test "Publisher: publish a message, read it via raw Channel" {
     try std.testing.expect(msg.y == 13);
     ack(&chan, 0);
     _ = c.waitpid(pid, null, 0);
+}
+
+test "Publisher.init rejects a segment owned by a live publisher" {
+    const TestMsg = packed struct { x: u32 };
+
+    _ = c.shm_unlink("/glu_test_live_owner");
+
+    // Parent creates the segment (itself the live owner).
+    var base = try Channel.open("/glu_test_live_owner", @sizeOf(TestMsg), 4, .reliable);
+    defer base.close();
+
+    const pid = c.fork();
+    if (pid == 0) {
+        // Child attempts to become publisher on a topic a live process owns.
+        _ = Publisher.init("/glu_test_live_owner", @sizeOf(TestMsg), 4, .reliable) catch {
+            c.exit(0);
+        };
+        c.exit(1);
+    }
+    _ = c.waitpid(pid, null, 0);
+
+    // Segment must be untouched: same cursor, same owner.
+    try std.testing.expectEqual(@as(u32, 0), @atomicLoad(u32, &base.header.write, .acquire));
+    try std.testing.expectEqual(@as(u32, @intCast(std.os.linux.getpid())), base.header.owner_pid);
+}
+
+test "Publisher.init does not destroy a segment with alive readers but dead owner" {
+    const TestMsg = packed struct { x: u32 };
+
+    _ = c.shm_unlink("/glu_test_dead_owner_readers");
+
+    // Simulate a crashed publisher with an orphaned but readable segment.
+    const pid = c.fork();
+    if (pid == 0) {
+        var chan = Channel.open("/glu_test_dead_owner_readers", @sizeOf(TestMsg), 4, .reliable) catch c.exit(1);
+        write(&chan, @ptrCast(&TestMsg{ .x = 42 }));
+        c.exit(0);
+    }
+    _ = c.waitpid(pid, null, 0);
+
+    var publisher = try Publisher.init("/glu_test_dead_owner_readers", @sizeOf(TestMsg), 4, .reliable);
+    defer publisher.deinit();
+
+    try std.testing.expectEqual(@as(u32, 0), publisher.channel.header.write);
 }
 
 test "Publisher.init reclaims a segment left by a crashed publisher" {
