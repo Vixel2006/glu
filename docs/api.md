@@ -40,7 +40,7 @@ pub fn init(
 *   **Parameters**:
     *   `name`: Topic path (must start with a slash, e.g. `/robot/telemetry`).
     *   `msg_size`: Size of the message struct in bytes (`@sizeOf(T)`).
-    *   `capacity`: Number of slots in the ring buffer (must be a power of two for optimal performance).
+    *   `capacity`: Number of slots in the ring buffer.
     *   `tos`: Type of Service (quality of service policy). Can be `.reliable` (publisher blocks if buffer is full) or `.best_effort` (publisher overwrites if buffer is full).
 *   **Returns**: An initialized `Publisher` struct, or an error.
 
@@ -75,19 +75,19 @@ const std = @import("std");
 const glu = @import("glu");
 
 pub fn main() !void {
-    var pub = try glu.Publisher.init("/sensor", @sizeOf(JointState), 1024, .reliable);
-    defer pub.deinit();
+    var publisher = try glu.Publisher.init("/sensor", @sizeOf(JointState), 1024, .reliable);
+    defer publisher.deinit();
 
     // Option A: Zero-Copy (Recommended for large data)
-    const slot: *JointState = @ptrCast(@alignCast(pub.reserve()));
+    const slot: *JointState = @ptrCast(@alignCast(publisher.reserve()));
     slot.* = JointState{
         .seq = 1,
-        .timestamp = std.time.milliTimestamp(), // or custom epoch
+        .timestamp = 0,
         .position = 1.57,
         .velocity = 0.1,
         .effort = 4.2,
     };
-    pub.commit();
+    publisher.commit();
 
     // Option B: Publish by Copy
     const local_msg = JointState{
@@ -97,7 +97,7 @@ pub fn main() !void {
         .velocity = 0.0,
         .effort = 0.0,
     };
-    pub.publish(@ptrCast(&local_msg));
+    publisher.publish(@ptrCast(&local_msg));
 }
 ```
 
@@ -115,20 +115,20 @@ pub fn init(
     capacity: u32
 ) SubErr!Subscriber
 ```
-*   **Description**: Attaches to the existing shared memory segment under the given topic name. It automatically finds an unused reader slot index (max 8 subscribers per topic) and registers the process PID.
-*   **Returns**: An initialized `Subscriber` struct, or an error.
+*   **Description**: Attaches to the existing shared memory segment under the given topic name. It atomically claims an unused reader slot (up to 8 subscribers per topic). A late-joining subscriber starts reading from the current write position so it only sees new messages.
+*   **Returns**: An initialized `Subscriber` struct, or `error.NoReaderSlots` when the topic is already subscribed to by 8 readers.
 
 #### `deinit`
 ```zig
 pub fn deinit(self: *Subscriber) void
 ```
-*   **Description**: Marks the reader slot as inactive so the publisher no longer waits for it, closes the segment, and unmaps the memory.
+*   **Description**: Releases the reader slot so the publisher no longer waits for it, closes the segment, and unmaps the memory.
 
 #### `peek`
 ```zig
 pub fn peek(self: *Subscriber) ?*anyopaque
 ```
-*   **Description**: Non-blocking retrieve. Compares the subscriber's private read cursor against the publisher's global write cursor. If new data is available, returns a direct pointer to the slot *without consuming it*.
+*   **Description**: Non-blocking retrieve. Compares the subscriber's read cursor against the publisher's global write cursor. If new data is available, returns a direct pointer to the slot *without consuming it*.
 *   **Returns**: An aligned pointer (`*anyopaque`) to the slot if a new message is available; otherwise, `null`.
 *   **Note**: The returned pointer stays valid until `ack` is called. Copy the message before acknowledging, otherwise the publisher may wrap around and overwrite the slot.
 
@@ -152,14 +152,14 @@ fn sleepMs(ms: u64) void {
 }
 
 pub fn main() !void {
-    var sub = try glu.Subscriber.init("/sensor", @sizeOf(JointState), 1024);
-    defer sub.deinit();
+    var subscriber = try glu.Subscriber.init("/sensor", @sizeOf(JointState), 1024);
+    defer subscriber.deinit();
 
     while (true) {
-        if (sub.peek()) |raw| {
+        if (subscriber.peek()) |raw| {
             const msg: *JointState = @ptrCast(@alignCast(raw));
             std.debug.print("Received: seq={d}, pos={d:.2}\n", .{ msg.seq, msg.position });
-            sub.ack();
+            subscriber.ack();
         }
         sleepMs(10);
     }
@@ -173,23 +173,51 @@ pub fn main() !void {
 `glu` includes a highly optimized asynchronous I/O engine powered by Linux `io_uring`. All network operations (`tcp` and `udp`) run on top of this engine.
 
 ### Struct Definition
+
 ```zig
 pub const IO = struct {
+    /// Create an io_uring ring with `entries` submission slots.
     pub fn init(entries: u16, flags: u32) !IO
     pub fn deinit(self: *IO) void
+
+    /// Drive the event loop for up to `nanoseconds` of monotonic time.
     pub fn run(self: *IO, nanoseconds: u64) !void
+
+    /// Submit queued SQEs to the kernel, optionally blocking for `wait_nr` completions.
     pub fn submit(self: *IO, wait_nr: u32) !void
+
+    /// Reap up to `wait_nr` completed CQEs.
     pub fn complete(self: *IO, wait_nr: u32) !void
+
+    /// Run callbacks for every future that has completed.
     pub fn run_callback(self: *IO) !void
+
+    /// Block until `future` completes and return its typed result.
+    pub fn wait(self: *IO, future: *Future, comptime T: type) anyerror!T
 };
 ```
 
-### The Callback Pattern
-All asynchronous operations in `glu` accept:
-1.  A pointer to `IO`.
-2.  A generic `Context` type and a `context` pointer.
-3.  A callback function that takes the context, a pointer to `IO.Completion`, and a tagged error union/result.
-4.  A preallocated `IO.Completion` structure to hold operational state.
+### The Future Pattern (not callbacks)
+
+Every asynchronous operation takes a preallocated `IO.Future`:
+
+1.  Declare an `IO.Future` (on the stack or embedded in a struct).
+2.  Call an operation function, passing the future by pointer.
+3.  Either block on the result with `io.wait(&future, T)`, or drive the ring
+    yourself with `io.submit` / `io.complete` / `io.run_callback` and poll
+    `future.done`.
+
+The engine supports `accept`, `close`, `connect`, `read`, `recv`, `send`,
+`write`, `fsync`, `openat`, `statx`, `timeout`, `next_tick`, `send_to`, and
+`recv_from`. Each operation stores its result in `future.result.<op>`.
+
+```zig
+const IO = glu.IO;
+
+var compl: IO.Future = undefined;
+try io.next_tick(&compl);
+try io.wait(&compl, void);
+```
 
 ---
 
@@ -203,107 +231,62 @@ All asynchronous operations in `glu` accept:
 ```zig
 pub fn listen(io: *IO, port: u16, config: Config) !Server
 ```
-*   **Description**: Starts a TCP server socket bound to the specified port and configures it to listen for connections.
+*   **Description**: Starts a TCP server socket bound to `port` (pass `0` for an ephemeral port) and begins listening with backlog 128.
 
 #### `accept`
 ```zig
-pub fn accept(
-    io: *IO,
-    comptime Context: type,
-    context: Context,
-    comptime callback: fn (
-        context: Context,
-        completion: *IO.Completion,
-        result: IO.AcceptError!Stream
-    ) void,
-    completion: *IO.Completion,
-    server: *Server,
-    comptime config: Config
-) !void
+pub fn accept(io: *IO, future: *IO.Future, server: *Server) !void
 ```
-*   **Description**: Enqueues an asynchronous accept request. When a client connects, the callback will be invoked with a `Stream` representation.
+-   **Description**: Enqueues an asynchronous accept operation.
+-   **Await**: `io.wait(&future, posix.socket_t)` returns the accepted fd. Wrap it in a `Stream { .socket = fd, .handle = fd }`.
 
 #### `connect`
 ```zig
-pub fn connect(
-    io: *IO,
-    comptime Context: type,
-    context: Context,
-    comptime callback: fn (
-        context: Context,
-        completion: *IO.Completion,
-        result: IO.ConnectError!Stream
-    ) void,
-    completion: *IO.Completion,
-    host: []const u8,
-    port: u16,
-    comptime config: Config
-) !void
+pub fn connect(io: *IO, future: *IO.Future, host: []const u8, port: u16) !void
 ```
-*   **Description**: Enqueues an asynchronous TCP connection request to a remote host.
+-   **Description**: Enqueues an async IPv4 connection to `host:port`. Await with `io.wait(&future, void)`. The connected socket is available at `future.operation.connect.socket`.
+-   **Note**: IPv6 returns `error.AddressFamilyNotSupported`.
 
-#### `send` (Synchronous Helper)
+#### `send` / `receive` (on `Stream`)
 ```zig
-pub fn send(io: *IO, stream: *Stream, data: []const u8) !void
+pub fn send(io: *IO, future: *IO.Future, stream: *Stream, data: []const u8) !void
+pub fn receive(io: *IO, future: *IO.Future, stream: *Stream, buffer: []u8) !void
 ```
-*   **Description**: A helper function that writes the entire data buffer over TCP by synchronously driving the `io` completion loop until the write completes.
+-   **Description**: Async write/read on an accepted or connected stream.
+-   **Await**: `io.wait(&future, usize)` returns the number of bytes sent/received. `receive` returns `0` on a clean disconnect.
 
-#### `receive` (Synchronous Helper)
+`Stream` also exposes `write`/`read` methods that take an explicit offset for file-backed handles:
+
 ```zig
-pub fn receive(io: *IO, stream: *Stream, buffer: []u8) !usize
+pub fn write(self: *Stream, io: *IO, future: *IO.Future, buf: []const u8) !void
+pub fn read(self: *Stream, io: *IO, future: *IO.Future, buf: []u8) !void
 ```
-*   **Description**: A helper function that reads a framed message from the TCP stream into the buffer by synchronously driving the `io` completion loop.
 
-#### Asynchronous Read and Write Methods (on `Stream`)
+#### Socket Options & Close
 ```zig
-pub fn write(
-    self: *Stream,
-    io: *IO,
-    comptime Context: type,
-    context: Context,
-    comptime callback: fn (
-        context: Context,
-        completion: *IO.Completion,
-        result: IO.WriteError!usize
-    ) void,
-    completion: *IO.Completion,
-    buf: []const u8
-) !void
-```
-```zig
-pub fn read(
-    self: *Stream,
-    io: *IO,
-    comptime Context: type,
-    context: Context,
-    comptime callback: fn (
-        context: Context,
-        completion: *IO.Completion,
-        result: IO.ReadError!usize
-    ) void,
-    completion: *IO.Completion,
-    buf: []u8
-) !void
+pub fn apply_socket_opts(fd: i32, config: Config) void
+pub fn close(stream: *Stream) void
+pub fn close_server(server: *Server) void
+pub const Config = struct {
+    nodelay: bool = true,
+    quickack: bool = true,
+    keepalive: bool = false,
+    keepalive_idle: u32 = 7200,
+    keepalive_interval: u32 = 75,
+    keepalive_count: u32 = 9,
+    recv_buf: ?i32 = null,
+    send_buf: ?i32 = null,
+    recv_timeout_ms: ?u32 = null,
+    send_timeout_ms: ?u32 = null,
+};
 ```
 
----
-
-### Example: Async TCP Server (Echo)
+### Example: Async TCP Echo Server
 
 ```zig
 const std = @import("std");
 const glu = @import("glu");
 const IO = glu.IO;
-
-const AppContext = struct {
-    io: *IO,
-    server: glu.tcp.Server,
-    accept_compl: IO.Completion = undefined,
-    stream: ?glu.tcp.Stream = null,
-    read_compl: IO.Completion = undefined,
-    write_compl: IO.Completion = undefined,
-    buf: [1024]u8 = undefined,
-};
 
 pub fn main() !void {
     var io = try IO.init(32, 0);
@@ -312,62 +295,26 @@ pub fn main() !void {
     var server = try glu.tcp.listen(&io, 9999, .{});
     defer glu.tcp.close_server(&server);
 
-    var app = AppContext{ .io = &io, .server = server };
-
-    try armAccept(&app);
-
-    std.debug.print("TCP Echo Server listening on port 9999...\n", .{});
+    std.debug.print("TCP echo server on :9999\n", .{});
     while (true) {
-        try io.run(10_000_000); // Drive the io_uring loop
+        var compl_accept: IO.Future = undefined;
+        try glu.tcp.accept(&io, &compl_accept, &server);
+        const sock = try io.wait(&compl_accept, std.posix.socket_t);
+
+        glu.tcp.apply_socket_opts(sock, .{});
+        var stream = glu.tcp.Stream{ .socket = sock, .handle = sock };
+        defer glu.tcp.close(&stream);
+
+        var compl_recv: IO.Future = undefined;
+        var buf: [1024]u8 = undefined;
+        try glu.tcp.receive(&io, &compl_recv, &stream, &buf);
+        const n = try io.wait(&compl_recv, usize);
+        if (n == 0) continue; // client disconnected
+
+        var compl_send: IO.Future = undefined;
+        try glu.tcp.send(&io, &compl_send, &stream, buf[0..n]);
+        _ = try io.wait(&compl_send, usize);
     }
-}
-
-fn armAccept(app: *AppContext) !void {
-    const cb = struct {
-        fn call(ctx: *AppContext, _: *IO.Completion, res: IO.AcceptError!glu.tcp.Stream) void {
-            var stream = res catch |err| {
-                std.debug.print("Accept error: {}\n", .{err});
-                return;
-            };
-            ctx.stream = stream;
-            std.debug.print("Client connected!\n", .{});
-            armRead(ctx) catch {};
-        }
-    }.call;
-    try glu.tcp.accept(app.io, *AppContext, app, cb, &app.accept_compl, &app.server, .{});
-}
-
-fn armRead(app: *AppContext) !void {
-    const cb = struct {
-        fn call(ctx: *AppContext, _: *IO.Completion, res: IO.ReadError!usize) void {
-            const n = res catch |err| {
-                std.debug.print("Read error: {}\n", .{err});
-                if (ctx.stream) |*s| glu.tcp.close(s);
-                ctx.stream = null;
-                armAccept(ctx) catch {};
-                return;
-            };
-            if (n == 0) {
-                std.debug.print("Client disconnected.\n", .{});
-                if (ctx.stream) |*s| glu.tcp.close(s);
-                ctx.stream = null;
-                armAccept(ctx) catch {};
-                return;
-            }
-            armWrite(ctx, n) catch {};
-        }
-    }.call;
-    try app.stream.?.read(app.io, *AppContext, app, cb, &app.read_compl, &app.buf);
-}
-
-fn armWrite(app: *AppContext, len: usize) !void {
-    const cb = struct {
-        fn call(ctx: *AppContext, _: *IO.Completion, res: IO.WriteError!usize) void {
-            _ = res catch {};
-            armRead(ctx) catch {};
-        }
-    }.call;
-    try app.stream.?.write(app.io, *AppContext, app, cb, &app.write_compl, app.buf[0..len]);
 }
 ```
 
@@ -375,7 +322,7 @@ fn armWrite(app: *AppContext, len: usize) !void {
 
 ## 4. UDP Network Transport (`glu.udp`)
 
-`glu.udp` provides asynchronous and multicast UDP network operations managed by the `io_uring` IO engine.
+`glu.udp` provides async and multicast UDP operations managed by the `io_uring` IO engine.
 
 ### Core Functions
 
@@ -389,39 +336,26 @@ pub fn bind(io: *IO, port: u16, config: SocketConfig) !Socket
 ```zig
 pub fn send_to(
     io: *IO,
-    comptime Context: type,
-    context: Context,
-    comptime callback: fn (
-        context: Context,
-        completion: *IO.Completion,
-        result: IO.SendToError!usize
-    ) void,
-    completion: *IO.Completion,
+    future: *IO.Future,
     socket: Socket,
     host: []const u8,
     port: u16,
     data: []const u8
 ) !void
 ```
-*   **Description**: Sends a UDP datagram to a remote target asynchronously.
+*   **Description**: Enqueues an async UDP datagram to `host:port`. Await with `io.wait(&future, usize)`.
 
 #### `receive_from`
 ```zig
-pub fn receive_from(
-    io: *IO,
-    comptime Context: type,
-    context: Context,
-    comptime callback: fn (
-        context: Context,
-        completion: *IO.Completion,
-        result: IO.RecvFromError!ReceiveResult
-    ) void,
-    completion: *IO.Completion,
-    socket: Socket,
-    buffer: []u8
-) !void
+pub fn receive_from(io: *IO, future: *IO.Future, socket: Socket, buffer: []u8) !void
 ```
-*   **Description**: Enqueues an asynchronous request to receive a UDP datagram. The callback is invoked with a `ReceiveResult` struct containing `data: []u8` (sub-slice of `buffer`) and `sender: net.Endpoint`.
+*   **Description**: Enqueues an async UDP receive into `buffer`. Await with `io.wait(&future, usize)` for the payload length; the sender address is at `future.operation.recv_from.address` (format it with `glu.net.address_to_endpoint`).
+
+```zig
+pub fn connect(io: *IO, future: *IO.Future, socket: Socket, host: []const u8, port: u16) !void
+pub fn send(io: *IO, future: *IO.Future, socket: Socket, data: []const u8) !void
+pub fn receive(io: *IO, future: *IO.Future, socket: Socket, buffer: []u8) !void
+```
 
 #### `join_multicast`
 ```zig
@@ -429,22 +363,17 @@ pub fn join_multicast(socket: Socket, group: []const u8) void
 ```
 *   **Description**: Subscribes the socket to a multicast group (e.g. `"224.0.0.1"`).
 
----
+#### `close`
+```zig
+pub fn close(socket: *Socket) void
+```
 
-### Example: Async UDP Echo Client / Server
+### Example: Async UDP Receiver
 
 ```zig
 const std = @import("std");
 const glu = @import("glu");
 const IO = glu.IO;
-
-const UdpAppContext = struct {
-    io: *IO,
-    socket: glu.udp.Socket,
-    recv_compl: IO.Completion = undefined,
-    send_compl: IO.Completion = undefined,
-    buf: [1024]u8 = undefined,
-};
 
 pub fn main() !void {
     var io = try IO.init(32, 0);
@@ -453,53 +382,15 @@ pub fn main() !void {
     var sock = try glu.udp.bind(&io, 8888, .{});
     defer glu.udp.close(&sock);
 
-    var app = UdpAppContext{ .io = &io, .socket = sock };
-    try armRecv(&app);
-
-    std.debug.print("UDP Receiver listening on port 8888...\n", .{});
+    var buf: [1024]u8 = undefined;
+    std.debug.print("UDP receiver on :8888\n", .{});
     while (true) {
-        try io.run(10_000_000);
+        var compl_recv: IO.Future = undefined;
+        try glu.udp.receive_from(&io, &compl_recv, sock, &buf);
+        const n = try io.wait(&compl_recv, usize);
+        const ep = glu.net.address_to_endpoint(compl_recv.operation.recv_from.address);
+        std.debug.print("{d} bytes from {s}:{d}\n", .{ n, ep.host[0..ep.host_len], ep.port });
     }
-}
-
-fn armRecv(app: *UdpAppContext) !void {
-    const cb = struct {
-        fn call(ctx: *UdpAppContext, _: *IO.Completion, res: IO.RecvFromError!glu.udp.ReceiveResult) void {
-            const result = res catch |err| {
-                std.debug.print("UDP receive error: {}\n", .{err});
-                return;
-            };
-
-            std.debug.print("Received {d} bytes from {s}:{d}: {s}\n", .{
-                result.data.len,
-                result.sender.host[0..result.sender.host_len],
-                result.sender.port,
-                result.data,
-            });
-
-            // Echo back to sender
-            ctx.io.submit(0) catch {};
-            glu.udp.send_to(
-                ctx.io,
-                *UdpAppContext,
-                ctx,
-                struct {
-                    fn sendCb(s_ctx: *UdpAppContext, _: *IO.Completion, s_res: IO.SendToError!usize) void {
-                        _ = s_res catch {};
-                        armRecv(s_ctx) catch {};
-                    }
-                }.sendCb,
-                &ctx.send_compl,
-                ctx.socket,
-                result.sender.host[0..result.sender.host_len],
-                result.sender.port,
-                result.data,
-            ) catch {
-                armRecv(ctx) catch {};
-            };
-        }
-    }.call;
-    try glu.udp.receive_from(app.io, *UdpAppContext, app, cb, &app.recv_compl, app.socket, &app.buf);
 }
 ```
 
@@ -513,40 +404,61 @@ fn armRecv(app: *UdpAppContext) !void {
 ```zig
 pub fn register(name: []const u8) !void
 ```
-*   **Description**: Registers the current process name and writes its PID to `/tmp/glu/nodes/<name>.pid`.
+*   **Description**: Registers the current process by name and writes its PID to `/tmp/glu/nodes/<name>.pid`.
 
-#### `unregister`
+```zig
+pub fn register_pid(name: []const u8, pid: u32) !void
+pub fn register_argv(name: []const u8, argv: []const []const u8) !void
+```
+*   `register_pid` writes an explicit PID (used by the launcher for children).
+*   `register_argv` persists a node's spawn vector (NUL-separated) to `<name>.argv` so the node can be re-launched later.
+
+#### Unregister
 ```zig
 pub fn unregister(name: []const u8) void
 ```
-*   **Description**: Removes the process registration PID file. Typically called via `defer`.
+*   **Description**: Removes the process registration PID file. Typically invoked via `defer`.
 
-#### `list_alive`
+#### Lookup / Health
 ```zig
-pub fn list_alive(allocator: std.mem.Allocator) ![]NodeEntry
+pub fn get_pid(name: []const u8) !?u32
+pub fn is_alive(pid: u32) bool
+pub fn proc_uptime(pid: u32) u64
 ```
-*   **Description**: Reads all `.pid` files under `/tmp/glu/nodes`, queries the OS to verify if the process is alive, and returns a list of active nodes.
-*   **Returns**: An allocated slice of `NodeEntry` structs. The caller must free each entry's `name` string and the slice.
+*   `is_alive` uses `access(F_OK)` on `/proc/<pid>/status` — a sub-microsecond, privilege-free OS existence check.
+
+#### List Alive Nodes
+```zig
+pub fn list_alive(entries: []NodeEntry) !usize
+pub const NodeEntry = struct {
+    name: [64]u8,
+    name_len: u32,
+    pid: u32,
+    alive: bool,
+    uptime: u64, // seconds since start, 0 if unknown
+};
+```
+*   **Description**: Reads all `.pid` files under `/tmp/glu/nodes`, queries the OS to verify liveness, and fills `entries` up to its length.
+*   **Returns**: The number of entries written. The caller provides the buffer (no allocation).
 
 #### Example: Monitoring Nodes
 ```zig
 const std = @import("std");
 const glu = @import("glu");
 
-pub fn main() !void {
-    const allocator = std.heap.page_allocator;
-
-    try glu.registry.register("my_monitor");
+pub fn main() void {
+    glu.registry.register("my_monitor") catch {};
     defer glu.registry.unregister("my_monitor");
 
-    const nodes = try glu.registry.list_alive(allocator);
-    defer {
-        for (nodes) |n| allocator.free(n.name);
-        allocator.free(nodes);
-    }
-
-    for (nodes) |node| {
-        std.debug.print("Node: {s} (PID: {d}, Alive: {})\n", .{ node.name, node.pid, node.alive });
+    var entry_buf: [128]glu.registry.NodeEntry = undefined;
+    if (glu.registry.list_alive(&entry_buf)) |count| {
+        for (entry_buf[0..count]) |node| {
+            std.debug.print("Node: {s} (PID: {d}, Alive: {})\n", .{
+                node.name[0..node.name_len], node.pid, node.alive,
+            });
+        }
+    } else |err| {
+        std.debug.print("list_alive failed: {s}\n", .{@errorName(err)});
     }
 }
 ```

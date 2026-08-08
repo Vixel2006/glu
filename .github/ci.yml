@@ -28,7 +28,7 @@ jobs:
           version: 0.17.0-dev.1398+cb5635714
 
       - name: Check formatting
-        run: zig fmt --check src/ bench/
+        run: zig fmt --check src/ examples/
 
       - name: Build
         run: zig build
@@ -38,6 +38,3 @@ jobs:
 
       - name: Run tests
         run: zig build test
-
-      - name: Run benchmarks
-        run: zig build bench

@@ -27,7 +27,7 @@ We believe that code for next-generation robotics must be written to the highest
 - [Getting Started](#getting-started)
 - [Development Workflow](#development-workflow)
 - [Style Guide](#style-guide)
-- [Testing & Benchmarks](#testing--benchmarks)
+- [Testing](#testing)
 - [Pull Request Process](#pull-request-process)
 
 ---
@@ -83,10 +83,9 @@ Branch prefix conventions:
 Keep your commits and pull requests small and focused. Refactors and new features should be submitted in separate PRs to keep code reviews clear and productive.
 
 ### 3. Verify Code Locally
-Before pushing your branch, ensure all tests and benchmarks run cleanly:
+Before pushing your branch, ensure all tests run cleanly:
 ```bash
 zig build test
-zig build bench
 ```
 
 ---
@@ -120,18 +119,12 @@ zig fmt src/
 
 ---
 
-## Testing & Benchmarks
+## Testing
 
 ### Running Unit Tests
 All source files containing logic should include unit tests to verify correctness:
 ```bash
 zig build test
-```
-
-### Running Benchmarks
-If you modify performance-critical segments (like `Channel`, `Publisher`, or transport loops), always check for regressions:
-```bash
-zig build bench
 ```
 
 ---

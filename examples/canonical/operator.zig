@@ -178,7 +178,8 @@ fn run_tcp_server() void {
             if (latest) |data| {
                 if (!send_pending) {
                     var buf: [256]u8 = undefined;
-                    const rep = std.fmt.bufPrint(&buf,
+                    const rep = std.fmt.bufPrint(
+                        &buf,
                         "state seq={d} joints={d} avg_effort={d:.2} energy={d:.2} fault={d}\n",
                         .{ data.seq, data.joint_count, data.avg_effort, data.energy, data.fault_level },
                     ) catch break;

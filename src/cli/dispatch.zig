@@ -12,7 +12,7 @@ const nodes_down = @import("nodes/down.zig");
 const topics_list = @import("topics/list.zig");
 const topics_info = @import("topics/info.zig");
 
-const version = "0.1.0";
+const version = "0.2.0";
 
 const RunFn = *const fn (init: std.process.Init, args: *parser.Args) anyerror!void;
 

@@ -96,9 +96,8 @@ The publisher does not check reader positions. It immediately overwrites old slo
 
 ### Dead Subscriber Mitigation
 To prevent a crashed or terminated subscriber from deadlocking the publisher forever:
-*   When a subscriber calls `deinit()`, it sets its cursor to `std.math.maxInt(u32)`.
-*   The publisher ignores any reader index set to `maxInt(u32)` in its `slowestReader` calculation.
-*   Additionally, the publisher periodically sweeps the reader arrays, checking if the subscriber PIDs listed in the header are still alive using the node registry. If a PID is dead, it cleans up the reader slots.
+*   When a subscriber calls `deinit()`, it clears its reader entry to zero, removing it from the slowest-reader calculation entirely.
+*   On a `reliable` topic, the publisher's backpressure loop calls `sweep_dead_readers()` before spinning. Each reader entry packs its owning PID in the high 32 bits; `sweep_dead_readers` clears any entry whose PID is no longer alive (checked via `access` on `/proc/<pid>/status`). The clear uses a compare-and-swap against the observed value, so a slot reclaimed by a new subscriber in the meantime is never clobbered.
 
 ---
 

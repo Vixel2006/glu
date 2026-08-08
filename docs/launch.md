@@ -91,21 +91,21 @@ glu status
 **Example Output:**
 ```
 nodes (4):
-Node           PID Uptime Status Topics
------------ ------ ------ ------ ------
-sensor_arm  192350 21m50s alive       0
-coordinator 192348 21m50s alive       1
-logger      192347 21m50s alive       1
-operator    192346 21m50s alive       2
+Node       PID  Uptime Status Topics
+---------- ---- ------ ------ ------
+sensor_arm   192350 21m50s alive     0
+coordinator  192348 21m50s alive     1
+logger       192347 21m50s alive     1
+operator     192346 21m50s alive     2
 
 topics (5):
-Topic               Owner       TOS         Size Depth  Cap
-------------------- ----------- ----------- ---- ----- ----
-/robot/health       coordinator reliable      32     0  128
-/robot/logs         logger      best_effort  104     0  256
-/robot/fused        operator    reliable      32     0 4096
-/robot/command      192349      reliable      32     0  128
-/robot/joint_states operator    reliable      32     1 4096
+Topic                Owner        TOS         Size Depth  Cap
+-------------------- ------------ ----------- ---- ----- ----
+/robot/health        coordinator  reliable      32     0  128
+/robot/logs          logger       best_effort  104     0  256
+/robot/fused         operator     reliable      32     0 4096
+/robot/command       192349       reliable      32     0  128
+/robot/joint_states  operator     reliable      32     1 4096
 ```
 `Topics` counts the topics a node owns (created via `Publisher`/`Channel`).
 `Depth` is how many messages the slowest reader is behind the writer. A topic
@@ -122,10 +122,10 @@ glu nodes list
 
 **Example Output:**
 ```
-node          pid      status
------------------------------
-lidar_driver  12095    active
-tracker       12098    active
+Node        PID  Uptime Status
+----------- ---- ------- ------
+lidar_driver  12095  2m04s alive
+tracker       12098  1m58s alive
 ```
 *Note: Under the hood, this simply verifies if `/proc/<pid>/status` exists, resulting in sub-microsecond execution time.*
 
@@ -149,18 +149,12 @@ glu topics info /filtered_temp
 
 **Example Output:**
 ```
-topic:           /filtered_temp
-magic:           GLU\0
-message size:    32 bytes
-capacity:        4096 slots
-connections:     2 active connections
-write cursor:    10482
-subscribers:
-  [sub 0]:       10482 (active, synced with publisher)
-  [sub 1]:       10402 (active, lagging behind by 80 messages!)
-  [sub 2..7]:    inactive
+Topic              Size  Cap   Conns Write Read Depth
+------------------ ----- ---- ----- ----- ---- -----
+/filtered_temp        32  4096      2 10482 10402    80
 ```
-*This is invaluable for debugging pipeline bottlenecks, showing which subscriber is running slowly and holding up the publisher.*
+*Showing a topic whose second subscriber is lagging by 80 messages — the index
+to look for when a `reliable` publisher appears to stall.*
 
 ---
 

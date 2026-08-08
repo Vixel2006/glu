@@ -90,7 +90,7 @@ glu --help
 ### 1. Add glu to your project
 Run `zig fetch` to download and reference `glu` in your dependencies:
 ```bash
-zig fetch --save https://github.com/Vixel2006/glu/archive/refs/tags/v0.1.0.tar.gz
+zig fetch --save https://github.com/Vixel2006/glu/archive/refs/tags/v0.2.0.tar.gz
 ```
 
 Add the module to your target executable in your `build.zig`:
@@ -273,19 +273,17 @@ run 'glu help <command>' for usage
 
 ## Performance & Benchmarks
 
-Run benchmarks locally using:
-```bash
-zig build bench
-```
-
-Results obtained on an Intel Core i5, 100k iterations (ReleaseFast):
+A dedicated benchmark harness is being rebuilt (the previous `bench/` harness
+was removed). Results below are from a previous internal run on an Intel Core
+i5, 100k iterations (ReleaseFast); the raw history lives in
+`.benchmarks/history/`:
 
 | Operation | Latency | Notes |
 | :--- | :--- | :--- |
 | `channel write 32B-4096B` | **~18 ns** | Zero-copy write directly to POSIX shared memory |
-| `channel read 32B` | **~18 ns** | Zero-copy pointer dereference from shared memory |
+| `channel read 32B` | **~25 ns** | Zero-copy pointer dereference from shared memory |
 | `publisher publish` | **~18 ns** | Single copy-into-ring buffer operation |
-| `subscriber receive` | **~18 ns** | Read check and atomic write cursor alignment |
+| `subscriber receive` | **~25 ns** | Read check and atomic write cursor alignment |
 | `node creation` | **~5 µs** | Node startup (`shm_open` + `mmap` initialization) |
 
 ---
