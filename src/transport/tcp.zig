@@ -62,33 +62,17 @@ const TCP_KEEPINTVL: u32 = 5;
 const TCP_KEEPCNT: u32 = 6;
 const TCP_DEFER_ACCEPT: u32 = 9;
 
-fn set_int(fd: i32, level: c_int, opt: u32, val: c_int) void {
-    if (c.setsockopt(fd, level, opt, &val, @sizeOf(c_int)) == -1) {
-        std.log.warn("setsockopt failed for fd {} level {} opt {}", .{ fd, level, opt });
-    }
-}
-
-fn set_timeval(fd: i32, level: c_int, opt: u32, ms: u32) void {
-    const tv = std.c.timeval{
-        .sec = @as(c_int, @intCast(ms / 1000)),
-        .usec = @as(c_int, @intCast((ms % 1000) * 1000)),
-    };
-    if (c.setsockopt(fd, level, opt, &tv, @sizeOf(std.c.timeval)) == -1) {
-        std.log.warn("setsockopt timeval failed for fd {} level {} opt {}", .{ fd, level, opt });
-    }
-}
-
 pub fn apply_socket_opts(fd: i32, config: Config) void {
-    if (config.nodelay) set_int(fd, IPPROTO_TCP, TCP_NODELAY, 1);
-    if (config.quickack) set_int(fd, IPPROTO_TCP, TCP_QUICKACK, 1);
-    set_int(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.KEEPALIVE)), @as(c_int, @intFromBool(config.keepalive)));
+    if (config.nodelay) net.set_int(fd, IPPROTO_TCP, TCP_NODELAY, 1);
+    if (config.quickack) net.set_int(fd, IPPROTO_TCP, TCP_QUICKACK, 1);
+    net.set_int(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.KEEPALIVE)), @as(c_int, @intFromBool(config.keepalive)));
     if (config.keepalive) {
-        set_int(fd, IPPROTO_TCP, TCP_KEEPIDLE, @as(c_int, @intCast(config.keepalive_idle)));
-        set_int(fd, IPPROTO_TCP, TCP_KEEPINTVL, @as(c_int, @intCast(config.keepalive_interval)));
-        set_int(fd, IPPROTO_TCP, TCP_KEEPCNT, @as(c_int, @intCast(config.keepalive_count)));
+        net.set_int(fd, IPPROTO_TCP, TCP_KEEPIDLE, @as(c_int, @intCast(config.keepalive_idle)));
+        net.set_int(fd, IPPROTO_TCP, TCP_KEEPINTVL, @as(c_int, @intCast(config.keepalive_interval)));
+        net.set_int(fd, IPPROTO_TCP, TCP_KEEPCNT, @as(c_int, @intCast(config.keepalive_count)));
     }
-    if (config.recv_timeout_ms) |ms| set_timeval(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.RCVTIMEO)), ms);
-    if (config.send_timeout_ms) |ms| set_timeval(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.SNDTIMEO)), ms);
+    if (config.recv_timeout_ms) |ms| net.set_timeval(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.RCVTIMEO)), ms);
+    if (config.send_timeout_ms) |ms| net.set_timeval(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.SNDTIMEO)), ms);
 }
 
 pub fn listen(io: *IO, port: u16, config: Config) !Server {
@@ -139,7 +123,7 @@ pub fn connect(
             .port = @byteSwap(ip4.port),
             .addr = @bitCast(ip4.bytes),
         },
-        .ip6 => return error.AddressFamilyNotSupported,
+        .ip6 => return error.AddressFamilyNotSupported, // TODO: We should add support for ipv6 in the future
     };
 
     const socket = try io.socket(posix.AF.INET, posix.SOCK.STREAM, 0);
@@ -176,7 +160,7 @@ pub fn close_server(server: *Server) void {
     _ = c.close(server.handle);
 }
 
-fn getPort(fd: i32) u16 {
+fn get_port(fd: i32) u16 {
     var sockname: std.posix.sockaddr.in = undefined;
     var poollen: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.in);
     if (c.getsockname(fd, @ptrCast(&sockname), &poollen) == 0)
@@ -201,7 +185,7 @@ test "listen + connect + accept round-trip" {
     var server = try listen(&io, 0, .{});
     defer close_server(&server);
 
-    const port = getPort(server.handle);
+    const port = get_port(server.handle);
 
     var compl_connect: IO.Future = undefined;
     var compl_accept: IO.Future = undefined;
@@ -228,7 +212,7 @@ test "send and receive data" {
     var server = try listen(&io, 0, .{});
     defer close_server(&server);
 
-    const port = getPort(server.handle);
+    const port = get_port(server.handle);
     const msg = "hello glu!";
 
     var compl_connect: IO.Future = undefined;

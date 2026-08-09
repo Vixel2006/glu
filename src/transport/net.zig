@@ -18,6 +18,22 @@ pub fn address_to_endpoint(addr: posix.sockaddr.in) Endpoint {
     return ep;
 }
 
+pub fn set_int(fd: i32, level: c_int, opt: u32, val: c_int) void {
+    if (c.setsockopt(fd, level, opt, &val, @sizeOf(c_int)) == -1) {
+        std.log.warn("setsockopt failed for fd {} level {} opt {}", .{ fd, level, opt });
+    }
+}
+
+pub fn set_timeval(fd: i32, level: c_int, opt: u32, ms: u32) void {
+    const tv = std.c.timeval{
+        .sec = @as(c_int, @intCast(ms / 1000)),
+        .usec = @as(c_int, @intCast((ms % 1000) * 1000)),
+    };
+    if (c.setsockopt(fd, level, opt, &tv, @sizeOf(std.c.timeval)) == -1) {
+        std.log.warn("setsockopt timeval failed for fd {} level {} opt {}", .{ fd, level, opt });
+    }
+}
+
 test "address_to_endpoint from IPv4" {
     const addr: posix.sockaddr.in = .{
         .port = @byteSwap(@as(u16, 8080)),

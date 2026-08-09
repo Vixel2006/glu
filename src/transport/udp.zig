@@ -34,28 +34,12 @@ comptime {
     assert(@sizeOf(IpMreq) == 8);
 }
 
-fn set_int(fd: i32, level: c_int, opt: u32, val: c_int) void {
-    if (c.setsockopt(fd, level, opt, &val, @sizeOf(c_int)) == -1) {
-        std.log.warn("setsockopt failed for fd {} level {} opt {}", .{ fd, level, opt });
-    }
-}
-
-fn set_timeval(fd: i32, level: c_int, opt: u32, ms: u32) void {
-    const tv = std.c.timeval{
-        .sec = @as(c_int, @intCast(ms / 1000)),
-        .usec = @as(c_int, @intCast((ms % 1000) * 1_000_000)),
-    };
-    if (c.setsockopt(fd, level, opt, &tv, @sizeOf(std.c.timeval)) == -1) {
-        std.log.warn("setsockopt timeval failed for fd {} level {} opt {}", .{ fd, level, opt });
-    }
-}
-
 fn apply_socket_opts(fd: i32, config: SocketConfig) void {
-    if (config.recv_buf) |buf| set_int(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.RCVBUF)), buf);
-    if (config.send_buf) |buf| set_int(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.SNDBUF)), buf);
-    set_int(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.BROADCAST)), @as(c_int, @intFromBool(config.broadcast)));
-    if (config.recv_timeout_ms) |ms| set_timeval(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.RCVTIMEO)), ms);
-    if (config.send_timeout_ms) |ms| set_timeval(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.SNDTIMEO)), ms);
+    if (config.recv_buf) |buf| net.set_int(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.RCVBUF)), buf);
+    if (config.send_buf) |buf| net.set_int(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.SNDBUF)), buf);
+    net.set_int(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.BROADCAST)), @as(c_int, @intFromBool(config.broadcast)));
+    if (config.recv_timeout_ms) |ms| net.set_timeval(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.RCVTIMEO)), ms);
+    if (config.send_timeout_ms) |ms| net.set_timeval(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.SNDTIMEO)), ms);
 }
 
 pub fn bind(io: *IO, port: u16, config: SocketConfig) !Socket {
