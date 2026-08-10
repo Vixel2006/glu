@@ -49,7 +49,7 @@ You do not have to write Zig code to help `glu` grow.
 
 ### Prerequisites
 
-*   **Zig 0.17.0-dev** (or the version specified in the root `build.zig.zon`)
+*   **Zig 0.16.0** (or the version specified in the root `build.zig.zon`)
 *   A **POSIX system** (Linux is primary and required for `io_uring` support)
 *   **Git**
 

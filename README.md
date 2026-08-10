@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/zig-0.17.0--dev-%23F7A41D.svg?style=flat-square&logo=zig&logoColor=white" alt="Zig Version" />
+  <img src="https://img.shields.io/badge/zig-0.16.0-%23F7A41D.svg?style=flat-square&logo=zig&logoColor=white" alt="Zig Version" />
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT License" />
   <img src="https://img.shields.io/badge/status-alpha-orange?style=flat-square" alt="Status" />
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square" alt="PRs Welcome" />

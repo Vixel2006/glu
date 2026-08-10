@@ -21,6 +21,8 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "glu", .module = mod },
             },
         }),
+        .use_llvm = true,
+        .use_lld = true,
     });
 
     b.installArtifact(exe);
@@ -41,6 +43,8 @@ pub fn build(b: *std.Build) void {
 
     const lib_tests = b.addTest(.{
         .root_module = test_mod,
+        .use_llvm = true,
+        .use_lld = true,
     });
 
     const run_lib_tests = b.addRunArtifact(lib_tests);
@@ -110,6 +114,8 @@ fn add_example(
                 .{ .name = "glu", .module = glu_mod },
             },
         }),
+        .use_llvm = true,
+        .use_lld = true,
     });
     const install = b.addInstallArtifact(exe, .{});
     examples_step.dependOn(&install.step);
