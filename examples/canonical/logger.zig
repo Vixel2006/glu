@@ -19,12 +19,8 @@ const node_name = "logger";
 const log_file = "telemetry.log";
 const tick_rate_hz = 200;
 
-pub fn main() void {
-    var io = IO.init(32, 0) catch |e| {
-        std.debug.print("[logger] IO init failed: {}\n", .{e});
-        return;
-    };
-    defer io.deinit();
+fn logger_task(ctx: *anyopaque) void {
+    const io: *IO = @ptrCast(@alignCast(ctx));
 
     var chan = glu.Channel.open(topic_logs, @sizeOf(msgs.LogEntry), log_capacity, .best_effort) catch |e| {
         std.debug.print("[logger] raw channel open failed: {}\n", .{e});
@@ -109,9 +105,23 @@ pub fn main() void {
             pending = 0;
         }
 
-        io.run(0) catch |e| {
+        util.timer_sleep(io, 1000 / tick_rate_hz);
+    }
+}
+
+pub fn main() void {
+    var io = IO.init(32, 0) catch |e| {
+        std.debug.print("[logger] IO init failed: {}\n", .{e});
+        return;
+    };
+    defer io.deinit();
+
+    const sched = glu.sched.init();
+    sched.spawn(logger_task, &io);
+
+    while (io.inflight > 0 or !sched.ready.is_empty()) {
+        io.run(10 * std.time.ns_per_ms) catch |e| {
             std.debug.print("[logger] IO run error: {}\n", .{e});
         };
-        util.timer_sleep(&io, 1000 / tick_rate_hz);
     }
 }

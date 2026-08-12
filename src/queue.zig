@@ -31,6 +31,7 @@ pub fn Queue(comptime T: type) type {
 
             const item = self.head.?;
             self.head = item.next;
+            item.next = null;
             if (self.head == null) self.tail = null;
 
             return item;
