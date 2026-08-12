@@ -10,6 +10,12 @@ const io_uring_cqe = linux.io_uring_cqe;
 const io_uring_sqe = linux.io_uring_sqe;
 const log = std.log.scoped(.io);
 
+// Opaque import shims for the fiber scheduler.  Imported lazily so that
+// io.zig does not create a hard compile-time dependency on fiber/sched.zig
+// in environments that do not use the scheduler.
+const Fiber = @import("fiber/fiber.zig").Fiber;
+const Sched = @import("fiber/sched.zig");
+
 fn unexpected_errno(name: []const u8, err: posix.E) posix.UnexpectedError {
     _ = name;
     return posix.unexpectedErrno(err);
@@ -39,10 +45,23 @@ pub const IO = struct {
 
     pub fn run(self: *IO, nanoseconds: u64) !void {
         const deadline = try time.monotonic() + nanoseconds;
+        const sched = Sched.try_current();
 
-        while (try time.monotonic() < deadline) {
+        while (true) {
+            if (sched) |s| s.drive();
+
             try self.submit(0);
             if (self.inflight == 0) break;
+
+            const now = try time.monotonic();
+            if (now >= deadline) {
+                if (nanoseconds == 0) {
+                    try self.complete(0);
+                    try self.run_callback();
+                }
+                break;
+            }
+
             try self.complete(1);
             try self.run_callback();
         }
@@ -104,8 +123,32 @@ pub const IO = struct {
     }
 
     pub fn wait(self: *IO, future: *Future, comptime T: type) anyerror!T {
-        _ = self;
-        return future.wait(T);
+        if (!future.done) {
+            if (Sched.try_current()) |sched| {
+                if (sched.current_fiber) |fiber| {
+                    assert(fiber.state == .RUNNING);
+                    future.wakeup_fiber = fiber;
+                    sched.park();
+                    return future.result_of(T);
+                }
+            }
+
+            while (!future.done) {
+                if (Sched.try_current()) |sched| {
+                    sched.drive();
+                }
+                if (future.done) break;
+
+                try self.submit(0);
+                if (self.inflight > 0) {
+                    try self.complete(1);
+                    try self.run_callback();
+                } else {
+                    break;
+                }
+            }
+        }
+        return future.result_of(T);
     }
 
     pub const NextTickResult = struct {};
@@ -244,6 +287,8 @@ pub const IO = struct {
         operation: Operation,
         done: bool = false,
         next: ?*Future = null,
+        /// If set, the fiber to wake when this future completes.
+        wakeup_fiber: ?*Fiber = null,
 
         pub const Result = union(enum) {
             accept: AcceptError!posix.socket_t,
@@ -354,6 +399,16 @@ pub const IO = struct {
             sqe.user_data = @intFromPtr(future);
         }
 
+        /// Called after `done` is set to `true` to notify a waiting fiber, if any.
+        inline fn maybe_wake(future: *Future) void {
+            if (future.wakeup_fiber) |fiber| {
+                future.wakeup_fiber = null;
+                if (Sched.try_current()) |sched| {
+                    sched.wake(fiber);
+                }
+            }
+        }
+
         fn complete(future: *Future) void {
             switch (future.operation) {
                 .accept => {
@@ -388,6 +443,7 @@ pub const IO = struct {
                     };
                     future.result = .{ .accept = result };
                     future.done = true;
+                    future.maybe_wake();
                 },
                 .close => {
                     const result: CloseError!void = blk: {
@@ -407,6 +463,7 @@ pub const IO = struct {
                     };
                     future.result = .{ .close = result };
                     future.done = true;
+                    future.maybe_wake();
                 },
                 .connect => {
                     const result: ConnectError!void = blk: {
@@ -446,6 +503,7 @@ pub const IO = struct {
                     };
                     future.result = .{ .connect = result };
                     future.done = true;
+                    future.maybe_wake();
                 },
                 .fsync => {
                     const result: FsyncError!void = blk: {
@@ -469,6 +527,7 @@ pub const IO = struct {
                     };
                     future.result = .{ .fsync = result };
                     future.done = true;
+                    future.maybe_wake();
                 },
                 .openat => {
                     const result: OpenatError!posix.fd_t = blk: {
@@ -511,6 +570,7 @@ pub const IO = struct {
                     };
                     future.result = .{ .openat = result };
                     future.done = true;
+                    future.maybe_wake();
                 },
                 .read => {
                     const result: ReadError!usize = blk: {
@@ -543,6 +603,7 @@ pub const IO = struct {
                     };
                     future.result = .{ .read = result };
                     future.done = true;
+                    future.maybe_wake();
                 },
                 .recv => {
                     const result: RecvError!usize = blk: {
@@ -575,6 +636,7 @@ pub const IO = struct {
                     };
                     future.result = .{ .recv = result };
                     future.done = true;
+                    future.maybe_wake();
                 },
                 .send => {
                     const result: SendError!usize = blk: {
@@ -615,6 +677,7 @@ pub const IO = struct {
                     };
                     future.result = .{ .send = result };
                     future.done = true;
+                    future.maybe_wake();
                 },
                 .statx => {
                     const result: StatxError!void = blk: {
@@ -644,6 +707,7 @@ pub const IO = struct {
                     };
                     future.result = .{ .statx = result };
                     future.done = true;
+                    future.maybe_wake();
                 },
                 .timeout => {
                     assert(future.result_raw < 0);
@@ -653,6 +717,7 @@ pub const IO = struct {
                                 const result: TimeoutError!void = error.Unexpected;
                                 future.result = .{ .timeout = result };
                                 future.done = true;
+                                future.maybe_wake();
                                 return;
                             };
                             return;
@@ -664,6 +729,7 @@ pub const IO = struct {
                     const result: TimeoutError!void = err;
                     future.result = .{ .timeout = result };
                     future.done = true;
+                    future.maybe_wake();
                 },
                 .write => {
                     const result: WriteError!usize = blk: {
@@ -698,11 +764,13 @@ pub const IO = struct {
                     };
                     future.result = .{ .write = result };
                     future.done = true;
+                    future.maybe_wake();
                 },
                 .next_tick => {
                     const result: NextTickResult = .{};
                     future.result = .{ .next_tick = result };
                     future.done = true;
+                    future.maybe_wake();
                 },
                 .send_to => {
                     const result: SendToError!usize = blk: {
@@ -740,6 +808,7 @@ pub const IO = struct {
                     };
                     future.result = .{ .send_to = result };
                     future.done = true;
+                    future.maybe_wake();
                 },
                 .recv_from => {
                     const result: RecvFromError!usize = blk: {
@@ -771,20 +840,13 @@ pub const IO = struct {
                     };
                     future.result = .{ .recv_from = result };
                     future.done = true;
+                    future.maybe_wake();
                 },
             }
         }
 
-        fn wait_loop(self: *Future) !void {
-            while (!self.done) {
-                try self.io.submit(1);
-                try self.io.complete(1);
-                try self.io.run_callback();
-            }
-        }
 
-        pub fn wait(self: *Future, comptime T: type) anyerror!T {
-            try self.wait_loop();
+        fn result_of(self: *Future, comptime T: type) anyerror!T {
             switch (self.result) {
                 .accept => |res| {
                     const val = try res;

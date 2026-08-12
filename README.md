@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/glu.png">
-    <img src="assets/glu.png" alt="glu" width="96">
+    <img src="assets/glu.svg" alt="glu" width="96">
   </picture>
 </p>
 

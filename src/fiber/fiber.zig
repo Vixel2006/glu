@@ -3,22 +3,28 @@ const builtin = @import("builtin");
 
 pub const Fiber = struct {
     ctx: Context,
-    state: State,
+    state: State = .READY,
+    next: ?*Fiber = null,
+    /// The fiber's entry function and argument.
+    func: *const fn (*anyopaque) void,
+    arg: *anyopaque,
+    /// The stack backing this fiber. Owned and freed by the scheduler.
+    stack: []align(16) u8,
 
-    const State = enum(u32) {
+    pub const State = enum(u32) {
         READY,
         RUNNING,
         WAITING,
         DEAD,
     };
 
-    const Context = switch (builtin.cpu.arch) {
-        .aarch64 => struct {
+    pub const Context = switch (builtin.cpu.arch) {
+        .aarch64 => extern struct {
             sp: u64,
             fp: u64,
             pc: u64,
         },
-        .x86_64 => struct {
+        .x86_64 => extern struct {
             rsp: u64,
             rbp: u64,
             rip: u64,
@@ -26,7 +32,7 @@ pub const Fiber = struct {
         else => |arch| @compileError("unimplemented architecture: " ++ @tagName(arch)),
     };
 
-    pub const Switch = struct { old: *Context, new: *Context };
+    pub const Switch = extern struct { old: *Context, new: *Context };
 
     pub inline fn context_switch(s: *const Switch) *const Switch {
         return switch (builtin.cpu.arch) {

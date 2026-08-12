@@ -14,6 +14,8 @@ pub const debug = @import("debug/mod.zig");
 pub const net = @import("transport/net.zig");
 pub const tcp = @import("transport/tcp.zig");
 pub const udp = @import("transport/udp.zig");
+pub const fiber = @import("fiber/fiber.zig");
+pub const sched = @import("fiber/sched.zig");
 
 comptime {
     _ = @import("io.zig");
@@ -31,4 +33,6 @@ comptime {
     _ = @import("cli/dispatch.zig");
     _ = @import("launch/toml.zig");
     _ = @import("launch/launcher.zig");
+    _ = @import("fiber/fiber.zig");
+    _ = @import("fiber/sched.zig");
 }
