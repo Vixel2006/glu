@@ -49,23 +49,15 @@ pub const IO = struct {
 
         while (true) {
             if (sched) |s| s.drive();
-
             try self.submit(0);
-            if (self.inflight == 0) break;
-
-            const now = try time.monotonic();
-            if (now >= deadline) {
-                if (nanoseconds == 0) {
-                    try self.complete(0);
-                    try self.run_callback();
-                }
-                break;
-            }
+            if (self.inflight == 0 or (try time.monotonic()) >= deadline) break;
 
             try self.complete(1);
             try self.run_callback();
         }
 
+        try self.complete(0);
+        try self.run_callback();
         try self.submit(0);
     }
 
@@ -844,7 +836,6 @@ pub const IO = struct {
                 },
             }
         }
-
 
         fn result_of(self: *Future, comptime T: type) anyerror!T {
             switch (self.result) {

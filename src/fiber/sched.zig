@@ -6,8 +6,6 @@ const Fiber = @import("fiber.zig").Fiber;
 const Queue = @import("../queue.zig").Queue;
 
 threadlocal var tls_sched: ?*Scheduler = null;
-/// Set right before the scheduler switches to a fiber for the first time and
-/// read once by that fiber's entry thunk. Only fresh fibers ever read it.
 threadlocal var tls_starting_fiber: ?*Fiber = null;
 
 /// Return the scheduler bound to the current thread, or null.
@@ -34,13 +32,9 @@ pub fn init() *Scheduler {
 pub const Scheduler = struct {
     /// FCFS run-queue of fibers in READY state.
     ready: Queue(Fiber),
-    /// The fiber currently executing, or null when the scheduler itself runs.
     current_fiber: ?*Fiber = null,
-    /// Saved context for the scheduler.
     ctx: Fiber.Context,
-    /// Allocator used for fiber stacks and fiber structs.
     allocator: std.mem.Allocator = std.heap.page_allocator,
-    /// Stack size for spawned fibers.
     stack_size: usize = default_stack_size,
 
     pub const default_stack_size: usize = 1 << 20;
@@ -110,7 +104,6 @@ pub const Scheduler = struct {
         }
     }
 
-    /// Suspend the current fiber.
     pub fn park(self: *Scheduler) void {
         const fiber = self.current_fiber orelse @panic("park outside a fiber");
         assert(fiber.state == .RUNNING);
@@ -118,7 +111,6 @@ pub const Scheduler = struct {
         _ = Fiber.context_switch(&Fiber.Switch{ .old = &fiber.ctx, .new = &self.ctx });
     }
 
-    /// Wake a parked fiber, moving it to the ready queue.
     pub fn wake(self: *Scheduler, fiber: *Fiber) void {
         assert(fiber.state == .WAITING);
         fiber.state = .READY;
@@ -211,4 +203,75 @@ test "root io.wait drives spawned fibers" {
     try io.wait(&future, void);
 
     try testing.expect(ran);
+}
+
+test "waiter yields to other fibers and resumes with the io result" {
+    const IO = @import("../io.zig").IO;
+    const posix = std.posix;
+    const testing = std.testing;
+    var io = try IO.init(16, 0);
+    defer io.deinit();
+    const sched = init();
+    sched.allocator = testing.allocator;
+
+    var dir = testing.tmpDir(.{});
+    defer dir.cleanup();
+    var path_buf: [256:0]u8 = undefined;
+    const path_len = (std.fmt.bufPrint(path_buf[0..255], ".zig-cache/tmp/{s}/{s}", .{ dir.sub_path[0..], "sched_yield.bin" }) catch unreachable).len;
+    path_buf[path_len] = 0;
+    const path_z: [*:0]const u8 = path_buf[0..];
+
+    var open_fut: IO.Future = undefined;
+    try io.openat(&open_fut, posix.AT.FDCWD, path_z, .{ .ACCMODE = .RDWR, .CREAT = true, .TRUNC = true }, 0o644);
+    const fd = try io.wait(&open_fut, posix.fd_t);
+
+    const Order = enum { a_start, b_start, b_end, a_end };
+    var order: [4]Order = undefined;
+    var idx: usize = 0;
+    var written: usize = 0;
+    const data = "fiber io yield with result";
+
+    const Ctx = struct {
+        io_ref: *IO,
+        fd: posix.fd_t,
+        data: []const u8,
+        order: []Order,
+        idx: *usize,
+        written: *usize,
+    };
+
+    const S = struct {
+        fn work_a(ctx: *Ctx) void {
+            ctx.order[ctx.idx.*] = .a_start;
+            ctx.idx.* += 1;
+            var future: IO.Future = undefined;
+            ctx.io_ref.write(&future, ctx.fd, ctx.data, 0) catch unreachable;
+            ctx.written.* = ctx.io_ref.wait(&future, usize) catch unreachable;
+            ctx.order[ctx.idx.*] = .a_end;
+            ctx.idx.* += 1;
+        }
+        fn work_b(ctx: *Ctx) void {
+            ctx.order[ctx.idx.*] = .b_start;
+            ctx.idx.* += 1;
+            ctx.order[ctx.idx.*] = .b_end;
+            ctx.idx.* += 1;
+        }
+    };
+
+    var ctx = Ctx{ .io_ref = &io, .fd = fd, .data = data, .order = &order, .idx = &idx, .written = &written };
+    sched.spawn(S.work_a, &ctx);
+    sched.spawn(S.work_b, &ctx);
+
+    try io.run(10 * std.time.ns_per_ms);
+
+    try testing.expectEqual(@as(usize, 4), idx);
+    try testing.expectEqual(Order.a_start, order[0]);
+    try testing.expectEqual(Order.b_start, order[1]);
+    try testing.expectEqual(Order.b_end, order[2]);
+    try testing.expectEqual(Order.a_end, order[3]);
+    try testing.expectEqual(@as(usize, data.len), written);
+
+    var close_fut: IO.Future = undefined;
+    try io.close(&close_fut, fd);
+    try io.wait(&close_fut, void);
 }
