@@ -108,3 +108,52 @@ Instead of heavy multicast discovery protocols that take seconds to resolve and 
 1.  **Register**: When a node is created, it writes its PID to a file named `/tmp/glu/nodes/<node_name>.pid`.
 2.  **Verify Status**: To check if a node is running, `glu` reads the PID and performs a fast libc `access` check on `/proc/<pid>/status`. This check takes sub-microseconds and requires no network round-trips.
 3.  **Unregister**: When a node shuts down cleanly, it deletes its `.pid` file. If it crashes, the file remains, but the next health check identifies that the PID is inactive and ignores it.
+
+---
+
+## 5. Cooperative Fiber Scheduler
+
+Driving `io.submit` / `io.complete` / `io.run_callback` by hand is powerful but tedious. `glu` layers a **cooperative fiber scheduler** (`src/fiber/`) on top of the io_uring engine so async code reads like straightforward blocking code — without paying kernel context-switch costs.
+
+### User-Space Context Switching
+
+Each `Fiber` carries a `Fiber.Context` capturing the minimum register set needed to resume: the stack pointer, frame pointer, and program counter (`sp`/`fp`/`pc` on aarch64, `rsp`/`rbp`/`rip` on x86_64). A switch (`Fiber.context_switch`) is a hand-written assembly routine that saves the old context, loads the new one, and jumps — no `ucontext`, no signal handlers, no syscalls. The full caller-saved and vector register file is spilled, making the switch safe around arbitrary code, and unsupported architectures are rejected at compile time with `@compileError`. A switch costs tens of nanoseconds.
+
+### Thread-Local Scheduling
+
+A scheduler instance lives in thread-local storage (`tls_sched`): one scheduler per thread, created lazily with `sched.init()` and observable via `sched.try_current()`. It keeps:
+
+*   an **FCFS run-queue** (`Queue(Fiber)`) of `READY` fibers,
+*   a **current fiber** pointer (null while the scheduler itself runs),
+*   its own saved context — the thread's execution state while fibers run,
+*   the allocator and default stack size (1 MiB) used when spawning.
+
+`spawn` allocates a fresh stack and a `Fiber`, seeds the context to jump into a shared `fiber_boot` thunk, and enqueues the fiber as `READY`. Stacks and fiber structs are freed by the scheduler when the fiber is reaped.
+
+### Fiber Lifecycle
+
+```
+spawn --> READY --> RUNNING --> WAITING ------> READY --> ... --> DEAD
+               ^                  |                                  |
+               `-----------------`-------- woken by future completion
+```
+
+1.  `sched.drive()` dequeues the next `READY` fiber, marks it `RUNNING`, and context-switches into it (`fiber_boot` runs the fiber's function).
+2.  When the fiber awaits IO, `io.wait` stashes the fiber on the future (`wakeup_fiber`), and `sched.park()` marks it `WAITING`, handing control back to the scheduler.
+3.  When the kernel completes the operation, `run_callback` → `Future.complete` re-queues the fiber with `sched.wake()` (`WAITING` → `READY`).
+4.  When the fiber's function returns, `fiber_boot` marks it `DEAD` and switches back to the scheduler, which frees its stack and struct.
+
+### Driving the Loop
+
+`io.run(nanoseconds)` binds scheduler and ring together:
+
+```
+while (running) {
+    sched.drive();        // run any ready fibers
+    io.submit(0);         // flush pending SQEs
+    io.complete(1);       // block until at least one CQE resolves
+    io.run_callback();    // complete futures -> wake parked fibers
+}
+```
+
+`io.wait` makes the pair feel synchronous: inside a fiber it parks and resumes transparently; outside one it falls back to blocking the thread on the same ring.

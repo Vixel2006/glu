@@ -170,7 +170,7 @@ pub fn main() !void {
 
 ## 2. Asynchronous I/O Engine (`glu.IO`)
 
-`glu` includes a highly optimized asynchronous I/O engine powered by Linux `io_uring`. All network operations (`tcp` and `udp`) run on top of this engine.
+`glu` includes a highly optimized asynchronous I/O engine powered by Linux `io_uring`. All network operations (`tcp` and `udp`) run on top of this engine. The engine pairs with a stackful, user-space **fiber scheduler** (`src/fiber/`) so async code can be written as straight-line, blocking-style handlers.
 
 ### Struct Definition
 
@@ -206,6 +206,8 @@ Every asynchronous operation takes a preallocated `IO.Future`:
 3.  Either block on the result with `io.wait(&future, T)`, or drive the ring
     yourself with `io.submit` / `io.complete` / `io.run_callback` and poll
     `future.done`.
+4.  Inside a fiber, `io.wait` parks the calling fiber instead of blocking the
+    thread; the fiber resumes automatically when the future completes.
 
 The engine supports `accept`, `close`, `connect`, `read`, `recv`, `send`,
 `write`, `fsync`, `openat`, `statx`, `timeout`, `next_tick`, `send_to`, and
@@ -217,6 +219,86 @@ const IO = glu.IO;
 var compl: IO.Future = undefined;
 try io.next_tick(&compl);
 try io.wait(&compl, void);
+```
+
+### Cooperative Fiber Scheduling (`glu.fiber`, `glu.sched`)
+
+The IO engine is paired with a stackful, user-space fiber scheduler in `src/fiber/`:
+
+*   `glu.fiber.Fiber` — a coroutine with its own stack (default 1 MiB). It holds
+    a saved CPU context (`sp`/`fp`/`pc` on aarch64, `rsp`/`rbp`/`rip` on
+    x86_64) switched entirely in user space via hand-written assembly. Fibers
+    move through `READY`, `RUNNING`, `WAITING`, and `DEAD` states.
+*   `glu.sched` — a thread-local scheduler. Each thread hosts at most one
+    scheduler, which keeps an FCFS run-queue, the fiber currently executing,
+    and the allocator/stack-size used when spawning.
+
+#### Scheduler API
+
+```zig
+const glu = @import("glu");
+
+// Bind (or reuse) the thread-local scheduler for this thread.
+const s = glu.sched.init();
+
+// Check whether this thread hosts a scheduler.
+const maybe_s: ?*glu.sched.Scheduler = glu.sched.try_current();
+
+// Spawn a fiber that runs `func(arg)` until it returns.
+s.spawn(func, arg);
+
+// Run ready fibers until the queue drains.
+s.drive();
+
+// Suspend the running fiber (used internally by io.wait).
+s.park();
+
+// Move a WAITING fiber back to the ready queue.
+s.wake(fiber);
+```
+
+#### Awaiting IO from a fiber
+
+When `io.wait(&future, T)` is called from inside a spawned fiber, it stashes
+the fiber on the future (`future.wakeup_fiber`), parks it, and immediately
+returns control to the scheduler. When the kernel completes the operation and
+its callback fires, `Future.complete` re-queues the fiber, which resumes inside
+`io.wait` and returns the typed result. Handlers therefore read like ordinary
+sequential code.
+
+`io.run(nanoseconds)` drives ready fibers on every loop iteration before it
+submits SQEs and reaps CQEs (`sched.drive()` → `io.submit` → `io.complete` →
+`io.run_callback`), so spawned fibers and the ring make progress together:
+
+```zig
+const std = @import("std");
+const glu = @import("glu");
+const IO = glu.IO;
+
+const Ctx = struct {
+    io: *IO,
+    flag: *bool,
+};
+
+fn work(ctx: *Ctx) void {
+    var future: IO.Future = undefined;
+    ctx.io.next_tick(&future) catch return;
+    ctx.io.wait(&future, void) catch return;
+    ctx.flag.* = future.done;
+}
+
+pub fn main() !void {
+    var io = try IO.init(16, 0);
+    defer io.deinit();
+
+    const s = glu.sched.init();
+    var flag = false;
+    var ctx = Ctx{ .io = &io, .flag = &flag };
+    s.spawn(work, &ctx);
+
+    try io.run(10 * std.time.ns_per_ms);
+    std.debug.assert(flag);
+}
 ```
 
 ---
