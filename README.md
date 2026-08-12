@@ -1,10 +1,14 @@
 
+ <p align="center">
+<pre>
  ██████╗ ██╗     ██╗   ██╗
 ██╔════╝ ██║     ██║   ██║
 ██║  ███╗██║     ██║   ██║
 ██║   ██║██║     ██║   ██║
 ╚██████╔╝███████╗╚██████╔╝
- ╚═════╝ ╚══════╝ ╚═════╝ 
+ ╚═════╝ ╚══════╝ ╚═════╝
+</pre>
+</p>
 
 <p align="center">
   <b>glu</b> — blazingly fast, lock-free, zero-copy robot middleware in Zig.
