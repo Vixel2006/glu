@@ -1,12 +1,7 @@
 
- ```text
- ██████╗ ██╗     ██╗   ██╗
-██╔════╝ ██║     ██║   ██║
-██║  ███╗██║     ██║   ██║
-██║   ██║██║     ██║   ██║
-╚██████╔╝███████╗╚██████╔╝
- ╚═════╝ ╚══════╝ ╚═════╝
-```
+ <p align="center">
+  <img src="assets/glu.svg" alt="glu" />
+</p>
 
 <p align="center">
   <b>glu</b> — blazingly fast, lock-free, zero-copy robot middleware in Zig.
