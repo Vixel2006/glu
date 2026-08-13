@@ -155,7 +155,6 @@ test "spawn and run single fiber" {
     try testing.expect(ran);
 }
 
-
 test "fiber parks on io future and resumes" {
     const IO = @import("../io.zig").IO;
     const testing = std.testing;
