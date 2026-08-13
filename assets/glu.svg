@@ -1,5 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="267" height="166" viewBox="0 0 267 166">
-  <g font-family="'Cascadia Mono', 'Cascadia Code', 'SF Mono', 'Menlo', 'Consolas', 'DejaVu Sans Mono', 'Lucida Console', 'Courier New', monospace" font-size="14" fill="#000000">
+  <style>
+    text { fill: #000000; }
+    @media (prefers-color-scheme: dark) {
+      text { fill: #ffffff; }
+    }
+  </style>
+  <g font-family="'Cascadia Mono', 'Cascadia Code', 'SF Mono', 'Menlo', 'Consolas', 'DejaVu Sans Mono', 'Lucida Console', 'Courier New', monospace" font-size="14">
 <text x="32.4" y="40.8">█</text>
 <text x="40.8" y="40.8">█</text>
 <text x="49.2" y="40.8">█</text>
