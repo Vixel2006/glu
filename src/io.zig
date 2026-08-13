@@ -11,10 +11,10 @@ const io_uring_sqe = linux.io_uring_sqe;
 const log = std.log.scoped(.io);
 
 // Opaque import shims for the fiber scheduler.  Imported lazily so that
-// io.zig does not create a hard compile-time dependency on fiber/sched.zig
+// io.zig does not create a hard compile-time dependency on fiber/asyncio.zig
 // in environments that do not use the scheduler.
 const Fiber = @import("fiber/fiber.zig").Fiber;
-const Sched = @import("fiber/sched.zig");
+const asyncio = @import("fiber/asyncio.zig");
 
 fn unexpected_errno(name: []const u8, err: posix.E) posix.UnexpectedError {
     _ = name;
@@ -45,10 +45,10 @@ pub const IO = struct {
 
     pub fn run(self: *IO, nanoseconds: u64) !void {
         const deadline = try time.monotonic() + nanoseconds;
-        const sched = Sched.try_current();
+        const loop = asyncio.current();
 
         while (true) {
-            if (sched) |s| s.drive();
+            if (loop) |l| l.run_ready();
             try self.submit(0);
             if (self.inflight == 0 or (try time.monotonic()) >= deadline) break;
 
@@ -116,34 +116,39 @@ pub const IO = struct {
 
     pub fn wait(self: *IO, future: *Future, comptime T: type) anyerror!T {
         if (!future.done) {
-            if (Sched.try_current()) |sched| {
-                if (sched.current_fiber) |fiber| {
+            // Inside a fiber: register a wakeup on the future and hand control
+            // back to the scheduler. The event loop (io.run, or the fallback
+            // below) later completes the future and resumes us right here.
+            if (asyncio.current()) |loop| {
+                if (loop.current_fiber) |fiber| {
                     assert(fiber.state == .RUNNING);
                     future.wakeup_fiber = fiber;
-                    sched.park();
-                    return future.result_of(T);
-                }
-            }
-
-            while (!future.done) {
-                if (Sched.try_current()) |sched| {
-                    sched.drive();
-                }
-                if (future.done) break;
-
-                try self.submit(0);
-                if (self.inflight > 0) {
-                    try self.complete(1);
-                    try self.run_callback();
-                } else {
-                    break;
-                }
-            }
+                    loop.yield();
+                } else try self.drive_until_done(future);
+            } else try self.drive_until_done(future);
         }
         return future.result_of(T);
     }
 
-    pub const NextTickResult = struct {};
+    /// Drive the ring until `future` completes. Also runs the cooperative
+    /// scheduler so that ready fibers make progress while we block on the
+    /// kernel for the next completion.
+    fn drive_until_done(self: *IO, future: *Future) !void {
+        while (!future.done) {
+            if (asyncio.current()) |loop| loop.run_ready();
+            if (future.done) break;
+
+            try self.submit(0);
+            if (self.inflight == 0) {
+                // The future was never enqueued (or can only be produced by a
+                // parked fiber), so nothing will ever complete it. Fail loudly
+                // instead of returning the uninitialized result.
+                return error.FutureNotSubmitted;
+            }
+            try self.complete(1);
+            try self.run_callback();
+        }
+    }
 
     pub fn socket(self: *IO, domain: u32, type_: u32, protocol: u32) !posix.socket_t {
         _ = self;
@@ -275,29 +280,15 @@ pub const IO = struct {
     pub const Future = struct {
         io: *IO,
         result_raw: i32 = undefined,
-        result: Result = undefined,
+        /// The value produced by a successful operation (0 for value-less ops).
+        value: u64 = 0,
+        /// Set to the error if the operation failed.
+        err: ?anyerror = null,
         operation: Operation,
         done: bool = false,
         next: ?*Future = null,
         /// If set, the fiber to wake when this future completes.
         wakeup_fiber: ?*Fiber = null,
-
-        pub const Result = union(enum) {
-            accept: AcceptError!posix.socket_t,
-            close: CloseError!void,
-            connect: ConnectError!void,
-            read: ReadError!usize,
-            recv: RecvError!usize,
-            send: SendError!usize,
-            write: WriteError!usize,
-            fsync: FsyncError!void,
-            openat: OpenatError!posix.fd_t,
-            statx: StatxError!void,
-            timeout: TimeoutError!void,
-            next_tick: NextTickResult,
-            send_to: SendToError!usize,
-            recv_from: RecvFromError!usize,
-        };
 
         fn prep(future: *Future, sqe: *io_uring_sqe) void {
             switch (future.operation) {
@@ -395,10 +386,24 @@ pub const IO = struct {
         inline fn maybe_wake(future: *Future) void {
             if (future.wakeup_fiber) |fiber| {
                 future.wakeup_fiber = null;
-                if (Sched.try_current()) |sched| {
-                    sched.wake(fiber);
+                if (asyncio.current()) |loop| {
+                    loop.wake(fiber);
                 }
             }
+        }
+
+        /// Mark the future as successfully completed with `value`.
+        inline fn finish(future: *Future, value: u64) void {
+            future.value = value;
+            future.done = true;
+            future.maybe_wake();
+        }
+
+        /// Mark the future as failed with `err`.
+        inline fn fail(future: *Future, err: anyerror) void {
+            future.err = err;
+            future.done = true;
+            future.maybe_wake();
         }
 
         fn complete(future: *Future) void {
@@ -433,9 +438,7 @@ pub const IO = struct {
                             break :blk @intCast(future.result_raw);
                         }
                     };
-                    future.result = .{ .accept = result };
-                    future.done = true;
-                    future.maybe_wake();
+                    if (result) |fd| future.finish(@intCast(fd)) else |e| future.fail(e);
                 },
                 .close => {
                     const result: CloseError!void = blk: {
@@ -453,9 +456,7 @@ pub const IO = struct {
                             assert(future.result_raw == 0);
                         }
                     };
-                    future.result = .{ .close = result };
-                    future.done = true;
-                    future.maybe_wake();
+                    if (result) |_| future.finish(0) else |e| future.fail(e);
                 },
                 .connect => {
                     const result: ConnectError!void = blk: {
@@ -493,9 +494,7 @@ pub const IO = struct {
                             assert(future.result_raw == 0);
                         }
                     };
-                    future.result = .{ .connect = result };
-                    future.done = true;
-                    future.maybe_wake();
+                    if (result) |_| future.finish(0) else |e| future.fail(e);
                 },
                 .fsync => {
                     const result: FsyncError!void = blk: {
@@ -517,9 +516,7 @@ pub const IO = struct {
                             assert(future.result_raw == 0);
                         }
                     };
-                    future.result = .{ .fsync = result };
-                    future.done = true;
-                    future.maybe_wake();
+                    if (result) |_| future.finish(0) else |e| future.fail(e);
                 },
                 .openat => {
                     const result: OpenatError!posix.fd_t = blk: {
@@ -560,9 +557,7 @@ pub const IO = struct {
                             break :blk @intCast(future.result_raw);
                         }
                     };
-                    future.result = .{ .openat = result };
-                    future.done = true;
-                    future.maybe_wake();
+                    if (result) |fd| future.finish(@intCast(fd)) else |e| future.fail(e);
                 },
                 .read => {
                     const result: ReadError!usize = blk: {
@@ -593,9 +588,7 @@ pub const IO = struct {
                             break :blk @intCast(future.result_raw);
                         }
                     };
-                    future.result = .{ .read = result };
-                    future.done = true;
-                    future.maybe_wake();
+                    if (result) |n| future.finish(@intCast(n)) else |e| future.fail(e);
                 },
                 .recv => {
                     const result: RecvError!usize = blk: {
@@ -626,9 +619,7 @@ pub const IO = struct {
                             break :blk @intCast(future.result_raw);
                         }
                     };
-                    future.result = .{ .recv = result };
-                    future.done = true;
-                    future.maybe_wake();
+                    if (result) |n| future.finish(@intCast(n)) else |e| future.fail(e);
                 },
                 .send => {
                     const result: SendError!usize = blk: {
@@ -667,9 +658,7 @@ pub const IO = struct {
                             break :blk @intCast(future.result_raw);
                         }
                     };
-                    future.result = .{ .send = result };
-                    future.done = true;
-                    future.maybe_wake();
+                    if (result) |n| future.finish(@intCast(n)) else |e| future.fail(e);
                 },
                 .statx => {
                     const result: StatxError!void = blk: {
@@ -697,19 +686,14 @@ pub const IO = struct {
                             assert(future.result_raw == 0);
                         }
                     };
-                    future.result = .{ .statx = result };
-                    future.done = true;
-                    future.maybe_wake();
+                    if (result) |_| future.finish(0) else |e| future.fail(e);
                 },
                 .timeout => {
                     assert(future.result_raw < 0);
                     const err = switch (@as(posix.E, @enumFromInt(-future.result_raw))) {
                         .INTR => {
                             future.io.enqueue(future) catch {
-                                const result: TimeoutError!void = error.Unexpected;
-                                future.result = .{ .timeout = result };
-                                future.done = true;
-                                future.maybe_wake();
+                                future.fail(error.Unexpected);
                                 return;
                             };
                             return;
@@ -719,9 +703,7 @@ pub const IO = struct {
                         else => |errno| unexpected_errno("timeout", errno),
                     };
                     const result: TimeoutError!void = err;
-                    future.result = .{ .timeout = result };
-                    future.done = true;
-                    future.maybe_wake();
+                    if (result) |_| future.finish(0) else |e| future.fail(e);
                 },
                 .write => {
                     const result: WriteError!usize = blk: {
@@ -754,15 +736,10 @@ pub const IO = struct {
                             break :blk @intCast(future.result_raw);
                         }
                     };
-                    future.result = .{ .write = result };
-                    future.done = true;
-                    future.maybe_wake();
+                    if (result) |n| future.finish(@intCast(n)) else |e| future.fail(e);
                 },
                 .next_tick => {
-                    const result: NextTickResult = .{};
-                    future.result = .{ .next_tick = result };
-                    future.done = true;
-                    future.maybe_wake();
+                    future.finish(0);
                 },
                 .send_to => {
                     const result: SendToError!usize = blk: {
@@ -798,9 +775,7 @@ pub const IO = struct {
                             break :blk @intCast(future.result_raw);
                         }
                     };
-                    future.result = .{ .send_to = result };
-                    future.done = true;
-                    future.maybe_wake();
+                    if (result) |n| future.finish(@intCast(n)) else |e| future.fail(e);
                 },
                 .recv_from => {
                     const result: RecvFromError!usize = blk: {
@@ -830,85 +805,19 @@ pub const IO = struct {
                             break :blk @intCast(future.result_raw);
                         }
                     };
-                    future.result = .{ .recv_from = result };
-                    future.done = true;
-                    future.maybe_wake();
+                    if (result) |n| future.finish(@intCast(n)) else |e| future.fail(e);
                 },
             }
         }
 
+        /// Unwrap the completion into the caller's requested type `T`. If the
+        /// operation failed, `self.err` is returned; otherwise value-carrying
+        /// operations yield their value cast to `T` (callers of value-less
+        /// operations pass `T == void`).
         fn result_of(self: *Future, comptime T: type) anyerror!T {
-            switch (self.result) {
-                .accept => |res| {
-                    const val = try res;
-                    if (comptime T == void) return;
-                    return @intCast(val);
-                },
-                .close => |res| {
-                    try res;
-                    if (comptime T == void) return;
-                    return error.TypeMismatch;
-                },
-                .connect => |res| {
-                    try res;
-                    if (comptime T == void) return;
-                    return error.TypeMismatch;
-                },
-                .read => |res| {
-                    const val = try res;
-                    if (comptime T == void) return;
-                    return @intCast(val);
-                },
-                .recv => |res| {
-                    const val = try res;
-                    if (comptime T == void) return;
-                    return @intCast(val);
-                },
-                .send => |res| {
-                    const val = try res;
-                    if (comptime T == void) return;
-                    return @intCast(val);
-                },
-                .write => |res| {
-                    const val = try res;
-                    if (comptime T == void) return;
-                    return @intCast(val);
-                },
-                .fsync => |res| {
-                    try res;
-                    if (comptime T == void) return;
-                    return error.TypeMismatch;
-                },
-                .openat => |res| {
-                    const val = try res;
-                    if (comptime T == void) return;
-                    return @intCast(val);
-                },
-                .statx => |res| {
-                    try res;
-                    if (comptime T == void) return;
-                    return error.TypeMismatch;
-                },
-                .timeout => |res| {
-                    try res;
-                    if (comptime T == void) return;
-                    return error.TypeMismatch;
-                },
-                .next_tick => {
-                    if (comptime T == void) return;
-                    return error.TypeMismatch;
-                },
-                .send_to => |res| {
-                    const val = try res;
-                    if (comptime T == void) return;
-                    return @intCast(val);
-                },
-                .recv_from => |res| {
-                    const val = try res;
-                    if (comptime T == void) return;
-                    return @intCast(val);
-                },
-            }
+            if (self.err) |e| return e;
+            if (comptime T == void) return;
+            return @intCast(self.value);
         }
     };
 
@@ -1345,6 +1254,15 @@ test "enqueue beyond ring capacity returns error.SQFull" {
         };
     }
     try testing.expect(saw_full);
+}
+
+test "root wait on an unsubmitted future fails loudly instead of returning garbage" {
+    var io = try IO.init(2, 0);
+    defer io.deinit();
+    var future: IO.Future = undefined;
+    // Initialized like io.next_tick would, but never enqueued on the ring.
+    future = .{ .io = &io, .operation = .next_tick };
+    try testing.expectError(error.FutureNotSubmitted, io.wait(&future, void));
 }
 
 test "file ops: openat, write, fsync, statx, read, close" {

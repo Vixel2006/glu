@@ -116,10 +116,10 @@ pub fn main() void {
     };
     defer io.deinit();
 
-    const sched = glu.sched.init();
-    sched.spawn(logger_task, &io);
+    const loop = glu.asyncio.get_event_loop();
+    loop.create_task(logger_task, &io);
 
-    while (io.inflight > 0 or !sched.ready.is_empty()) {
+    while (io.inflight > 0 or !loop.ready.is_empty()) {
         io.run(10 * std.time.ns_per_ms) catch |e| {
             std.debug.print("[logger] IO run error: {}\n", .{e});
         };

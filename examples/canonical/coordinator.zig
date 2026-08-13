@@ -195,10 +195,11 @@ pub fn main() void {
         sample_count = 0;
 
         if (recv_future.done) {
-            if (recv_future.result.recv_from) |n| {
-                if (n > 0) node.log("operator", .info, recv_buf[0..n]);
-            } else |_| {
+            if (recv_future.err) |_| {
                 node.log("coordinator", .fatal, "multicast recv failed");
+            } else {
+                const n: usize = @intCast(recv_future.value);
+                if (n > 0) node.log("operator", .info, recv_buf[0..n]);
             }
             recv_active = false;
         }

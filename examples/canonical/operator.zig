@@ -127,18 +127,19 @@ fn run_tcp_server() void {
             }
 
             if (send_pending and compl_send.done) {
-                _ = compl_send.result.send catch |e| {
+                if (compl_send.err) |e| {
                     std.debug.print("[op/tcp] send error: {}\n", .{e});
                     break;
-                };
+                }
                 send_pending = false;
             }
 
             if (compl_recv.done) {
-                const n = compl_recv.result.recv catch |e| {
+                if (compl_recv.err) |e| {
                     std.debug.print("[op/tcp] recv error: {}\n", .{e});
                     break;
-                };
+                }
+                const n: usize = @intCast(compl_recv.value);
                 if (n == 0) {
                     std.debug.print("[op/tcp] client disconnected\n", .{});
                     break;
@@ -274,9 +275,10 @@ fn run_display() void {
         }
 
         if (recv_future.done) {
-            if (recv_future.result.recv_from) |n| {
+            if (recv_future.err == null) {
+                const n: usize = @intCast(recv_future.value);
                 std.debug.print("[op/display] UDP discovery: {s}\n", .{recv_buf[0..n]});
-            } else |_| {}
+            }
             recv_active = false;
         }
         if (!recv_active) {
@@ -288,10 +290,10 @@ fn run_display() void {
         }
 
         if (broadcast_future.done) {
-            if (broadcast_future.result.send_to) |_| {
-                // Broadcast delivered.
-            } else |e| {
+            if (broadcast_future.err) |e| {
                 std.debug.print("[op/display] multicast send_to error: {}\n", .{e});
+            } else {
+                // Broadcast delivered.
             }
             broadcast_active = false;
         }

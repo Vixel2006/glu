@@ -10,7 +10,7 @@ Welcome to the **glu** documentation! If you are looking for a high-performance,
 
 To help you get started and master `glu` quickly, we've structured our documentation into the following guides:
 
-*   **[API Reference](file:///home/vixel/code/glu/docs/api.md)**: A complete reference of the `glu` API, featuring detailed signatures and verified code examples for Shared Memory Pub/Sub, `glu.IO` (io_uring), Cooperative Fibers (`glu.sched`), TCP, UDP, and the Node Registry.
+*   **[API Reference](file:///home/vixel/code/glu/docs/api.md)**: A complete reference of the `glu` API, featuring detailed signatures and verified code examples for Shared Memory Pub/Sub, `glu.IO` (io_uring), Cooperative AsyncIO (`glu.asyncio`), TCP, UDP, and the Node Registry.
 *   **[Architecture & Internals](file:///home/vixel/code/glu/docs/architecture.md)**: Under the hood. Learn how our packed memory layouts, lock-free ring buffers, slowest-reader backpressure, file-based registry, and cooperative fiber scheduler keep things ultra-fast and robust.
 *   **[Orchestration & CLI](file:///home/vixel/code/glu/docs/launch.md)**: Configure your node ecosystem with `launch.toml` and manage live processes easily using CLI commands like `glu launch`, `glu nodes list`, and `glu topics info`.
 

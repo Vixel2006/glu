@@ -96,9 +96,9 @@ pub fn main() void {
             health_seq += 1;
 
             if (heartbeat.done) {
-                _ = heartbeat.result.send_to catch |e| {
+                if (heartbeat.err) |e| {
                     std.debug.print("[sensor] warning: heartbeat send error: {}\n", .{e});
-                };
+                }
                 heartbeat_active = false;
             }
             if (!heartbeat_active) {

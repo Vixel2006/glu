@@ -111,9 +111,9 @@ Instead of heavy multicast discovery protocols that take seconds to resolve and 
 
 ---
 
-## 5. Cooperative Fiber Scheduler
+## 5. Cooperative AsyncIO Scheduler
 
-Driving `io.submit` / `io.complete` / `io.run_callback` by hand is powerful but tedious. `glu` layers a **cooperative fiber scheduler** (`src/fiber/`) on top of the io_uring engine so async code reads like straightforward blocking code — without paying kernel context-switch costs.
+Driving `io.submit` / `io.complete` / `io.run_callback` by hand is powerful but tedious. `glu` layers a **cooperative fiber scheduler** (`src/fiber/`) on top of the io_uring engine so async code reads like straightforward blocking code — without paying kernel context-switch costs. The public API mirrors Python's `asyncio`: `glu.asyncio` hosts the thread-local event loop, and `create_task` / `run_ready` / `yield` / `wake` map to scheduling a coroutine, running it, and suspending/resuming it.
 
 ### User-Space Context Switching
 
@@ -121,38 +121,38 @@ Each `Fiber` carries a `Fiber.Context` capturing the minimum register set needed
 
 ### Thread-Local Scheduling
 
-A scheduler instance lives in thread-local storage (`tls_sched`): one scheduler per thread, created lazily with `sched.init()` and observable via `sched.try_current()`. It keeps:
+An event loop instance lives in thread-local storage (`tls_loop`): one loop per thread, created lazily with `asyncio.get_event_loop()` and observable via `asyncio.current()`. It keeps:
 
 *   an **FCFS run-queue** (`Queue(Fiber)`) of `READY` fibers,
-*   a **current fiber** pointer (null while the scheduler itself runs),
+*   a **current fiber** pointer (null while the loop itself runs),
 *   its own saved context — the thread's execution state while fibers run,
-*   the allocator and default stack size (1 MiB) used when spawning.
+*   the allocator and default stack size (1 MiB) used when creating tasks.
 
-`spawn` allocates a fresh stack and a `Fiber`, seeds the context to jump into a shared `fiber_boot` thunk, and enqueues the fiber as `READY`. Stacks and fiber structs are freed by the scheduler when the fiber is reaped.
+`create_task` allocates a fresh stack and a `Fiber`, seeds the context to jump into a shared `fiber_boot` thunk, and enqueues the fiber as `READY`. Stacks and fiber structs are freed by the loop when the fiber is reaped.
 
 ### Fiber Lifecycle
 
 ```
-spawn --> READY --> RUNNING --> WAITING ------> READY --> ... --> DEAD
-               ^                  |                                  |
-               `-----------------`-------- woken by future completion
+create_task --> READY --> RUNNING --> WAITING ------> READY --> ... --> DEAD
+                      ^                  |                                  |
+                      `-----------------`-------- woken by future completion
 ```
 
-1.  `sched.drive()` dequeues the next `READY` fiber, marks it `RUNNING`, and context-switches into it (`fiber_boot` runs the fiber's function).
-2.  When the fiber awaits IO, `io.wait` stashes the fiber on the future (`wakeup_fiber`), and `sched.park()` marks it `WAITING`, handing control back to the scheduler.
-3.  When the kernel completes the operation, `run_callback` → `Future.complete` re-queues the fiber with `sched.wake()` (`WAITING` → `READY`).
-4.  When the fiber's function returns, `fiber_boot` marks it `DEAD` and switches back to the scheduler, which frees its stack and struct.
+1.  `loop.run_ready()` dequeues the next `READY` fiber, marks it `RUNNING`, and context-switches into it (`fiber_boot` runs the fiber's function).
+2.  When the fiber awaits IO, `io.wait` stashes the fiber on the future (`wakeup_fiber`), and `loop.yield()` marks it `WAITING`, handing control back to the loop.
+3.  When the kernel completes the operation, `run_callback` → `Future.complete` re-queues the fiber with `loop.wake()` (`WAITING` → `READY`).
+4.  When the fiber's function returns, `fiber_boot` marks it `DEAD` and switches back to the loop, which frees its stack and struct.
 
 ### Driving the Loop
 
-`io.run(nanoseconds)` binds scheduler and ring together:
+`io.run(nanoseconds)` binds loop and ring together:
 
 ```
 while (running) {
-    sched.drive();        // run any ready fibers
+    loop.run_ready();     // run any ready fibers
     io.submit(0);         // flush pending SQEs
     io.complete(1);       // block until at least one CQE resolves
-    io.run_callback();    // complete futures -> wake parked fibers
+    io.run_callback();    // complete futures -> wake yielded fibers
 }
 ```
 

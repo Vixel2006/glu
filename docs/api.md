@@ -221,54 +221,54 @@ try io.next_tick(&compl);
 try io.wait(&compl, void);
 ```
 
-### Cooperative Fiber Scheduling (`glu.fiber`, `glu.sched`)
+### Cooperative AsyncIO Scheduling (`glu.fiber`, `glu.asyncio`)
 
-The IO engine is paired with a stackful, user-space fiber scheduler in `src/fiber/`:
+The IO engine is paired with a stackful, user-space fiber scheduler in `src/fiber/`. Its API mirrors Python's `asyncio`:
 
 *   `glu.fiber.Fiber` — a coroutine with its own stack (default 1 MiB). It holds
     a saved CPU context (`sp`/`fp`/`pc` on aarch64, `rsp`/`rbp`/`rip` on
     x86_64) switched entirely in user space via hand-written assembly. Fibers
     move through `READY`, `RUNNING`, `WAITING`, and `DEAD` states.
-*   `glu.sched` — a thread-local scheduler. Each thread hosts at most one
-    scheduler, which keeps an FCFS run-queue, the fiber currently executing,
-    and the allocator/stack-size used when spawning.
+*   `glu.asyncio.AsyncIo` — the thread-local event loop. Each thread hosts at
+    most one loop, which keeps an FCFS run-queue, the fiber currently
+    executing, and the allocator/stack-size used when creating tasks.
 
-#### Scheduler API
+#### Event Loop API
 
 ```zig
 const glu = @import("glu");
 
-// Bind (or reuse) the thread-local scheduler for this thread.
-const s = glu.sched.init();
+// Bind (or reuse) the thread-local event loop for this thread.
+const loop = glu.asyncio.get_event_loop();
 
-// Check whether this thread hosts a scheduler.
-const maybe_s: ?*glu.sched.Scheduler = glu.sched.try_current();
+// Check whether this thread hosts an event loop.
+const maybe_loop: ?*glu.asyncio.AsyncIo = glu.asyncio.current();
 
-// Spawn a fiber that runs `func(arg)` until it returns.
-s.spawn(func, arg);
+// Schedule a fiber that runs `func(arg)` until it returns.
+loop.create_task(func, arg);
 
 // Run ready fibers until the queue drains.
-s.drive();
+loop.run_ready();
 
-// Suspend the running fiber (used internally by io.wait).
-s.park();
+// Yield the running fiber to the loop (used internally by io.wait).
+loop.yield();
 
 // Move a WAITING fiber back to the ready queue.
-s.wake(fiber);
+loop.wake(fiber);
 ```
 
 #### Awaiting IO from a fiber
 
-When `io.wait(&future, T)` is called from inside a spawned fiber, it stashes
-the fiber on the future (`future.wakeup_fiber`), parks it, and immediately
-returns control to the scheduler. When the kernel completes the operation and
+When `io.wait(&future, T)` is called from inside a created fiber, it stashes
+the fiber on the future (`future.wakeup_fiber`), yields it, and immediately
+returns control to the loop. When the kernel completes the operation and
 its callback fires, `Future.complete` re-queues the fiber, which resumes inside
 `io.wait` and returns the typed result. Handlers therefore read like ordinary
 sequential code.
 
-`io.run(nanoseconds)` drives ready fibers on every loop iteration before it
-submits SQEs and reaps CQEs (`sched.drive()` → `io.submit` → `io.complete` →
-`io.run_callback`), so spawned fibers and the ring make progress together:
+`io.run(nanoseconds)` runs ready fibers on every loop iteration before it
+submits SQEs and reaps CQEs (`loop.run_ready()` → `io.submit` → `io.complete` →
+`io.run_callback`), so created fibers and the ring make progress together:
 
 ```zig
 const std = @import("std");
@@ -291,10 +291,10 @@ pub fn main() !void {
     var io = try IO.init(16, 0);
     defer io.deinit();
 
-    const s = glu.sched.init();
+    const loop = glu.asyncio.get_event_loop();
     var flag = false;
     var ctx = Ctx{ .io = &io, .flag = &flag };
-    s.spawn(work, &ctx);
+    loop.create_task(work, &ctx);
 
     try io.run(10 * std.time.ns_per_ms);
     std.debug.assert(flag);

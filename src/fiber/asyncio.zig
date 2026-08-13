@@ -5,31 +5,31 @@ const assert = std.debug.assert;
 const Fiber = @import("fiber.zig").Fiber;
 const Queue = @import("../queue.zig").Queue;
 
-threadlocal var tls_sched: ?*Scheduler = null;
+threadlocal var tls_loop: ?*AsyncIo = null;
 threadlocal var tls_starting_fiber: ?*Fiber = null;
 
-/// Return the scheduler bound to the current thread, or null.
-pub fn try_current() ?*Scheduler {
-    return tls_sched;
+/// Return the event loop bound to the current thread, or null.
+pub fn current() ?*AsyncIo {
+    return tls_loop;
 }
 
-/// Create (or reuse) the thread-local scheduler and return it.
-/// The scheduler stays bound to the thread for its lifetime.
-pub fn init() *Scheduler {
-    if (tls_sched) |sched| {
-        return sched;
+/// Create (or reuse) the thread-local event loop and return it.
+/// The loop stays bound to the thread for its lifetime.
+pub fn get_event_loop() *AsyncIo {
+    if (tls_loop) |loop| {
+        return loop;
     }
-    const sched = std.heap.page_allocator.create(Scheduler) catch @panic("out of memory allocating scheduler");
-    sched.* = .{
+    const loop = std.heap.page_allocator.create(AsyncIo) catch @panic("out of memory allocating event loop");
+    loop.* = .{
         .ready = Queue(Fiber).init(),
         .current_fiber = null,
         .ctx = std.mem.zeroes(Fiber.Context),
     };
-    tls_sched = sched;
-    return sched;
+    tls_loop = loop;
+    return loop;
 }
 
-pub const Scheduler = struct {
+pub const AsyncIo = struct {
     /// FCFS run-queue of fibers in READY state.
     ready: Queue(Fiber),
     current_fiber: ?*Fiber = null,
@@ -39,19 +39,19 @@ pub const Scheduler = struct {
 
     pub const default_stack_size: usize = 1 << 20;
 
-    /// Add a fiber that runs `func(arg)` until it returns. The fiber and its
-    /// stack are allocated from `allocator` and freed when the fiber exits.
-    pub fn spawn(self: *Scheduler, comptime func: anytype, arg: anytype) void {
+    /// Schedule a fiber that runs `func(arg)` until it returns. The fiber and
+    /// its stack are allocated from `allocator` and freed when the fiber exits.
+    pub fn create_task(self: *AsyncIo, comptime func: anytype, arg: anytype) void {
         const fn_ptr: *const fn (*anyopaque) void = @ptrFromInt(@intFromPtr(&func));
         const arg_ptr: *anyopaque = @ptrCast(arg);
 
         const stack = self.allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(16), self.stack_size) catch |e| {
-            std.debug.panic("spawn: unable to allocate fiber stack: {s}", .{@errorName(e)});
+            std.debug.panic("create_task: unable to allocate fiber stack: {s}", .{@errorName(e)});
         };
 
         const fiber = self.allocator.create(Fiber) catch |e| {
             self.allocator.free(stack);
-            std.debug.panic("spawn: unable to allocate fiber: {s}", .{@errorName(e)});
+            std.debug.panic("create_task: unable to allocate fiber: {s}", .{@errorName(e)});
         };
 
         fiber.* = .{
@@ -84,7 +84,9 @@ pub const Scheduler = struct {
         self.ready.enqueue(fiber);
     }
 
-    pub fn drive(self: *Scheduler) void {
+    /// Run all currently-ready fibers, switching into each and resuming them
+    /// one at a time until they park or finish.
+    pub fn run_ready(self: *AsyncIo) void {
         while (true) {
             if (self.ready.is_empty()) break;
             const fiber = self.ready.dequeue() catch unreachable;
@@ -104,14 +106,18 @@ pub const Scheduler = struct {
         }
     }
 
-    pub fn park(self: *Scheduler) void {
-        const fiber = self.current_fiber orelse @panic("park outside a fiber");
+    /// Yield control from the current fiber back to the event loop. The fiber
+    /// stays suspended until `resume` enqueues it again; it wakes up at the
+    /// instruction right after this call.
+    pub fn yield(self: *AsyncIo) void {
+        const fiber = self.current_fiber orelse @panic("yield outside a fiber");
         assert(fiber.state == .RUNNING);
         fiber.state = .WAITING;
         _ = Fiber.context_switch(&Fiber.Switch{ .old = &fiber.ctx, .new = &self.ctx });
     }
 
-    pub fn wake(self: *Scheduler, fiber: *Fiber) void {
+    /// Re-enqueue a yielded fiber so the next `run_ready` resumes it.
+    pub fn wake(self: *AsyncIo, fiber: *Fiber) void {
         assert(fiber.state == .WAITING);
         fiber.state = .READY;
         self.ready.enqueue(fiber);
@@ -119,22 +125,22 @@ pub const Scheduler = struct {
 };
 
 /// Entry point for a freshly switched-to fiber. Reads the fiber out of the
-/// thread-local set by the scheduler, runs its function, marks it DEAD, and
-/// hands control back to the scheduler so it can be reaped. Never returns.
+/// thread-local set by the event loop, runs its function, marks it DEAD, and
+/// hands control back to the loop so it can be reaped. Never returns.
 fn fiber_boot() callconv(.c) noreturn {
     const fiber = tls_starting_fiber orelse unreachable;
     tls_starting_fiber = null;
 
     fiber.func(fiber.arg);
     fiber.state = .DEAD;
-    _ = Fiber.context_switch(&Fiber.Switch{ .old = &fiber.ctx, .new = &tls_sched.?.ctx });
+    _ = Fiber.context_switch(&Fiber.Switch{ .old = &fiber.ctx, .new = &tls_loop.?.ctx });
     unreachable;
 }
 
 test "spawn and run single fiber" {
     const testing = std.testing;
-    const sched = init();
-    sched.allocator = testing.allocator;
+    const loop = get_event_loop();
+    loop.allocator = testing.allocator;
 
     var ran = false;
     const S = struct {
@@ -143,8 +149,8 @@ test "spawn and run single fiber" {
         }
     };
 
-    sched.spawn(S.work, &ran);
-    sched.drive();
+    loop.create_task(S.work, &ran);
+    loop.run_ready();
 
     try testing.expect(ran);
 }
@@ -155,8 +161,8 @@ test "fiber parks on io future and resumes" {
     const testing = std.testing;
     var io = try IO.init(16, 0);
     defer io.deinit();
-    const sched = init();
-    sched.allocator = testing.allocator;
+    const loop = get_event_loop();
+    loop.allocator = testing.allocator;
 
     var result: bool = false;
 
@@ -175,7 +181,7 @@ test "fiber parks on io future and resumes" {
     };
 
     var ctx = Ctx{ .io_ref = &io, .flag = &result };
-    sched.spawn(S.work, &ctx);
+    loop.create_task(S.work, &ctx);
     try io.run(10 * std.time.ns_per_ms);
 
     try testing.expect(result);
@@ -186,8 +192,8 @@ test "root io.wait drives spawned fibers" {
     const testing = std.testing;
     var io = try IO.init(16, 0);
     defer io.deinit();
-    const sched = init();
-    sched.allocator = testing.allocator;
+    const loop = get_event_loop();
+    loop.allocator = testing.allocator;
 
     var ran = false;
     const S = struct {
@@ -196,7 +202,7 @@ test "root io.wait drives spawned fibers" {
         }
     };
 
-    sched.spawn(S.work, &ran);
+    loop.create_task(S.work, &ran);
 
     var future: IO.Future = undefined;
     try io.next_tick(&future);
@@ -211,8 +217,8 @@ test "waiter yields to other fibers and resumes with the io result" {
     const testing = std.testing;
     var io = try IO.init(16, 0);
     defer io.deinit();
-    const sched = init();
-    sched.allocator = testing.allocator;
+    const loop = get_event_loop();
+    loop.allocator = testing.allocator;
 
     var dir = testing.tmpDir(.{});
     defer dir.cleanup();
@@ -259,8 +265,8 @@ test "waiter yields to other fibers and resumes with the io result" {
     };
 
     var ctx = Ctx{ .io_ref = &io, .fd = fd, .data = data, .order = &order, .idx = &idx, .written = &written };
-    sched.spawn(S.work_a, &ctx);
-    sched.spawn(S.work_b, &ctx);
+    loop.create_task(S.work_a, &ctx);
+    loop.create_task(S.work_b, &ctx);
 
     try io.run(10 * std.time.ns_per_ms);
 

@@ -36,7 +36,7 @@
 * **Reliability Policies**: Configurable Type of Service (`ToS`). Supports `.reliable` backpressure (publisher spins on the slowest reader to guarantee no data loss) and `.best_effort` (publisher immediately overwrites old slots).
 * **Sub-Millisecond Registry**: File-based node registration using `/tmp/glu/nodes/`. Cheap, local checks utilizing OS-level existence APIs—no discovery daemon.
 * **Async TCP/UDP Networking**: Built-in network transport APIs integrated with a highly optimized `io_uring` asynchronous I/O engine.
-* **Cooperative Fiber Scheduling**: `src/fiber/` bundles a user-space coroutine scheduler (x86_64 & aarch64). Spawn fibers onto the thread-local scheduler and `io.wait` parks them in place — async code reads like blocking code with no kernel context switches.
+* **Cooperative Fiber Scheduling**: `src/fiber/` bundles a user-space coroutine scheduler (x86_64 & aarch64) exposed through an `asyncio`-style API (`glu.asyncio`). Create tasks on the thread-local event loop and `io.wait` yields them in place — async code reads like blocking code with no kernel context switches.
 * **Integrated Orchestrator**: Run entire node ecosystems using a simple TOML configuration. Manage logging, signaling, and diagnostics from the command line.
 
 ---
@@ -67,7 +67,7 @@ Each topic is backed by a POSIX shared memory file mapped into each node's addre
 *   **Write**: The publisher claims slot `W % capacity`, writes fields directly, and atomically increments the write cursor.
 *   **Read**: Each subscriber reads from its own reader index. If the subscriber's cursor lags behind the write cursor, it reads directly from the slot.
 
-Async I/O — TCP, UDP, file access, and timers — runs on a single `io_uring` ring per thread. On top of that ring sits a cooperative fiber scheduler (`src/fiber/`): fibers are lightweight user-space coroutines with their own stacks. Calling `io.wait` inside a fiber parks it until the future completes; `io.run` drives both the ready fibers and the ring in one tight loop.
+Async I/O — TCP, UDP, file access, and timers — runs on a single `io_uring` ring per thread. On top of that ring sits a cooperative fiber scheduler (`src/fiber/`): fibers are lightweight user-space coroutines with their own stacks. Calling `io.wait` inside a fiber yields it until the future completes; `io.run` runs both the ready fibers and the ring in one tight loop.
 
 ---
 
