@@ -25,13 +25,13 @@ const IPPROTO_IP = 0;
 const IP_ADD_MEMBERSHIP = 35;
 const IP_DROP_MEMBERSHIP = 36;
 
-const IpMreq = extern struct {
+const IpMcreq = extern struct {
     imr_multiaddr: u32,
     imr_interface: u32,
 };
 
 comptime {
-    assert(@sizeOf(IpMreq) == 8);
+    assert(@sizeOf(IpMcreq) == 8);
 }
 
 fn apply_socket_opts(fd: i32, config: SocketConfig) void {
@@ -139,11 +139,22 @@ pub fn join_multicast(socket: Socket, group: []const u8) void {
     assert(group.len > 0);
     const parsed = (std.Io.net.IpAddress.parseIp4(group, 0) catch return).ip4;
 
-    const mreq = IpMreq{
+    const mcreq = IpMcreq{
         .imr_multiaddr = @bitCast(parsed.bytes),
         .imr_interface = 0,
     };
-    _ = c.setsockopt(socket, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, @sizeOf(IpMreq));
+    _ = c.setsockopt(socket, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mcreq, @sizeOf(IpMcreq));
+}
+
+pub fn leave_multicast(socket: Socket, group: []const u8) void {
+    assert(group.len > 0);
+    const parsed = (std.Io.net.IpAddress.parseIp4(group, 0) catch return).ip4;
+
+    const mcreq = IpMcreq{
+        .imr_multiaddr = @bitCast(parsed.bytes),
+        .imr_interface = 0,
+    };
+    _ = c.setsockopt(socket, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mcreq, @sizeOf(IpMcreq));
 }
 
 test "bind UDP socket" {
