@@ -43,6 +43,8 @@ pub const Publisher = struct {
         var self = Publisher{ .channel = try Channel.open(name, msg_size, capacity, tos) };
 
         const my_pid = @as(u32, @intCast(std.os.linux.getpid()));
+        _ = @cmpxchgStrong(u32, &self.channel.header.owner_pid, 0, my_pid, .acq_rel, .acquire);
+
         const owner_pid = self.channel.header.owner_pid;
         if (owner_pid != my_pid) {
             if (owner_pid != 0 and is_alive(owner_pid)) {
