@@ -148,13 +148,14 @@ pub fn receive(
     try io.recv(future, socket, buffer);
 }
 
-pub fn join_multicast(socket: Socket, group: []const u8) void {
+pub fn join_multicast(socket: Socket, group: []const u8, interface: []const u8) void {
     assert(group.len > 0);
-    const parsed = (std.Io.net.IpAddress.parseIp4(group, 0) catch return).ip4;
+    const parsed_group = (std.Io.net.IpAddress.parseIp4(group, 0) catch return).ip4;
+    const parsed_iface = (std.Io.net.IpAddress.parseIp4(interface, 0) catch return).ip4;
 
     const mcreq = IpMcreq{
-        .imr_multiaddr = @bitCast(parsed.bytes),
-        .imr_interface = 0,
+        .imr_multiaddr = @bitCast(parsed_group.bytes),
+        .imr_interface = if (std.mem.eql(u8, interface, "")) 0 else @bitCast(parsed_iface.bytes),
     };
     _ = c.setsockopt(socket, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mcreq, @sizeOf(IpMcreq));
 }
