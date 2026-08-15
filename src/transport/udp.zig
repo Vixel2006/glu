@@ -148,13 +148,14 @@ pub fn receive(
     try io.recv(future, socket, buffer);
 }
 
-pub fn join_multicast(socket: Socket, group: []const u8) void {
+pub fn join_multicast(socket: Socket, group: []const u8, interface: []const u8) void {
     assert(group.len > 0);
-    const parsed = (std.Io.net.IpAddress.parseIp4(group, 0) catch return).ip4;
+    const parsed_group = (std.Io.net.IpAddress.parseIp4(group, 0) catch return).ip4;
+    const parsed_iface = (std.Io.net.IpAddress.parseIp4(interface, 0) catch return).ip4;
 
     const mcreq = IpMcreq{
-        .imr_multiaddr = @bitCast(parsed.bytes),
-        .imr_interface = 0,
+        .imr_multiaddr = @bitCast(parsed_group.bytes),
+        .imr_interface = if (std.mem.eql(u8, interface, "")) 0 else @bitCast(parsed_iface.bytes),
     };
     _ = c.setsockopt(socket, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mcreq, @sizeOf(IpMcreq));
 }
@@ -168,24 +169,6 @@ pub fn leave_multicast(socket: Socket, group: []const u8) void {
         .imr_interface = 0,
     };
     _ = c.setsockopt(socket, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mcreq, @sizeOf(IpMcreq));
-}
-
-/// Join a multicast group on a specific interface.
-///
-/// Unlike `join_multicast`, the kernel is told exactly which interface to
-/// join on (e.g. "127.0.0.1" for loopback), which keeps delivery
-/// deterministic on multi-homed hosts and in loopback-based tests.
-pub fn join_multicast_on(socket: Socket, group: []const u8, interface: []const u8) void {
-    assert(group.len > 0);
-    assert(interface.len > 0);
-    const parsed_group = (std.Io.net.IpAddress.parseIp4(group, 0) catch return).ip4;
-    const parsed_iface = (std.Io.net.IpAddress.parseIp4(interface, 0) catch return).ip4;
-
-    const mcreq = IpMcreq{
-        .imr_multiaddr = @bitCast(parsed_group.bytes),
-        .imr_interface = @bitCast(parsed_iface.bytes),
-    };
-    _ = c.setsockopt(socket, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mcreq, @sizeOf(IpMcreq));
 }
 
 /// Set the interface outgoing multicast datagrams are transmitted on.
