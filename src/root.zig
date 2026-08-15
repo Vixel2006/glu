@@ -1,10 +1,11 @@
 pub const IO = @import("io.zig").IO;
-pub const Channel = @import("channel.zig").Channel;
-pub const GLU_MAGIC = @import("channel.zig").GLU_MAGIC;
-pub const ToS = @import("channel.zig").ToS;
-pub const write = @import("channel.zig").write;
-pub const peek = @import("channel.zig").peek;
-pub const ack = @import("channel.zig").ack;
+pub const Channel = @import("channel/channel.zig").Channel;
+pub const Protocol = @import("channel/channel.zig").Protocol;
+pub const channel = @import("channel/channel.zig");
+pub const Shm = @import("channel/shm.zig").Shm;
+pub const shm = @import("channel/shm.zig");
+pub const GLU_MAGIC = @import("channel/shm.zig").GLU_MAGIC;
+pub const ToS = @import("channel/shm.zig").ToS;
 pub const Publisher = @import("api/publisher.zig").Publisher;
 pub const Subscriber = @import("api/subscriber.zig").Subscriber;
 pub const registry = @import("registry.zig");
@@ -19,7 +20,9 @@ pub const asyncio = @import("fiber/asyncio.zig");
 
 comptime {
     _ = @import("io.zig");
-    _ = @import("channel.zig");
+    _ = @import("channel/shm.zig");
+    _ = @import("channel/udp.zig");
+    _ = @import("channel/channel.zig");
     _ = @import("api/publisher.zig");
     _ = @import("api/subscriber.zig");
     _ = @import("discovery/mod.zig");

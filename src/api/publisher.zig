@@ -1,16 +1,13 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const c = std.c;
-const Channel = @import("../channel.zig").Channel;
-const force_unlink = @import("../channel.zig").force_unlink;
-const Header = @import("../channel.zig").Header;
-const ToS = @import("../channel.zig").ToS;
+const Shm = @import("../channel/shm.zig").Shm;
+const force_unlink = @import("../channel/shm.zig").force_unlink;
+const Header = @import("../channel/shm.zig").Header;
+const ToS = @import("../channel/shm.zig").ToS;
 const is_alive = @import("../registry.zig").is_alive;
-const slowest_reader = @import("../channel.zig").slowest_reader;
-const sweep_dead_readers = @import("../channel.zig").sweep_dead_readers;
-const write = @import("../channel.zig").write;
-const peek = @import("../channel.zig").peek;
-const ack = @import("../channel.zig").ack;
+const slowest_reader = @import("../channel/shm.zig").slowest_reader;
+const sweep_dead_readers = @import("../channel/shm.zig").sweep_dead_readers;
 
 const PubErr = error{
     OutOfMemory,
@@ -22,12 +19,12 @@ const PubErr = error{
     SegmentOwned,
 };
 
-/// High-level publisher wrapping a raw `Channel`.
+/// High-level publisher wrapping a raw `Shm`.
 ///
 /// Each topic can have at most one publisher. The publisher attaches to
 /// an existing segment or creates one if none exists. Unlinks on `deinit`.
 pub const Publisher = struct {
-    channel: Channel,
+    channel: Shm,
 
     /// Create (or attach to) a shared-memory channel for topic `name`.
     ///
@@ -40,7 +37,7 @@ pub const Publisher = struct {
         assert(msg_size > 0);
         assert(capacity > 0);
         assert(name.len > 0);
-        var self = Publisher{ .channel = try Channel.open(name, msg_size, capacity, tos) };
+        var self = Publisher{ .channel = try Shm.open(name, msg_size, capacity, tos) };
 
         const my_pid = @as(u32, @intCast(std.os.linux.getpid()));
         _ = @cmpxchgStrong(u32, &self.channel.header.owner_pid, 0, my_pid, .acq_rel, .acquire);
@@ -57,7 +54,7 @@ pub const Publisher = struct {
             // orphaned segment and recreate it fresh.
             force_unlink(name);
             self.deinit();
-            return Publisher{ .channel = try Channel.open(name, msg_size, capacity, tos) };
+            return Publisher{ .channel = try Shm.open(name, msg_size, capacity, tos) };
         }
 
         return self;
@@ -97,7 +94,7 @@ pub const Publisher = struct {
 
     /// Write a message in one shot (reserve + copy + commit).
     pub fn publish(self: *Publisher, msg: *const anyopaque) void {
-        write(&self.channel, msg);
+        self.channel.write(msg);
     }
 };
 
@@ -106,12 +103,12 @@ test "Publisher: reserve and commit directly" {
 
     _ = c.shm_unlink("/glu_test_reserve");
 
-    var chan = try Channel.open("/glu_test_reserve", @sizeOf(TestMsg), 5, .reliable);
+    var chan = try Shm.open("/glu_test_reserve", @sizeOf(TestMsg), 5, .reliable);
     defer chan.close();
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open("/glu_test_reserve", @sizeOf(TestMsg), 5, .reliable) catch c.exit(1);
+        var child_chan = Shm.open("/glu_test_reserve", @sizeOf(TestMsg), 5, .reliable) catch c.exit(1);
         var publisher = Publisher{ .channel = child_chan };
         const slot: *TestMsg = @ptrCast(@alignCast(publisher.reserve()));
         slot.* = TestMsg{ .x = 42, .y = 99 };
@@ -124,22 +121,22 @@ test "Publisher: reserve and commit directly" {
         var ts = std.c.timespec{ .sec = 0, .nsec = 100_000_000 };
         _ = c.nanosleep(&ts, null);
     }
-    const msg: *const TestMsg = @ptrCast(@alignCast(peek(&chan, 0)));
+    const msg: *const TestMsg = @ptrCast(@alignCast(chan.peek(0)));
     try std.testing.expect(msg.x == 42);
     try std.testing.expect(msg.y == 99);
-    ack(&chan, 0);
+    chan.ack(0);
     _ = c.waitpid(pid, null, 0);
 }
 
-test "Publisher: publish a message, read it via raw Channel" {
+test "Publisher: publish a message, read it via raw Shm" {
     const TestMsg = packed struct { x: u32, y: u32 };
 
-    var chan = try Channel.open("/glu_test_publisher", @sizeOf(TestMsg), 5, .reliable);
+    var chan = try Shm.open("/glu_test_publisher", @sizeOf(TestMsg), 5, .reliable);
     defer chan.close();
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open("/glu_test_publisher", @sizeOf(TestMsg), 5, .reliable) catch c.exit(1);
+        var child_chan = Shm.open("/glu_test_publisher", @sizeOf(TestMsg), 5, .reliable) catch c.exit(1);
         var publisher = Publisher{ .channel = child_chan };
         publisher.publish(@ptrCast(&TestMsg{ .x = 7, .y = 13 }));
         child_chan.close();
@@ -150,10 +147,10 @@ test "Publisher: publish a message, read it via raw Channel" {
         var ts = std.c.timespec{ .sec = 0, .nsec = 100_000_000 };
         _ = c.nanosleep(&ts, null);
     }
-    const msg: *const TestMsg = @ptrCast(@alignCast(peek(&chan, 0)));
+    const msg: *const TestMsg = @ptrCast(@alignCast(chan.peek(0)));
     try std.testing.expect(msg.x == 7);
     try std.testing.expect(msg.y == 13);
-    ack(&chan, 0);
+    chan.ack(0);
     _ = c.waitpid(pid, null, 0);
 }
 
@@ -163,7 +160,7 @@ test "Publisher.init rejects a segment owned by a live publisher" {
     _ = c.shm_unlink("/glu_test_live_owner");
 
     // Parent creates the segment (itself the live owner).
-    var base = try Channel.open("/glu_test_live_owner", @sizeOf(TestMsg), 4, .reliable);
+    var base = try Shm.open("/glu_test_live_owner", @sizeOf(TestMsg), 4, .reliable);
     defer base.close();
 
     const pid = c.fork();
@@ -189,8 +186,8 @@ test "Publisher.init does not destroy a segment with alive readers but dead owne
     // Simulate a crashed publisher with an orphaned but readable segment.
     const pid = c.fork();
     if (pid == 0) {
-        var chan = Channel.open("/glu_test_dead_owner_readers", @sizeOf(TestMsg), 4, .reliable) catch c.exit(1);
-        write(&chan, @ptrCast(&TestMsg{ .x = 42 }));
+        var chan = Shm.open("/glu_test_dead_owner_readers", @sizeOf(TestMsg), 4, .reliable) catch c.exit(1);
+        chan.write(@ptrCast(&TestMsg{ .x = 42 }));
         c.exit(0);
     }
     _ = c.waitpid(pid, null, 0);
@@ -211,8 +208,8 @@ test "Publisher.init reclaims a segment left by a crashed publisher" {
     // could never be reclaimed by refcounting alone.
     const pid = c.fork();
     if (pid == 0) {
-        var chan = Channel.open("/glu_test_stale_reclaim", @sizeOf(TestMsg), 4, .reliable) catch c.exit(1);
-        write(&chan, @ptrCast(&TestMsg{ .x = 42 }));
+        var chan = Shm.open("/glu_test_stale_reclaim", @sizeOf(TestMsg), 4, .reliable) catch c.exit(1);
+        chan.write(@ptrCast(&TestMsg{ .x = 42 }));
         c.exit(0);
     }
     _ = c.waitpid(pid, null, 0);

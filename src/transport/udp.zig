@@ -12,6 +12,9 @@ pub const SocketConfig = struct {
     recv_buf: ?i32 = null,
     send_buf: ?i32 = null,
     broadcast: bool = false,
+    /// Allow multiple sockets to bind the same address/port. Required by
+    /// multicast discovery, where every node shares one discovery port.
+    reuse_addr: bool = false,
     recv_timeout_ms: ?u32 = null,
     send_timeout_ms: ?u32 = null,
 };
@@ -22,6 +25,9 @@ pub const ReceiveResult = struct {
 };
 
 const IPPROTO_IP = 0;
+const IP_MULTICAST_IF = 32;
+const IP_MULTICAST_TTL = 33;
+const IP_MULTICAST_LOOP = 34;
 const IP_ADD_MEMBERSHIP = 35;
 const IP_DROP_MEMBERSHIP = 36;
 
@@ -44,6 +50,13 @@ fn apply_socket_opts(fd: i32, config: SocketConfig) void {
 
 pub fn bind(io: *IO, port: u16, config: SocketConfig) !Socket {
     const socket = try io.socket(posix.AF.INET, posix.SOCK.DGRAM, 0);
+
+    // Multiple nodes share the same discovery port, so a second bind to the
+    // same address/port would fail with EADDRINUSE. SO_REUSEADDR must be set
+    // before bind() to take effect on UDP sockets.
+    if (config.reuse_addr) {
+        net.set_int(socket, c.SOL.SOCKET, @as(u32, @intCast(c.SO.REUSEADDR)), 1);
+    }
 
     const addr: posix.sockaddr.in = .{
         .port = @byteSwap(port),
@@ -155,6 +168,38 @@ pub fn leave_multicast(socket: Socket, group: []const u8) void {
         .imr_interface = 0,
     };
     _ = c.setsockopt(socket, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mcreq, @sizeOf(IpMcreq));
+}
+
+/// Join a multicast group on a specific interface.
+///
+/// Unlike `join_multicast`, the kernel is told exactly which interface to
+/// join on (e.g. "127.0.0.1" for loopback), which keeps delivery
+/// deterministic on multi-homed hosts and in loopback-based tests.
+pub fn join_multicast_on(socket: Socket, group: []const u8, interface: []const u8) void {
+    assert(group.len > 0);
+    assert(interface.len > 0);
+    const parsed_group = (std.Io.net.IpAddress.parseIp4(group, 0) catch return).ip4;
+    const parsed_iface = (std.Io.net.IpAddress.parseIp4(interface, 0) catch return).ip4;
+
+    const mcreq = IpMcreq{
+        .imr_multiaddr = @bitCast(parsed_group.bytes),
+        .imr_interface = @bitCast(parsed_iface.bytes),
+    };
+    _ = c.setsockopt(socket, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mcreq, @sizeOf(IpMcreq));
+}
+
+/// Set the interface outgoing multicast datagrams are transmitted on.
+pub fn set_multicast_if(socket: Socket, interface: []const u8) void {
+    assert(interface.len > 0);
+    const parsed = (std.Io.net.IpAddress.parseIp4(interface, 0) catch return).ip4;
+    const addr: u32 = @bitCast(parsed.bytes);
+    _ = c.setsockopt(socket, IPPROTO_IP, IP_MULTICAST_IF, &addr, @sizeOf(u32));
+}
+
+/// Enable/disable a socket receiving its own multicast datagrams.
+pub fn set_multicast_loop(socket: Socket, on: bool) void {
+    const enabled: u8 = @intFromBool(on);
+    _ = c.setsockopt(socket, IPPROTO_IP, IP_MULTICAST_LOOP, &enabled, @sizeOf(u8));
 }
 
 test "bind UDP socket" {
