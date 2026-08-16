@@ -10,23 +10,23 @@ pub const Publisher = @import("api/publisher.zig").Publisher;
 pub const Subscriber = @import("api/subscriber.zig").Subscriber;
 pub const registry = @import("registry.zig");
 pub const discovery = @import("discovery/mod.zig");
-pub const node = @import("node/mod.zig");
+pub const node = @import("management/process.zig");
 pub const debug = @import("debug/mod.zig");
 pub const net = @import("transport/net.zig");
 pub const tcp = @import("transport/tcp.zig");
-pub const udp = @import("transport/udp.zig");
+pub const network = @import("transport/network.zig");
 pub const fiber = @import("fiber/fiber.zig");
 pub const asyncio = @import("fiber/asyncio.zig");
 
 comptime {
     _ = @import("io.zig");
     _ = @import("channel/shm.zig");
-    _ = @import("channel/udp.zig");
+    _ = @import("channel/network.zig");
     _ = @import("channel/channel.zig");
     _ = @import("api/publisher.zig");
     _ = @import("api/subscriber.zig");
     _ = @import("discovery/mod.zig");
-    _ = @import("node/mod.zig");
+    _ = @import("management/process.zig");
     _ = @import("debug/mod.zig");
     _ = @import("transport/net.zig");
     _ = @import("transport/tcp.zig");

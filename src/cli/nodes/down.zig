@@ -1,7 +1,7 @@
 const std = @import("std");
 const utils = @import("../utils.zig");
 const parser = @import("../parser.zig");
-const node = @import("../../node/mod.zig");
+const node = @import("../../management/process.zig");
 const debug = @import("../../debug/mod.zig");
 
 /// Stop all registered nodes, or only the named ones

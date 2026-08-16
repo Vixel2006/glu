@@ -1,14 +1,14 @@
 const std = @import("std");
 
 const Shm = @import("shm.zig").Shm;
-const Udp = @import("udp.zig").Udp;
+const Network = @import("network.zig").Network;
 
 /// The transport protocols a glu channel can be built on.
 pub const Protocol = enum {
     /// Local, zero-copy shared-memory ring buffer.
     shm,
     /// Networked multicast channel.
-    udp,
+    net,
 };
 
 /// Select the channel type for a protocol at comptime.
@@ -18,6 +18,6 @@ pub const Protocol = enum {
 pub fn Channel(comptime protocol: Protocol) type {
     return switch (protocol) {
         .shm => Shm,
-        .udp => Udp,
+        .network => Network,
     };
 }
