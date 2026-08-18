@@ -41,6 +41,6 @@ pub fn get(data: []const u8, arr: [][]const u8) !u32 {
 }
 
 pub fn delete(data: []const u8, arr: [][]const u8) !void {
-    const slot: u32 = try get(data, &arr);
+    const slot: u32 = try get(data, arr);
     arr[slot].len = 0;
 }

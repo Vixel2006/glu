@@ -62,7 +62,7 @@ pub const Network = struct {
     send_buf: [NET_CAP_MAX][NET_PAYLOAD_MAX]u8 = std.mem.zeroes([NET_CAP_MAX][NET_PAYLOAD_MAX]u8),
     next_send: u32 = 0,
 
-    recv_buf: [NET_CAP_MAX][NET_PAYLOAD_MAX]u8 = std.mem.zeros([NET_CAP_MAX][NET_PAYLOAD_MAX]u8),
+    recv_buf: [NET_CAP_MAX][NET_PAYLOAD_MAX]u8 = std.mem.zeroes([NET_CAP_MAX][NET_PAYLOAD_MAX]u8),
     next_recv: u32 = 0,
 
     pub fn open(io: *IO, name: []const u8, msg_size: u32, capacity: u32, tos: ToS) anyerror!Network {
@@ -78,7 +78,7 @@ pub const Network = struct {
         set_nonblocking(socket);
         udp.join_multicast(socket, MULTICAST_HOST, port, "");
 
-        try hash.put(name, &alive_networks);
+        _ = try hash.put(name, &alive_networks);
 
         var self: Network = .{
             .io = io,
@@ -97,16 +97,18 @@ pub const Network = struct {
 
     pub fn close(self: *Network) !void {
         udp.leave_multicast(self.socket, MULTICAST_HOST);
-        try hash.delete(self.name, &alive_networks);
-        try hash.put(self.name, &dead_networks);
+        try hash.delete(&self.name, &alive_networks);
+        _ = try hash.put(&self.name, &dead_networks);
     }
 
     pub const deinit = close;
 
-    pub fn send_to(self: *Network, sender: posix.socket_t, data: []const u8) *IO.Future {
+    pub fn send(self: *Network, future: *IO.Future, data: []const u8) !void {
+        assert(data.len + HEADER_SIZE <= NET_PAYLOAD_MAX);
+
         const frame: Frame = .{
             .magic = NET_MAGIC,
-            .seq = self.next_send * data.len,
+            .seq = self.next_send * @as(u32, @intCast(data.len)),
             .name = self.name,
         };
         @memcpy(self.send_buf[self.next_send][0..HEADER_SIZE], std.mem.asBytes(&frame));
@@ -119,18 +121,93 @@ pub const Network = struct {
             .family = std.c.AF.INET,
         };
 
-        var future: IO.Future = undefined;
-        try self.io.send_to(&future, sender, self.send_buf[self.next_send], addr);
+        try self.io.send_to(future, self.socket, self.send_buf[self.next_send][0 .. HEADER_SIZE + data.len], addr);
         // TODO: When the future returns we should do the increament if the future is returning with the data.
 
-        return future;
     }
 
-    pub fn recv(self: *Network) *IO.Future {
-        var future: IO.Future = undefined;
-        try self.io.recv_from(&future, self.socket, self.recv_buf[self.next_recv]);
+    pub fn recv(self: *Network, future: *IO.Future) !void {
+        try self.io.recv_from(future, self.socket, &self.recv_buf[self.next_recv]);
         // TODO: When the future returns we should do the increament if the future is returning with the data.
-
-        return future;
     }
 };
+
+test "open and close a network channel" {
+    var io = try IO.init(32, 0);
+    defer io.deinit();
+
+    var net = try Network.open(&io, "test_channel", 1024, 8, .best_effort);
+    defer net.close() catch {};
+
+    try std.testing.expectEqual(PORT_BASE + hash.fvn1a("test_channel", PORT_SLOTS), @as(u32, net.port));
+    try std.testing.expectEqual(@as(u32, 1024), net.msg_size);
+    try std.testing.expectEqual(@as(u32, 8), net.cap);
+    try std.testing.expectEqual(@as(u32, "test_channel".len), net.name_len);
+    try std.testing.expect(std.mem.eql(u8, "test_channel", net.name[0..net.name_len]));
+}
+
+test "network channel port is deterministic from name" {
+    const name = "deterministic_port";
+    var io = try IO.init(32, 0);
+    defer io.deinit();
+
+    var a = try Network.open(&io, name, 256, 4, .best_effort);
+    defer a.close() catch {};
+    var b = try Network.open(&io, name, 256, 4, .best_effort);
+    defer b.close() catch {};
+
+    try std.testing.expectEqual(a.port, b.port);
+}
+
+test "send and recv round-trip over multicast loopback" {
+    var io = try IO.init(32, 0);
+    defer io.deinit();
+
+    var net = try Network.open(&io, "roundtrip_channel", 1024, 4, .best_effort);
+    defer net.close() catch {};
+
+    const msg = "hello network channel";
+
+    var send_future: IO.Future = undefined;
+    try net.send(&send_future, msg);
+    const sent = try io.wait(&send_future, usize);
+    try std.testing.expectEqual(@as(usize, msg.len), sent - HEADER_SIZE);
+
+    var recv_future: IO.Future = undefined;
+    try net.recv(&recv_future);
+    const recv_len = try io.wait(&recv_future, usize);
+
+    const buf = net.recv_buf[net.next_recv];
+    try std.testing.expectEqual(@as(usize, msg.len), recv_len - HEADER_SIZE);
+
+    const frame: Frame = std.mem.bytesToValue(Frame, buf[0..HEADER_SIZE]);
+    try std.testing.expectEqual(NET_MAGIC, frame.magic);
+    try std.testing.expect(std.mem.eql(u8, "roundtrip_channel", frame.name[0..net.name_len]));
+    try std.testing.expectEqual(net.next_send * @as(u32, @intCast(msg.len)), frame.seq);
+    try std.testing.expect(std.mem.eql(u8, msg, buf[HEADER_SIZE .. HEADER_SIZE + msg.len]));
+}
+
+test "large payload round-trip" {
+    var io = try IO.init(32, 0);
+    defer io.deinit();
+
+    var net = try Network.open(&io, "large_payload_channel", 8192, 4, .best_effort);
+    defer net.close() catch {};
+
+    var payload: [8192]u8 = undefined;
+    for (0..payload.len) |i| payload[i] = @intCast(i % 251);
+
+    var send_future: IO.Future = undefined;
+    try net.send(&send_future, &payload);
+    const sent = try io.wait(&send_future, usize);
+    try std.testing.expectEqual(@as(usize, payload.len) + HEADER_SIZE, sent);
+
+    var recv_future: IO.Future = undefined;
+    try net.recv(&recv_future);
+    const recv_len = try io.wait(&recv_future, usize);
+
+    const buf = net.recv_buf[net.next_recv];
+    try std.testing.expectEqual(@as(usize, HEADER_SIZE + payload.len), recv_len);
+    try std.testing.expectEqual(NET_MAGIC, std.mem.bytesToValue(Frame, buf[0..HEADER_SIZE]).magic);
+    try std.testing.expect(std.mem.eql(u8, &payload, buf[HEADER_SIZE .. HEADER_SIZE + payload.len]));
+}
