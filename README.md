@@ -272,23 +272,6 @@ run 'glu help <command>' for usage
 
 ---
 
-## Performance & Benchmarks
-
-A dedicated benchmark harness is being rebuilt (the previous `bench/` harness
-was removed). Results below are from a previous internal run on an Intel Core
-i5, 100k iterations (ReleaseFast); the raw history lives in
-`.benchmarks/history/`:
-
-| Operation | Latency | Notes |
-| :--- | :--- | :--- |
-| `channel write 32B-4096B` | **~18 ns** | Zero-copy write directly to POSIX shared memory |
-| `channel read 32B` | **~25 ns** | Zero-copy pointer dereference from shared memory |
-| `publisher publish` | **~18 ns** | Single copy-into-ring buffer operation |
-| `subscriber receive` | **~25 ns** | Read check and atomic write cursor alignment |
-| `node creation` | **~5 µs** | Node startup (`shm_open` + `mmap` initialization) |
-
----
-
 ## Contributing
 
 We welcome contributions! Please review [CONTRIBUTING.md](./CONTRIBUTING.md) for coding styles, development setups, and our pull request checklist.
