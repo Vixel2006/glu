@@ -48,24 +48,30 @@ fn apply_socket_opts(fd: i32, config: SocketConfig) void {
     if (config.send_timeout_ms) |ms| net.set_timeval(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.SNDTIMEO)), ms);
 }
 
-pub fn bind(io: *IO, port: u16, config: SocketConfig) !Socket {
+const BindConfig = struct {
+    host: []const u8 = "0.0.0.0",
+    port: u16,
+};
+
+pub fn bind(io: *IO, bind_config: BindConfig, socket_config: SocketConfig) !Socket {
     const socket = try io.socket(posix.AF.INET, posix.SOCK.DGRAM, 0);
 
     // Multiple nodes share the same discovery port, so a second bind to the
     // same address/port would fail with EADDRINUSE. SO_REUSEADDR must be set
     // before bind() to take effect on UDP sockets.
-    if (config.reuse_addr) {
+    if (socket_config.reuse_addr) {
         net.set_int(socket, c.SOL.SOCKET, @as(u32, @intCast(c.SO.REUSEADDR)), 1);
     }
 
+    const parsed = try std.Io.net.IpAddress.parseIp4(bind_config.host, bind_config.port);
     const addr: posix.sockaddr.in = .{
-        .port = @byteSwap(port),
-        .addr = 0,
+        .port = parsed.ip4.port,
+        .addr = @bitCast(parsed.ip4.bytes),
     };
 
     try io.bind(socket, addr);
 
-    apply_socket_opts(socket, config);
+    apply_socket_opts(socket, socket_config);
 
     return socket;
 }
@@ -194,7 +200,7 @@ test "bind UDP socket" {
     var io = try IO.init(32, 0);
     defer io.deinit();
 
-    const socket = try bind(&io, 0, .{});
+    const socket = try bind(&io, .{ .port = 0 }, .{});
     defer _ = c.close(socket);
 }
 
@@ -202,10 +208,10 @@ test "send_to and receive_from round-trip" {
     var io = try IO.init(32, 0);
     defer io.deinit();
 
-    const socket1 = try bind(&io, 0, .{});
+    const socket1 = try bind(&io, .{ .port = 0 }, .{});
     defer _ = c.close(socket1);
 
-    const socket2 = try bind(&io, 0, .{});
+    const socket2 = try bind(&io, .{ .port = 0 }, .{});
     defer _ = c.close(socket2);
 
     var addr1: std.posix.sockaddr.in = undefined;

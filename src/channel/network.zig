@@ -22,40 +22,26 @@ const PORT_SLOTS: u32 = 256;
 
 const MAX_NAME_LEN = 63;
 
-/// Maximum payload per message and maximum number of in-flight messages per
+/// Maximum payload per message fragment and maximum number of in-flight messages per
 /// channel (the ring depth / flow-control window).
-const NET_MSG_MAX = 4096; // TODO: We maybe want to make this bigger for large payloads in the future
+const NET_FRAG_MAX = 4096;
 const NET_CAP_MAX = 32;
 
 /// Magic identifying a glu network frame (`"GLNW"`).
 const NET_MAGIC = 0x474C4E57;
 
-/// Kinds of frames exchanged on a network channel.
-const Kind = enum(u32) {
-    data = 0,
-    ack = 1,
-    nack = 2,
-    join = 3,
-};
-
 /// Fixed-size header at the start of every datagram. A data frame is the
-/// header followed by the message payload; control frames (ack/nack/join)
-/// are just the header.
+/// header followed by the message payload
 const Frame = extern struct {
     magic: u32,
-    kind: Kind,
-    name: [MAX_NAME_LEN + 1]u8,
     seq: u32,
-    /// Subscriber slot this frame addresses (ack/nack/join) or carries for.
-    sub: u32,
+    frag: u32,
+    name: [MAX_NAME_LEN + 1]u8,
+    fragmented: bool,
 };
 
 const HEADER_SIZE = @sizeOf(Frame);
-const NET_FRAME = HEADER_SIZE + NET_MSG_MAX;
-
-comptime {
-    assert(@sizeOf(Frame) == 80);
-}
+const NET_FRAME = HEADER_SIZE + NET_FRAG_MAX;
 
 var alive_networks: [256][]const u8 = std.mem.zeroes([256][]const u8);
 var dead_networks: [256][]const u8 = std.mem.zeroes([256][]const u8);
@@ -76,32 +62,20 @@ pub const Network = struct {
     cap: u32,
     tos: ToS,
 
-    /// Publisher state.
-    /// Ring of full frames (header + payload), indexed by `seq % cap`.
-    send_ring: [NET_CAP_MAX * NET_FRAME]u8,
-    /// Sequence number of the next message to publish.
-    send_seq: u32,
+    send_buf: [NET_CAP_MAX][HEADER_SIZE + NET_FRAG_MAX]u8 = std.mem.zeroes([NET_CAP_MAX][NET_FRAG_MAX]u8),
+    next_send: u32 = 0,
 
-    /// Subscriber state (single local lane, `sub_id`).
-    recv_ring: [NET_CAP_MAX * NET_FRAME]u8,
-    present: [NET_CAP_MAX]bool,
-    /// Next sequence number the local subscriber expects.
-    recv_next: u32,
-    sub_id: u32,
-
-    recv_buf: [NET_FRAME]u8,
-    fut: IO.Future,
+    recv_buf: [NET_CAP_MAX][HEADER_SIZE + NET_FRAG_MAX]u8 = std.mem.zeros([NET_CAP_MAX][NET_FRAG_MAX]u8),
+    next_recv: u32 = 0,
 
     pub fn open(io: *IO, name: []const u8, msg_size: u32, capacity: u32, tos: ToS) anyerror!Network {
         assert(msg_size > 0);
-        assert(msg_size <= NET_MSG_MAX);
         assert(capacity > 0);
         assert(capacity <= NET_CAP_MAX);
-        assert(name.len > 0);
-        assert(name.len <= MAX_NAME_LEN);
+        assert(name.len > 0 and name.len <= MAX_NAME_LEN);
 
-        const port = port_of(name);
-        var socket = try udp.bind(io, port, .{ .reuse_addr = true });
+        const port = @as(u16, @intCast(PORT_BASE + hash.fvn1a(name, PORT_SLOTS)));
+        var socket = try udp.bind(io, .{ .host = MULTICAST_HOST, .port = port }, .{ .reuse_addr = true });
         errdefer udp.close(&socket);
 
         set_nonblocking(socket);
@@ -118,39 +92,45 @@ pub const Network = struct {
             .msg_size = msg_size,
             .cap = capacity,
             .tos = tos,
-            .send_ring = undefined,
-            .send_seq = 0,
-            .recv_ring = undefined,
-            .present = std.mem.zeroes([NET_CAP_MAX]bool),
-            .recv_next = 0,
-            .sub_id = 0,
-            .recv_buf = undefined,
-            .fut = undefined,
         };
         @memcpy(self.name[0..name.len], name);
-
-        @memset(&self.send_ring, 0);
-        @memset(&self.recv_ring, 0);
 
         return self;
     }
 
-    pub fn close(self: *Network) void {
-        _ = self;
+    pub fn close(self: *Network) !void {
+        udp.leave_multicast(self.socket, MULTICAST_HOST);
+        try hash.delete(self.name, &alive_networks);
+        try hash.put(self.name, &dead_networks);
     }
 
     pub const deinit = close;
 
-    /// Port a channel with `name` binds, stable across processes.
-    pub fn port_of(name: []const u8) u16 {
-        return @intCast(PORT_BASE + hash.fvn1a(name, PORT_SLOTS));
+    pub fn send_to(self: *Network, sender: posix.socket_t, data: []const u8) *IO.Future {
+        const frame: Frame = .{
+            .magic = NET_MAGIC,
+            .seq = data.len,
+            .frag = 0,
+            .name = self.name,
+            .fragmented = false,
+        };
+        @memcpy(self.send_buf[self.next_send][0..HEADER_SIZE], std.mem.asBytes(&frame));
+        @memcpy(self.send_buf[self.next_send][HEADER_SIZE .. HEADER_SIZE + data.len], data);
+
+        const parsed = try std.Io.net.IpAddress.parseIp4(MULTICAST_HOST, self.port);
+        const addr: posix.sockaddr.in = .{
+            .addr = @bitCast(parsed.ip4.bytes),
+            .port = parsed.ip4.port,
+            .family = std.c.AF.INET,
+        };
+
+        var future: IO.Future = undefined;
+        try self.io.send_to(&future, sender, self.send_buf[self.next_send], addr);
+
+        return future;
     }
 
-    fn name_slice(self: *const Network) []const u8 {
-        return self.name[0..self.name_len];
-    }
-
-    fn writes_in_flight(self: *const Network) u32 {
-        return self.send_seq -% self.slowest_reader();
+    pub fn recv(self: *Network) void {
+        _ = self;
     }
 };
