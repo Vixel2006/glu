@@ -1,15 +1,12 @@
 const std = @import("std");
 const assert = std.debug.assert;
+const constants = @import("../constants.zig");
 
 /// One column of a `Table`: its header and horizontal alignment.
 pub const Column = struct {
     header: []const u8,
     right: bool = false,
 };
-
-const MAX_COLUMNS = 16;
-const MAX_ROWS = 128;
-const MAX_CELL = 64;
 
 /// An aligned column table over fixed-size buffers.
 ///
@@ -18,14 +15,14 @@ const MAX_CELL = 64;
 /// the data rows to a writer. No dynamic allocation.
 pub const Table = struct {
     columns: []const Column,
-    widths: [MAX_COLUMNS]usize,
+    widths: [constants.MAX_COLUMNS]usize,
     row_count: usize = 0,
-    cells: [MAX_ROWS][MAX_COLUMNS][MAX_CELL]u8,
-    cell_len: [MAX_ROWS][MAX_COLUMNS]usize,
+    cells: [constants.MAX_ROWS][constants.MAX_COLUMNS][constants.MAX_CELL]u8,
+    cell_len: [constants.MAX_ROWS][constants.MAX_COLUMNS]usize,
 
     pub fn init(columns: []const Column) Table {
-        assert(columns.len <= MAX_COLUMNS);
-        var widths: [MAX_COLUMNS]usize = undefined;
+        assert(columns.len <= constants.MAX_COLUMNS);
+        var widths: [constants.MAX_COLUMNS]usize = undefined;
         for (columns, 0..) |col, i| widths[i] = col.header.len;
         return .{
             .columns = columns,
@@ -38,9 +35,9 @@ pub const Table = struct {
     /// Append a row; `cells.len` must equal the number of columns.
     pub fn row(self: *Table, cells: []const []const u8) void {
         assert(cells.len == self.columns.len);
-        assert(self.row_count < MAX_ROWS);
+        assert(self.row_count < constants.MAX_ROWS);
         for (cells, 0..) |cell, i| {
-            assert(cell.len <= MAX_CELL);
+            assert(cell.len <= constants.MAX_CELL);
             self.cell_len[self.row_count][i] = cell.len;
             @memcpy(self.cells[self.row_count][i][0..cell.len], cell);
             self.widths[i] = @max(self.widths[i], cell.len);
@@ -50,7 +47,7 @@ pub const Table = struct {
 
     /// Write the table to `w`.
     pub fn render(self: *const Table, w: *std.Io.Writer) !void {
-        var headers: [MAX_COLUMNS][]const u8 = undefined;
+        var headers: [constants.MAX_COLUMNS][]const u8 = undefined;
         for (self.columns, 0..) |col, i| headers[i] = col.header;
         try print_row(w, headers[0..self.columns.len], self.columns, &self.widths);
         try w.writeByte('\n');
@@ -62,7 +59,7 @@ pub const Table = struct {
         try w.writeByte('\n');
 
         for (0..self.row_count) |r| {
-            var slices: [MAX_COLUMNS][]const u8 = undefined;
+            var slices: [constants.MAX_COLUMNS][]const u8 = undefined;
             for (0..self.columns.len) |i| {
                 slices[i] = self.cells[r][i][0..self.cell_len[r][i]];
             }

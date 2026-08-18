@@ -3,14 +3,13 @@ const posix = std.posix;
 const linux = std.os.linux;
 
 const IO = @import("../io.zig").IO;
-
-const LOGS_DIR = "/tmp/glu/logs";
+const constants = @import("../constants.zig");
 
 /// Clean up the logs directory by deleting it entirely.
 pub fn cleanup_logs(io: std.Io) void {
     const cwd = std.Io.Dir.cwd();
-    cwd.deleteTree(io, LOGS_DIR) catch |err| {
-        std.log.warn("failed to clean up logs dir '{s}': {}", .{ LOGS_DIR, err });
+    cwd.deleteTree(io, constants.LOGS_DIR) catch |err| {
+        std.log.warn("failed to clean up logs dir '{s}': {}", .{ constants.LOGS_DIR, err });
     };
 }
 

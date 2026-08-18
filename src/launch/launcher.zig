@@ -1,7 +1,7 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const NodeConfig = @import("toml.zig").NodeConfig;
-const MAX_ARGS = @import("toml.zig").MAX_ARGS;
+const MAX_ARGS = @import("../constants.zig").MAX_ARGS;
 const Registry = @import("../registry.zig");
 
 const LaunchErr = error{

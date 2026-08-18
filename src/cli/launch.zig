@@ -7,6 +7,7 @@ const debug = @import("../debug/mod.zig");
 const launch_mod = @import("../launch/launcher.zig");
 const toml = @import("../launch/toml.zig");
 const Registry = @import("../registry.zig");
+const constants = @import("../constants.zig");
 
 var launched_children: []launch_mod.LaunchedNode = &.{};
 var launch_io: std.Io = undefined;
@@ -45,7 +46,7 @@ pub fn cmd_launch(init: std.process.Init, args: *parser.Args) !void {
     };
 
     var config_buf: [1024]u8 = undefined;
-    var config_nodes: [toml.MAX_NODES]toml.NodeConfig = undefined;
+    var config_nodes: [constants.MAX_NODES]toml.NodeConfig = undefined;
     const config_count = toml.parse(init.io, file_path, &config_buf, &config_nodes) catch |err| {
         var ew = utils.err_writer(init);
         ew.interface.print("error parsing launch config '{s}': {}\n", .{ file_path, err }) catch {};
@@ -62,7 +63,7 @@ pub fn cmd_launch(init: std.process.Init, args: *parser.Args) !void {
         return;
     }
 
-    var children_buf: [toml.MAX_NODES]launch_mod.LaunchedNode = undefined;
+    var children_buf: [constants.MAX_NODES]launch_mod.LaunchedNode = undefined;
     const launched_len = try launch_mod.launch(init.io, nodes, &children_buf);
     launched_children = children_buf[0..launched_len];
     launch_io = init.io;

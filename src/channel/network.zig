@@ -8,34 +8,14 @@ const udp = @import("../transport/udp.zig");
 const IO = @import("../io.zig").IO;
 const time = @import("../time.zig");
 const ToS = @import("shm.zig").ToS;
-
-/// IPv4 multicast group everything publishes to. Every channel is carried
-/// over this one group; traffic is demultiplexed by (port, name).
-const MULTICAST_HOST = "239.255.43.1";
-
-/// Base UDP port for network channels. The port for a channel with `name` is
-/// `PORT_BASE + fvn1a(name, 256)`, so two processes derive the same port from
-/// the name alone (no shared state). Colliding names share a port and are
-/// demultiplexed by name inside each frame.
-const PORT_BASE: u16 = 49152;
-const PORT_SLOTS: u32 = 256;
-
-const MAX_NAME_LEN = 63;
-
-/// Maximum UDP payload over IPv4 (65535 - 20 IP header - 8 UDP header).
-/// One datagram carries a full frame (header + payload); no fragmentation.
-const NET_PAYLOAD_MAX = 65507;
-const NET_CAP_MAX = 32;
-
-/// Magic identifying a glu network frame (`"GLNW"`).
-const NET_MAGIC = 0x474C4E57;
+const constants = @import("../constants.zig");
 
 /// Fixed-size header at the start of every datagram. A data frame is the
 /// header followed by the message payload
 const Frame = extern struct {
     magic: u32,
     seq: u32,
-    name: [MAX_NAME_LEN + 1]u8,
+    name: [constants.MAX_NAME_LEN + 1]u8,
 };
 
 const HEADER_SIZE = @sizeOf(Frame);
@@ -53,30 +33,30 @@ pub const Network = struct {
     io: *IO,
     socket: udp.Socket,
     port: u16,
-    name: [MAX_NAME_LEN + 1]u8,
+    name: [constants.MAX_NAME_LEN + 1]u8,
     name_len: u32,
     msg_size: u32,
     cap: u32,
     tos: ToS,
 
-    send_buf: [NET_CAP_MAX][NET_PAYLOAD_MAX]u8 = std.mem.zeroes([NET_CAP_MAX][NET_PAYLOAD_MAX]u8),
+    send_buf: [constants.NET_CAP_MAX][constants.NET_PAYLOAD_MAX]u8 = std.mem.zeroes([constants.NET_CAP_MAX][constants.NET_PAYLOAD_MAX]u8),
     next_send: u32 = 0,
 
-    recv_buf: [NET_CAP_MAX][NET_PAYLOAD_MAX]u8 = std.mem.zeroes([NET_CAP_MAX][NET_PAYLOAD_MAX]u8),
+    recv_buf: [constants.NET_CAP_MAX][constants.NET_PAYLOAD_MAX]u8 = std.mem.zeroes([constants.NET_CAP_MAX][constants.NET_PAYLOAD_MAX]u8),
     next_recv: u32 = 0,
 
     pub fn open(io: *IO, name: []const u8, msg_size: u32, capacity: u32, tos: ToS) anyerror!Network {
         assert(msg_size > 0);
         assert(capacity > 0);
-        assert(capacity <= NET_CAP_MAX);
-        assert(name.len > 0 and name.len <= MAX_NAME_LEN);
+        assert(capacity <= constants.NET_CAP_MAX);
+        assert(name.len > 0 and name.len <= constants.MAX_NAME_LEN);
 
-        const port = @as(u16, @intCast(PORT_BASE + hash.fvn1a(name, PORT_SLOTS)));
-        var socket = try udp.bind(io, .{ .host = MULTICAST_HOST, .port = port }, .{ .reuse_addr = true });
+        const port = @as(u16, @intCast(constants.PORT_BASE + hash.fvn1a(name, constants.PORT_SLOTS)));
+        var socket = try udp.bind(io, .{ .host = constants.MULTICAST_HOST, .port = port }, .{ .reuse_addr = true });
         errdefer udp.close(&socket);
 
         set_nonblocking(socket);
-        udp.join_multicast(socket, MULTICAST_HOST, port, "");
+        udp.join_multicast(socket, constants.MULTICAST_HOST, port, "");
 
         _ = try hash.put(name, &alive_networks);
 
@@ -84,7 +64,7 @@ pub const Network = struct {
             .io = io,
             .socket = socket,
             .port = port,
-            .name = std.mem.zeroes([MAX_NAME_LEN + 1]u8),
+            .name = std.mem.zeroes([constants.MAX_NAME_LEN + 1]u8),
             .name_len = @intCast(name.len),
             .msg_size = msg_size,
             .cap = capacity,
@@ -96,7 +76,7 @@ pub const Network = struct {
     }
 
     pub fn close(self: *Network) !void {
-        udp.leave_multicast(self.socket, MULTICAST_HOST);
+        udp.leave_multicast(self.socket, constants.MULTICAST_HOST);
         try hash.delete(&self.name, &alive_networks);
         _ = try hash.put(&self.name, &dead_networks);
     }
@@ -104,17 +84,17 @@ pub const Network = struct {
     pub const deinit = close;
 
     pub fn send(self: *Network, future: *IO.Future, data: []const u8) !void {
-        assert(data.len + HEADER_SIZE <= NET_PAYLOAD_MAX);
+        assert(data.len + HEADER_SIZE <= constants.NET_PAYLOAD_MAX);
 
         const frame: Frame = .{
-            .magic = NET_MAGIC,
+            .magic = constants.NET_MAGIC,
             .seq = self.next_send * @as(u32, @intCast(data.len)),
             .name = self.name,
         };
         @memcpy(self.send_buf[self.next_send][0..HEADER_SIZE], std.mem.asBytes(&frame));
         @memcpy(self.send_buf[self.next_send][HEADER_SIZE .. HEADER_SIZE + data.len], data);
 
-        const parsed = try std.Io.net.IpAddress.parseIp4(MULTICAST_HOST, self.port);
+        const parsed = try std.Io.net.IpAddress.parseIp4(constants.MULTICAST_HOST, self.port);
         const addr: posix.sockaddr.in = .{
             .addr = @bitCast(parsed.ip4.bytes),
             .port = @byteSwap(parsed.ip4.port),
@@ -139,7 +119,7 @@ test "open and close a network channel" {
     var net = try Network.open(&io, "test_channel", 1024, 8, .best_effort);
     defer net.close() catch {};
 
-    try std.testing.expectEqual(PORT_BASE + hash.fvn1a("test_channel", PORT_SLOTS), @as(u32, net.port));
+    try std.testing.expectEqual(constants.PORT_BASE + hash.fvn1a("test_channel", constants.PORT_SLOTS), @as(u32, net.port));
     try std.testing.expectEqual(@as(u32, 1024), net.msg_size);
     try std.testing.expectEqual(@as(u32, 8), net.cap);
     try std.testing.expectEqual(@as(u32, "test_channel".len), net.name_len);
@@ -181,7 +161,7 @@ test "send and recv round-trip over multicast loopback" {
     try std.testing.expectEqual(@as(usize, msg.len), recv_len - HEADER_SIZE);
 
     const frame: Frame = std.mem.bytesToValue(Frame, buf[0..HEADER_SIZE]);
-    try std.testing.expectEqual(NET_MAGIC, frame.magic);
+    try std.testing.expectEqual(constants.NET_MAGIC, frame.magic);
     try std.testing.expect(std.mem.eql(u8, "roundtrip_channel", frame.name[0..net.name_len]));
     try std.testing.expectEqual(net.next_send * @as(u32, @intCast(msg.len)), frame.seq);
     try std.testing.expect(std.mem.eql(u8, msg, buf[HEADER_SIZE .. HEADER_SIZE + msg.len]));
@@ -208,6 +188,6 @@ test "large payload round-trip" {
 
     const buf = net.recv_buf[net.next_recv];
     try std.testing.expectEqual(@as(usize, HEADER_SIZE + payload.len), recv_len);
-    try std.testing.expectEqual(NET_MAGIC, std.mem.bytesToValue(Frame, buf[0..HEADER_SIZE]).magic);
+    try std.testing.expectEqual(constants.NET_MAGIC, std.mem.bytesToValue(Frame, buf[0..HEADER_SIZE]).magic);
     try std.testing.expect(std.mem.eql(u8, &payload, buf[HEADER_SIZE .. HEADER_SIZE + payload.len]));
 }

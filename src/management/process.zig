@@ -4,6 +4,7 @@ const c = std.c;
 const os = std.os.linux;
 
 const Registry = @import("../registry.zig");
+const constants = @import("../constants.zig");
 
 const ProcessErr = error{
     OutOfMemory,
@@ -52,8 +53,8 @@ pub fn start_node(io: std.Io, name: []const u8, logs_dir: []const u8) !bool {
     assert(logs_dir.len > 0);
     if (!Registry.valid_name(name)) return error.InvalidName;
 
-    var args_buf: [Registry.MAX_ARGV][]const u8 = undefined;
-    var data_buf: [Registry.MAX_ARGV_LEN]u8 = undefined;
+    var args_buf: [constants.MAX_ARGV][]const u8 = undefined;
+    var data_buf: [constants.MAX_ARGV_LEN]u8 = undefined;
     const argc = try Registry.read_argv(&args_buf, &data_buf, name);
     if (argc == 0) return false;
 

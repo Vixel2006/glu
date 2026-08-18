@@ -2,6 +2,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const c = @import("std").c;
 const os = std.os.linux;
+const constants = @import("constants.zig");
 
 const RegistryErr = error{
     OutOfMemory,
@@ -16,11 +17,6 @@ const RegistryErr = error{
     DirNotOwned,
     NotFound,
 };
-
-const REGISTRY_DIR = "/tmp/glu/nodes";
-
-const REGISTRY_MODE: u32 = 0o700;
-const FILE_MODE: u32 = 0o600;
 
 /// Validate a node name before it becomes part of a path.
 ///
@@ -54,12 +50,12 @@ fn check_name(name: []const u8) RegistryErr!void {
 /// don't own rather than follow whatever symlinks are planted there.
 fn registry_dir(io: std.Io) RegistryErr!std.Io.Dir {
     const cwd = std.Io.Dir.cwd();
-    _ = cwd.createDirPathStatus(io, REGISTRY_DIR, std.Io.File.Permissions.fromMode(REGISTRY_MODE)) catch |err| switch (err) {
+    _ = cwd.createDirPathStatus(io, constants.REGISTRY_DIR, std.Io.File.Permissions.fromMode(constants.REGISTRY_MODE)) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return RegistryErr.FileSystem,
     };
 
-    const dir = cwd.openDir(io, REGISTRY_DIR, .{ .follow_symlinks = false, .iterate = true }) catch return RegistryErr.FileSystem;
+    const dir = cwd.openDir(io, constants.REGISTRY_DIR, .{ .follow_symlinks = false, .iterate = true }) catch return RegistryErr.FileSystem;
     errdefer dir.close(io);
 
     // Verify ownership of the directory, not just that it exists.
@@ -74,7 +70,7 @@ fn registry_dir(io: std.Io) RegistryErr!std.Io.Dir {
 
 fn registry_path(name: []const u8, suffix: []const u8, buf: []u8) RegistryErr![]const u8 {
     check_name(name) catch return RegistryErr.InvalidName;
-    return std.fmt.bufPrint(buf, "{s}/{s}{s}", .{ REGISTRY_DIR, name, suffix }) catch return RegistryErr.FileSystem;
+    return std.fmt.bufPrint(buf, "{s}/{s}{s}", .{ constants.REGISTRY_DIR, name, suffix }) catch return RegistryErr.FileSystem;
 }
 
 /// Open registry file `basename` for reading, never following symlinks.
@@ -120,7 +116,7 @@ fn write_registry_file(io: std.Io, name: []const u8, suffix: []const u8, content
     var dir = try registry_dir(io);
     defer dir.close(io);
 
-    var file: std.Io.File = dir.createFile(io, sub_path, .{ .exclusive = true, .permissions = .fromMode(FILE_MODE) }) catch |err| switch (err) {
+    var file: std.Io.File = dir.createFile(io, sub_path, .{ .exclusive = true, .permissions = .fromMode(constants.FILE_MODE) }) catch |err| switch (err) {
         // Entry already exists: reopen without following symlinks.
         error.PathAlreadyExists => dir.openFile(io, sub_path, .{ .mode = .read_write, .follow_symlinks = false, .resolve_beneath = true }) catch return RegistryErr.FileSystem,
         else => return RegistryErr.FileSystem,
@@ -151,10 +147,10 @@ pub fn register_pid(name: []const u8, pid: u32) RegistryErr!void {
 pub fn register_argv(name: []const u8, argv: []const []const u8) RegistryErr!void {
     if (!valid_name(name)) return RegistryErr.InvalidName;
 
-    var data: [MAX_ARGV_LEN]u8 = undefined;
+    var data: [constants.MAX_ARGV_LEN]u8 = undefined;
     var len: usize = 0;
     for (argv) |arg| {
-        if (arg.len > MAX_ARGV_LEN or len + arg.len + 1 > data.len) return RegistryErr.FileSystem;
+        if (arg.len > constants.MAX_ARGV_LEN or len + arg.len + 1 > data.len) return RegistryErr.FileSystem;
         @memcpy(data[len .. len + arg.len], arg);
         len += arg.len;
         data[len] = 0;
@@ -163,11 +159,6 @@ pub fn register_argv(name: []const u8, argv: []const []const u8) RegistryErr!voi
 
     try write_registry_file(std.Io.Threaded.global_single_threaded.io(), name, ".argv", data[0..len]);
 }
-
-/// Maximum argv entries a persisted manifest may contain.
-pub const MAX_ARGV = 32;
-/// Maximum bytes of a persisted spawn vector.
-pub const MAX_ARGV_LEN = 4096;
 
 /// Read a node's persisted spawn vector into `args` (slices into `data`).
 ///
@@ -229,7 +220,7 @@ pub fn unregister(name: []const u8) void {
     }
     const cwd = std.Io.Dir.cwd();
     var path_buf: [256]u8 = undefined;
-    const path = std.fmt.bufPrint(&path_buf, "{s}/{s}.pid", .{ REGISTRY_DIR, name }) catch |err| {
+    const path = std.fmt.bufPrint(&path_buf, "{s}/{s}.pid", .{ constants.REGISTRY_DIR, name }) catch |err| {
         std.log.err("unregister: failed to format path for node '{s}': {}", .{ name, err });
         return;
     };
@@ -410,8 +401,8 @@ test "register_argv round-trips a manifest" {
     const argv = &[_][]const u8{ "/bin/echo", "hello", "--flag" };
     try register_argv(name, argv);
 
-    var args: [MAX_ARGV][]const u8 = undefined;
-    var data: [MAX_ARGV_LEN]u8 = undefined;
+    var args: [constants.MAX_ARGV][]const u8 = undefined;
+    var data: [constants.MAX_ARGV_LEN]u8 = undefined;
     const argc = try read_argv(&args, &data, name);
     try std.testing.expectEqual(@as(usize, 3), argc);
     try std.testing.expectEqualStrings("/bin/echo", args[0]);
@@ -419,8 +410,8 @@ test "register_argv round-trips a manifest" {
 }
 
 test "read_argv for unknown name returns zero" {
-    var args: [MAX_ARGV][]const u8 = undefined;
-    var data: [MAX_ARGV_LEN]u8 = undefined;
+    var args: [constants.MAX_ARGV][]const u8 = undefined;
+    var data: [constants.MAX_ARGV_LEN]u8 = undefined;
     try std.testing.expectEqual(@as(usize, 0), try read_argv(&args, &data, "glu-test-no-such-argv"));
 }
 

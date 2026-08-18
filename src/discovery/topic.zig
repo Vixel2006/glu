@@ -3,7 +3,7 @@ const assert = std.debug.assert;
 const c = std.c;
 const os = std.os.linux;
 
-const GLU_MAGIC = @import("../channel/shm.zig").GLU_MAGIC;
+const GLU_MAGIC = @import("../constants.zig").GLU_MAGIC;
 const Header = @import("../channel/shm.zig").Header;
 const shm_name = @import("../channel/shm.zig").shm_name;
 const validate_header = @import("../channel/shm.zig").validate_header;

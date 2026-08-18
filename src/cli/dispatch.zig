@@ -11,8 +11,7 @@ const nodes_logs = @import("nodes/logs.zig");
 const nodes_down = @import("nodes/down.zig");
 const topics_list = @import("topics/list.zig");
 const topics_info = @import("topics/info.zig");
-
-const version = "0.2.0";
+const constants = @import("../constants.zig");
 
 const RunFn = *const fn (init: std.process.Init, args: *parser.Args) anyerror!void;
 
@@ -209,7 +208,7 @@ pub fn run(init: std.process.Init) void {
     }
     if (std.mem.eql(u8, cmd, "--version") or std.mem.eql(u8, cmd, "-V")) {
         var fw = utils.writer(init);
-        fw.interface.print("glu {s}\n", .{version}) catch {};
+        fw.interface.print("glu {s}\n", .{constants.VERSION}) catch {};
         return;
     }
     if (std.mem.eql(u8, cmd, "help")) {

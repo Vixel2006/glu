@@ -4,7 +4,8 @@ pub const Protocol = @import("channel/channel.zig").Protocol;
 pub const channel = @import("channel/channel.zig");
 pub const Shm = @import("channel/shm.zig").Shm;
 pub const shm = @import("channel/shm.zig");
-pub const GLU_MAGIC = @import("channel/shm.zig").GLU_MAGIC;
+pub const GLU_MAGIC = @import("constants.zig").GLU_MAGIC;
+pub const constants = @import("constants.zig");
 pub const ToS = @import("channel/shm.zig").ToS;
 pub const Publisher = @import("api/publisher.zig").Publisher;
 pub const Subscriber = @import("api/subscriber.zig").Subscriber;
@@ -19,6 +20,7 @@ pub const fiber = @import("fiber/fiber.zig");
 pub const asyncio = @import("fiber/asyncio.zig");
 
 comptime {
+    _ = @import("constants.zig");
     _ = @import("io.zig");
     _ = @import("channel/shm.zig");
     _ = @import("channel/network.zig");

@@ -1,5 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
+const constants = @import("../constants.zig");
 
 const TomlErr = error{
     FileSystem,
@@ -10,16 +11,13 @@ const TomlErr = error{
     TooManyArgs,
 };
 
-pub const MAX_NODES = 16;
-pub const MAX_ARGS = 8;
-
 /// A parsed node. String fields reference the caller's file buffer and stay
 /// valid only while that buffer lives.
 pub const NodeConfig = struct {
     name: []const u8 = "",
     path: []const u8 = "",
     bin: []const u8 = "",
-    extra_cfg: [MAX_ARGS][]const u8 = undefined,
+    extra_cfg: [constants.MAX_ARGS][]const u8 = undefined,
     extra_cfg_len: usize = 0,
 };
 
@@ -198,7 +196,7 @@ test "parse single node" {
     ;
 
     var content_buf: [1024]u8 = undefined;
-    var nodes: [MAX_NODES]NodeConfig = undefined;
+    var nodes: [constants.MAX_NODES]NodeConfig = undefined;
     const n = try parse_tom(toml, &nodes, &content_buf);
     try std.testing.expectEqual(@as(usize, 1), n);
     try std.testing.expectEqualStrings("motor_driver", nodes[0].name);
@@ -218,7 +216,7 @@ test "parse multiple nodes with extra_cfg" {
     ;
 
     var content_buf: [1024]u8 = undefined;
-    var nodes: [MAX_NODES]NodeConfig = undefined;
+    var nodes: [constants.MAX_NODES]NodeConfig = undefined;
     const n = try parse_tom(toml, &nodes, &content_buf);
     try std.testing.expectEqual(@as(usize, 2), n);
     try std.testing.expectEqualStrings("lidar", nodes[0].name);
@@ -239,7 +237,7 @@ test "skip comments and blank lines" {
     ;
 
     var content_buf: [1024]u8 = undefined;
-    var nodes: [MAX_NODES]NodeConfig = undefined;
+    var nodes: [constants.MAX_NODES]NodeConfig = undefined;
     const n = try parse_tom(toml, &nodes, &content_buf);
     try std.testing.expectEqual(@as(usize, 1), n);
     try std.testing.expectEqualStrings("test", nodes[0].name);

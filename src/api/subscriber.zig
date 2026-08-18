@@ -2,7 +2,7 @@ const std = @import("std");
 const assert = std.debug.assert;
 const c = std.c;
 const Shm = @import("../channel/shm.zig").Shm;
-const MAX_READERS = @import("../channel/shm.zig").MAX_READERS;
+const MAX_READERS = @import("../constants.zig").MAX_READERS;
 
 const SubErr = error{
     OutOfMemory,

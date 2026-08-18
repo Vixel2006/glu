@@ -4,8 +4,7 @@ const table = @import("table.zig");
 const parser = @import("parser.zig");
 const Registry = @import("../registry.zig");
 const discovery = @import("../discovery/mod.zig");
-
-const MAX_ENTRIES = 128;
+const constants = @import("../constants.zig");
 
 /// Unified node + topic overview (`glu status`).
 pub fn cmd_status(init: std.process.Init, args: *parser.Args) !void {
@@ -13,12 +12,12 @@ pub fn cmd_status(init: std.process.Init, args: *parser.Args) !void {
     var fw = utils.writer(init);
     const w = &fw.interface;
 
-    var node_buf: [MAX_ENTRIES]Registry.NodeEntry = undefined;
+    var node_buf: [constants.MAX_ENTRIES]Registry.NodeEntry = undefined;
     const node_count = Registry.list_alive(&node_buf) catch |err| {
         try w.print("error: cannot read system state: {}\n", .{err});
         return;
     };
-    var topic_buf: [MAX_ENTRIES]discovery.TopicEntry = undefined;
+    var topic_buf: [constants.MAX_ENTRIES]discovery.TopicEntry = undefined;
     const topic_count = discovery.scan_topics(&topic_buf) catch |err| {
         try w.print("error: cannot read system state: {}\n", .{err});
         return;

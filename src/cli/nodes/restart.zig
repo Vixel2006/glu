@@ -2,8 +2,7 @@ const std = @import("std");
 const utils = @import("../utils.zig");
 const parser = @import("../parser.zig");
 const management = @import("../../management/process.zig");
-
-const DEFAULT_LOGS_DIR = "/tmp/glu/logs";
+const constants = @import("../../constants.zig");
 
 /// Restart one or more named nodes (`glu nodes restart <node> [node...]`).
 ///
@@ -15,7 +14,7 @@ pub fn cmd_restart(init: std.process.Init, args: *parser.Args) !void {
     var any = false;
     while (args.next()) |name| {
         any = true;
-        const restarted = management.restart_node(init.io, name, DEFAULT_LOGS_DIR) catch |err| {
+        const restarted = management.restart_node(init.io, name, constants.LOGS_DIR) catch |err| {
             try w.print("restart {s}: {s}\n", .{ name, @errorName(err) });
             continue;
         };

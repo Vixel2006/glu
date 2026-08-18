@@ -4,14 +4,9 @@ const c = @import("std").c;
 const os = @import("std").os.linux;
 
 const is_alive = @import("../registry.zig").is_alive;
+const constants = @import("../constants.zig");
 
 pub const ShmErr = error{ OutOfMemory, ShmOpenFailed, MmapFailed, InvalidSegment };
-
-pub const MAX_MSG_SIZE: u32 = 1 << 16;
-pub const MAX_CAPACITY: u32 = 1 << 22;
-
-/// Maximum topic-name length stored in a segment header.
-pub const MAX_NAME_LEN: u32 = 63;
 
 /// Sanitise a topic name into a valid POSIX shm name.
 ///
@@ -26,11 +21,6 @@ pub fn shm_name(buf: []u8, name: []const u8) ?[:0]u8 {
     buf[name.len] = 0;
     return buf[0..name.len :0];
 }
-
-/// Magic number used to identify glu shared memory segments (`0x474C5500` = "GLU\0").
-pub const GLU_MAGIC = 0x474C5500;
-/// Maximum number of concurrent readers (subscribers) per channel.
-pub const MAX_READERS = 8;
 
 /// Validate the fields of a shared-memory header before they are trusted.
 ///
@@ -49,10 +39,10 @@ pub fn validate_header(
     expected: ?struct { msg_size: u32, capacity: u32 },
     file_size: ?usize,
 ) bool {
-    if (hdr.magic != GLU_MAGIC) return false;
-    if (hdr.msg_size == 0 or hdr.msg_size > MAX_MSG_SIZE) return false;
-    if (hdr.capacity == 0 or hdr.capacity > MAX_CAPACITY) return false;
-    if (hdr.name_len > MAX_NAME_LEN) return false;
+    if (hdr.magic != constants.GLU_MAGIC) return false;
+    if (hdr.msg_size == 0 or hdr.msg_size > constants.MAX_MSG_SIZE) return false;
+    if (hdr.capacity == 0 or hdr.capacity > constants.MAX_CAPACITY) return false;
+    if (hdr.name_len > constants.MAX_NAME_LEN) return false;
     if (hdr.name_len > 0 and hdr.name[hdr.name_len] != 0) return false;
     if (hdr.tos != @intFromEnum(ToS.reliable) and hdr.tos != @intFromEnum(ToS.best_effort)) return false;
 
@@ -90,7 +80,7 @@ pub const ToS = enum(u32) {
 /// so `sweep_dead_readers` can never observe a stale PID on a freshly
 /// claimed slot.
 pub const Header = extern struct {
-    magic: u32 = GLU_MAGIC,
+    magic: u32 = constants.GLU_MAGIC,
     write: u32,
     conns: u32,
     msg_size: u32,
@@ -104,11 +94,11 @@ pub const Header = extern struct {
     _pad2: u32,
     /// Per-subscriber entries: high 32 bits = owning subscriber PID
     /// (0 = unowned/inactive), low 32 bits = read cursor.
-    readers: [MAX_READERS]u64,
+    readers: [constants.MAX_READERS]u64,
 };
 
 comptime {
-    std.debug.assert(MAX_READERS > 0 and MAX_READERS <= 8);
+    std.debug.assert(constants.MAX_READERS > 0 and constants.MAX_READERS <= 8);
     std.debug.assert(@sizeOf(Header) == 168);
     std.debug.assert(@offsetOf(Header, "owner_pid") == 96);
     std.debug.assert(@offsetOf(Header, "readers") == 104);
@@ -236,7 +226,7 @@ pub const Shm = struct {
         const hdr: *Header = @ptrCast(@alignCast(ptr));
 
         if (created) {
-            hdr.magic = GLU_MAGIC;
+            hdr.magic = constants.GLU_MAGIC;
             hdr.write = 0;
             for (&hdr.readers) |*r| r.* = 0;
             hdr.owner_pid = @intCast(std.os.linux.getpid());
@@ -249,7 +239,7 @@ pub const Shm = struct {
             @memcpy(hdr.name[0..name_len], name[0..name_len]);
             hdr.name[name_len] = 0;
         } else {
-            if (hdr.magic != GLU_MAGIC or hdr.msg_size != msg_size or hdr.capacity != capacity) {
+            if (hdr.magic != constants.GLU_MAGIC or hdr.msg_size != msg_size or hdr.capacity != capacity) {
                 _ = os.munmap(ptr, total_size_usize);
                 _ = c.close(fd);
                 return ShmErr.InvalidSegment;
@@ -273,7 +263,7 @@ pub const Shm = struct {
         const name_z: ?[:0]u8 = if (needs_unlink) blk: {
             // The header lives in shared memory and could have been tampered
             // with since open; clamp the length before slicing `name`.
-            const name_len = @min(self.header.name_len, MAX_NAME_LEN);
+            const name_len = @min(self.header.name_len, constants.MAX_NAME_LEN);
             const name_slice = self.header.name[0..name_len];
             break :blk shm_name(&name_buf, name_slice) orelse null;
         } else null;
@@ -323,7 +313,7 @@ pub const Shm = struct {
     /// publisher wrapping around mid-read.
     pub fn peek(self: *Shm, sub_id: u32) *anyopaque {
         assert(self.fd != -1);
-        assert(sub_id < MAX_READERS);
+        assert(sub_id < constants.MAX_READERS);
         const msg_size = self.msg_size;
         const entry = @atomicLoad(u64, &self.header.readers[sub_id], .acquire);
         const cursor: u32 = @truncate(entry);
@@ -339,7 +329,7 @@ pub const Shm = struct {
     /// safely reuse the slot.
     pub fn ack(self: *Shm, sub_id: u32) void {
         assert(self.fd != -1);
-        assert(sub_id < MAX_READERS);
+        assert(sub_id < constants.MAX_READERS);
 
         const entry = &self.header.readers[sub_id];
         while (true) {
@@ -374,7 +364,7 @@ pub fn force_unlink(name: []const u8) void {
 /// The clear uses a compare-and-swap against the observed value so a slot
 /// that was just reclaimed by a new subscriber in the meantime is never
 /// clobbered.
-pub fn sweep_dead_readers(readers: *[MAX_READERS]u64) void {
+pub fn sweep_dead_readers(readers: *[constants.MAX_READERS]u64) void {
     for (readers) |*entry| {
         const pid: u32 = @intCast(entry.* >> 32);
         if (pid != 0 and !is_alive(pid)) {
@@ -411,7 +401,7 @@ test "slowest_reader: skips inactive (zero) readers" {
 }
 
 test "slowest_reader: returns write cursor when no active readers" {
-    const readers: [MAX_READERS]u64 = std.mem.zeroes([MAX_READERS]u64);
+    const readers: [constants.MAX_READERS]u64 = std.mem.zeroes([constants.MAX_READERS]u64);
     try std.testing.expectEqual(@as(u32, 42), slowest_reader(&readers, 42));
 }
 
@@ -443,7 +433,7 @@ test "sweep_dead_readers: reclaims slots of dead PIDs" {
 }
 
 test "sweep_dead_readers: no crash when all entries are zero" {
-    var readers: [MAX_READERS]u64 = std.mem.zeroes([MAX_READERS]u64);
+    var readers: [constants.MAX_READERS]u64 = std.mem.zeroes([constants.MAX_READERS]u64);
 
     sweep_dead_readers(&readers);
 
