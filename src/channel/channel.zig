@@ -1,13 +1,13 @@
 const std = @import("std");
 
 const Shm = @import("shm.zig").Shm;
-const Network = @import("network.zig").Network;
+const Session = @import("network.zig").Session;
 
 /// The transport protocols a glu channel can be built on.
 pub const Protocol = enum {
     /// Local, zero-copy shared-memory ring buffer.
     shm,
-    /// Networked multicast channel.
+    /// Sessioned multicast channel.
     net,
 };
 
@@ -18,6 +18,6 @@ pub const Protocol = enum {
 pub fn Channel(comptime protocol: Protocol) type {
     return switch (protocol) {
         .shm => Shm,
-        .network => Network,
+        .network => Session,
     };
 }

@@ -16,7 +16,6 @@ pub const node = @import("management/process.zig");
 pub const debug = @import("debug/mod.zig");
 pub const net = @import("transport/net.zig");
 pub const tcp = @import("transport/tcp.zig");
-pub const network = @import("transport/network.zig");
 pub const fiber = @import("fiber/fiber.zig");
 pub const asyncio = @import("fiber/asyncio.zig");
 

@@ -29,7 +29,7 @@ fn set_nonblocking(fd: i32) void {
     _ = linux.fcntl(fd, linux.F.SETFL, flags | nonblock);
 }
 
-pub const Network = struct {
+pub const Session = struct {
     io: *IO,
     socket: udp.Socket,
     port: u16,
@@ -45,7 +45,7 @@ pub const Network = struct {
     recv_buf: [constants.NET_CAP_MAX][constants.NET_PAYLOAD_MAX]u8 = std.mem.zeroes([constants.NET_CAP_MAX][constants.NET_PAYLOAD_MAX]u8),
     next_recv: u32 = 0,
 
-    pub fn open(io: *IO, name: []const u8, msg_size: u32, capacity: u32, tos: ToS) anyerror!Network {
+    pub fn open(io: *IO, name: []const u8, msg_size: u32, capacity: u32, tos: ToS) anyerror!Session {
         assert(msg_size > 0);
         assert(capacity > 0);
         assert(capacity <= constants.NET_CAP_MAX);
@@ -60,7 +60,7 @@ pub const Network = struct {
 
         _ = try hash.put(name, &alive_networks);
 
-        var self: Network = .{
+        var self: Session = .{
             .io = io,
             .socket = socket,
             .port = port,
@@ -75,7 +75,7 @@ pub const Network = struct {
         return self;
     }
 
-    pub fn close(self: *Network) !void {
+    pub fn close(self: *Session) !void {
         udp.leave_multicast(self.socket, constants.MULTICAST_HOST);
         try hash.delete(&self.name, &alive_networks);
         _ = try hash.put(&self.name, &dead_networks);
@@ -83,7 +83,7 @@ pub const Network = struct {
 
     pub const deinit = close;
 
-    pub fn send(self: *Network, future: *IO.Future, data: []const u8) !void {
+    pub fn send(self: *Session, future: *IO.Future, data: []const u8) !void {
         assert(data.len + HEADER_SIZE <= constants.NET_PAYLOAD_MAX);
 
         const frame: Frame = .{
@@ -106,7 +106,7 @@ pub const Network = struct {
 
     }
 
-    pub fn recv(self: *Network, future: *IO.Future) !void {
+    pub fn recv(self: *Session, future: *IO.Future) !void {
         try self.io.recv_from(future, self.socket, &self.recv_buf[self.next_recv]);
         // TODO: When the future returns we should do the increament if the future is returning with the data.
     }
@@ -116,7 +116,7 @@ test "open and close a network channel" {
     var io = try IO.init(32, 0);
     defer io.deinit();
 
-    var net = try Network.open(&io, "test_channel", 1024, 8, .best_effort);
+    var net = try Session.open(&io, "test_channel", 1024, 8, .best_effort);
     defer net.close() catch {};
 
     try std.testing.expectEqual(constants.PORT_BASE + hash.fvn1a("test_channel", constants.PORT_SLOTS), @as(u32, net.port));
@@ -131,9 +131,9 @@ test "network channel port is deterministic from name" {
     var io = try IO.init(32, 0);
     defer io.deinit();
 
-    var a = try Network.open(&io, name, 256, 4, .best_effort);
+    var a = try Session.open(&io, name, 256, 4, .best_effort);
     defer a.close() catch {};
-    var b = try Network.open(&io, name, 256, 4, .best_effort);
+    var b = try Session.open(&io, name, 256, 4, .best_effort);
     defer b.close() catch {};
 
     try std.testing.expectEqual(a.port, b.port);
@@ -143,7 +143,7 @@ test "send and recv round-trip over multicast loopback" {
     var io = try IO.init(32, 0);
     defer io.deinit();
 
-    var net = try Network.open(&io, "roundtrip_channel", 1024, 4, .best_effort);
+    var net = try Session.open(&io, "roundtrip_channel", 1024, 4, .best_effort);
     defer net.close() catch {};
 
     const msg = "hello network channel";
@@ -171,7 +171,7 @@ test "large payload round-trip" {
     var io = try IO.init(32, 0);
     defer io.deinit();
 
-    var net = try Network.open(&io, "large_payload_channel", 8192, 4, .best_effort);
+    var net = try Session.open(&io, "large_payload_channel", 8192, 4, .best_effort);
     defer net.close() catch {};
 
     var payload: [8192]u8 = undefined;

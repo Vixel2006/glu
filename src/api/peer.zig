@@ -2,13 +2,13 @@ const std = @import("std");
 
 const constants = @import("../constants.zig");
 const IO = @import("../io.zig").IO;
-const Network = @import("../channel/network.zig").Network;
+const Session = @import("../channel/network.zig").Session;
 const HEADER_SIZE = @import("../channel/network.zig").HEADER_SIZE;
 
 pub const Peer = struct {
-    network: *Network,
+    network: *Session,
 
-    pub fn init(network: *Network) Peer {
+    pub fn init(network: *Session) Peer {
         return .{ .network = network };
     }
 
@@ -34,18 +34,18 @@ test "peer init wraps a network" {
     var io = try IO.init(32, 0);
     defer io.deinit();
 
-    var net = try Network.open(&io, "peer_init", @sizeOf(TestMsg), 8, .best_effort);
+    var net = try Session.open(&io, "peer_init", @sizeOf(TestMsg), 8, .best_effort);
     defer net.close() catch {};
 
     const peer = Peer.init(&net);
-    try std.testing.expectEqual(@as(*Network, &net), peer.network);
+    try std.testing.expectEqual(@as(*Session, &net), peer.network);
 }
 
 test "peer send forwards payload and advances the send cursor" {
     var io = try IO.init(32, 0);
     defer io.deinit();
 
-    var net = try Network.open(&io, "peer_send", @sizeOf(TestMsg), 8, .best_effort);
+    var net = try Session.open(&io, "peer_send", @sizeOf(TestMsg), 8, .best_effort);
     defer net.close() catch {};
 
     var peer = Peer.init(&net);
@@ -63,7 +63,7 @@ test "peer recv and read round-trip a message" {
     var io = try IO.init(32, 0);
     defer io.deinit();
 
-    var net = try Network.open(&io, "peer_roundtrip", @sizeOf(TestMsg), 8, .best_effort);
+    var net = try Session.open(&io, "peer_roundtrip", @sizeOf(TestMsg), 8, .best_effort);
     defer net.close() catch {};
 
     var peer = Peer.init(&net);
