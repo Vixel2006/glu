@@ -33,18 +33,18 @@ pub fn cleanup_topics() void {
 
 test "cleanup_topics removes only segments whose owner is dead" {
     const TestMsg = packed struct { x: u32 };
-    const Channel = @import("../channel.zig").Channel;
+    const Shm = @import("../channel/shm.zig").Shm;
 
     // A segment owned by a live process (this one) must survive cleanup.
     _ = c.shm_unlink("/glu_test_cleanup_live");
-    var live = try Channel.open("/glu_test_cleanup_live", @sizeOf(TestMsg), 4, .reliable);
+    var live = try Shm.open("/glu_test_cleanup_live", @sizeOf(TestMsg), 4, .reliable);
     defer live.close();
 
     // A segment left by a crashed owner (child exits without closing) must be removed.
     _ = c.shm_unlink("/glu_test_cleanup_dead");
     const pid = c.fork();
     if (pid == 0) {
-        const dead = Channel.open("/glu_test_cleanup_dead", @sizeOf(TestMsg), 4, .reliable) catch c.exit(1);
+        const dead = Shm.open("/glu_test_cleanup_dead", @sizeOf(TestMsg), 4, .reliable) catch c.exit(1);
         _ = dead;
         c.exit(0);
     }

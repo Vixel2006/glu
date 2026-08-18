@@ -3,8 +3,8 @@ const c = std.c;
 const os = std.os.linux;
 
 const Topic = @import("topic.zig").Topic;
-const slowest_reader = @import("../channel.zig").slowest_reader;
-const MAX_READERS = @import("../channel.zig").MAX_READERS;
+const slowest_reader = @import("../channel/shm.zig").slowest_reader;
+const MAX_READERS = @import("../channel/shm.zig").MAX_READERS;
 
 pub const ScanErr = error{
     ShmDirInaccessible,

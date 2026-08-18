@@ -3,10 +3,10 @@ const assert = std.debug.assert;
 const c = std.c;
 const os = std.os.linux;
 
-const GLU_MAGIC = @import("../channel.zig").GLU_MAGIC;
-const Header = @import("../channel.zig").Header;
-const shm_name = @import("../channel.zig").shm_name;
-const validate_header = @import("../channel.zig").validate_header;
+const GLU_MAGIC = @import("../channel/shm.zig").GLU_MAGIC;
+const Header = @import("../channel/shm.zig").Header;
+const shm_name = @import("../channel/shm.zig").shm_name;
+const validate_header = @import("../channel/shm.zig").validate_header;
 
 pub const TopicErr = error{
     TopicNotFound,

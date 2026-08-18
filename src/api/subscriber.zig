@@ -1,11 +1,8 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const c = std.c;
-const Channel = @import("../channel.zig").Channel;
-const MAX_READERS = @import("../channel.zig").MAX_READERS;
-const chan_peek = @import("../channel.zig").peek;
-const chan_ack = @import("../channel.zig").ack;
-const write = @import("../channel.zig").write;
+const Shm = @import("../channel/shm.zig").Shm;
+const MAX_READERS = @import("../channel/shm.zig").MAX_READERS;
 
 const SubErr = error{
     OutOfMemory,
@@ -15,13 +12,13 @@ const SubErr = error{
     NoReaderSlots,
 };
 
-/// High-level subscriber wrapping a raw `Channel`.
+/// High-level subscriber wrapping a raw `Shm`.
 ///
 /// Each subscriber occupies one slot in the channel's reader array
 /// (0 .. MAX_READERS-1). Multiple subscribers can attach to the
 /// same topic independently.
 pub const Subscriber = struct {
-    channel: Channel,
+    channel: Shm,
     id: u32,
 
     /// Create a new subscriber for topic `name`.
@@ -34,7 +31,7 @@ pub const Subscriber = struct {
     /// step, so `sweep_dead_readers` can never clear a freshly claimed
     /// slot based on a stale PID.
     pub fn init(name: []const u8, msg_size: u32, capacity: u32) SubErr!Subscriber {
-        var chan = try Channel.open(name, msg_size, capacity, .reliable);
+        var chan = try Shm.open(name, msg_size, capacity, .reliable);
 
         const pid: u32 = @intCast(std.os.linux.getpid());
         _ = @cmpxchgStrong(u32, &chan.header.owner_pid, pid, 0, .acq_rel, .acquire);
@@ -82,18 +79,18 @@ pub const Subscriber = struct {
         const entry = @atomicLoad(u64, &self.channel.header.readers[self.id], .acquire);
         const r: u32 = @truncate(entry);
         const w = @atomicLoad(u32, &self.channel.header.write, .acquire);
-        if (r < w) return chan_peek(&self.channel, self.id);
+        if (r < w) return self.channel.peek(self.id);
         return null;
     }
 
     /// Mark the most recently peeked message as consumed.
     pub fn ack(self: *Subscriber) void {
         assert(self.id < MAX_READERS);
-        chan_ack(&self.channel, self.id);
+        self.channel.ack(self.id);
     }
 };
 
-test "Subscriber: publish via raw Channel, peek and ack" {
+test "Subscriber: publish via raw Shm, peek and ack" {
     const TestMsg = packed struct { x: u32, y: u32 };
 
     // we do unlink to close the stale POSIX shared memory from prior failed tests if any
@@ -104,8 +101,8 @@ test "Subscriber: publish via raw Channel, peek and ack" {
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open("/glu_test_subscriber", @sizeOf(TestMsg), 2, .reliable) catch c.exit(1);
-        write(&child_chan, @ptrCast(&TestMsg{ .x = 99, .y = 42 }));
+        var child_chan = Shm.open("/glu_test_subscriber", @sizeOf(TestMsg), 2, .reliable) catch c.exit(1);
+        child_chan.write(@ptrCast(&TestMsg{ .x = 99, .y = 42 }));
         child_chan.close();
         c.exit(0);
     }
@@ -134,9 +131,9 @@ test "two subscribers on the same channel both receive messages" {
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open("/glu_test_two_subs", @sizeOf(TestMsg), 8, .reliable) catch c.exit(1);
-        write(&child_chan, @ptrCast(&TestMsg{ .x = 1, .y = 2 }));
-        write(&child_chan, @ptrCast(&TestMsg{ .x = 3, .y = 4 }));
+        var child_chan = Shm.open("/glu_test_two_subs", @sizeOf(TestMsg), 8, .reliable) catch c.exit(1);
+        child_chan.write(@ptrCast(&TestMsg{ .x = 1, .y = 2 }));
+        child_chan.write(@ptrCast(&TestMsg{ .x = 3, .y = 4 }));
         child_chan.close();
         c.exit(0);
     }
@@ -188,8 +185,8 @@ test "peek does not advance the read cursor" {
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open("/glu_test_peek_noack", @sizeOf(TestMsg), 4, .reliable) catch c.exit(1);
-        write(&child_chan, @ptrCast(&TestMsg{ .x = 5, .y = 6 }));
+        var child_chan = Shm.open("/glu_test_peek_noack", @sizeOf(TestMsg), 4, .reliable) catch c.exit(1);
+        child_chan.write(@ptrCast(&TestMsg{ .x = 5, .y = 6 }));
         child_chan.close();
         c.exit(0);
     }
@@ -260,7 +257,7 @@ test "concurrent subscriber claims get unique slots and survive sweeps" {
 
     _ = c.shm_unlink("/glu_test_concurrent_claim");
 
-    var chan = try Channel.open("/glu_test_concurrent_claim", @sizeOf(TestMsg), 8, .reliable);
+    var chan = try Shm.open("/glu_test_concurrent_claim", @sizeOf(TestMsg), 8, .reliable);
     defer chan.close();
 
     const N = 8;
@@ -289,7 +286,7 @@ test "concurrent subscriber claims get unique slots and survive sweeps" {
     // Hammer sweeps while the children hold their claims.
     var j: usize = 0;
     while (j < 500) : (j += 1) {
-        @import("../channel.zig").sweep_dead_readers(&chan.header.readers);
+        @import("../channel/shm.zig").sweep_dead_readers(&chan.header.readers);
     }
 
     for (children) |pid| {

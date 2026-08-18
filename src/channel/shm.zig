@@ -3,14 +3,13 @@ const assert = std.debug.assert;
 const c = @import("std").c;
 const os = @import("std").os.linux;
 
-const is_alive = @import("registry.zig").is_alive;
+const is_alive = @import("../registry.zig").is_alive;
 
-const ShmErr = error{ OutOfMemory, ShmOpenFailed, MmapFailed, InvalidSegment };
+pub const ShmErr = error{ OutOfMemory, ShmOpenFailed, MmapFailed, InvalidSegment };
 
-/// Maximum message payload a segment will be trusted to describe.
 pub const MAX_MSG_SIZE: u32 = 1 << 16;
-/// Maximum ring capacity a segment will be trusted to describe.
 pub const MAX_CAPACITY: u32 = 1 << 22;
+
 /// Maximum topic-name length stored in a segment header.
 pub const MAX_NAME_LEN: u32 = 63;
 
@@ -79,7 +78,7 @@ pub const ToS = enum(u32) {
     best_effort = 1,
 };
 
-/// Layout of the shared memory header at the start of every channel.
+/// Layout of the shared memory header at the start of every shm channel.
 ///
 /// The `name` field is padded to 64 bytes to push the `readers` array past
 /// the first cache line, reducing false sharing between writer and readers.
@@ -120,7 +119,7 @@ comptime {
 /// Multiple processes can open the same named channel. The first opener
 /// creates and initialises the segment; subsequent openers attach to it
 /// and increment a reference counter. The last `close` unlinks the shm.
-pub const Channel = struct {
+pub const Shm = struct {
     fd: i32,
     ptr: [*]u8,
     header: *Header,
@@ -137,13 +136,11 @@ pub const Channel = struct {
     /// The first call with a given `name` creates the segment and
     /// initialises the header. Subsequent calls attach to the existing
     /// segment and bump the connection counter.
-    pub fn open(name: []const u8, msg_size: u32, capacity: u32, tos: ToS) ShmErr!Channel {
+    pub fn open(name: []const u8, msg_size: u32, capacity: u32, tos: ToS) ShmErr!Shm {
         assert(msg_size > 0);
         assert(capacity > 0);
         assert(name.len > 0);
-        // The data region is `msg_size * capacity` bytes. Compute it in u64
-        // (a u32 product silently overflows for large configurations) and
-        // reject sizes that would not fit the `off_t` used by `ftruncate`.
+
         const data_size = std.math.mul(u64, msg_size, capacity) catch return ShmErr.InvalidSegment;
         const total_size = std.math.add(u64, data_size, @sizeOf(Header)) catch return ShmErr.InvalidSegment;
         if (total_size > std.math.maxInt(std.c.off_t) or total_size > std.math.maxInt(usize)) {
@@ -151,9 +148,6 @@ pub const Channel = struct {
         }
         const total_size_usize: usize = @intCast(total_size);
 
-        // POSIX shm_open requires the name to start with '/' and contain
-        // no other '/' characters.  Replace inner slashes with '_' so that
-        // topic names like "/farm/weather" produce a valid shm name.
         var shm_name_buf: [256:0]u8 = undefined;
         const shm_name_z = shm_name(&shm_name_buf, name) orelse return ShmErr.ShmOpenFailed;
 
@@ -167,8 +161,6 @@ pub const Channel = struct {
         var created = true;
 
         if (fd == -1) {
-            // shm_open failed with O_EXCL.  If the file already exists
-            // (EEXIST) we attach to it; any other error is terminal.
             const rdwr_flags: c_int = @as(c_int, @bitCast(os.O{
                 .ACCMODE = .RDWR,
             }));
@@ -178,19 +170,14 @@ pub const Channel = struct {
 
         if (fd == -1) return ShmErr.ShmOpenFailed;
 
-        // Only the creator sets the size. Attachers trust the existing layout
-        // but must verify the header before trusting anything in shared memory.
         if (created) {
             if (c.ftruncate(fd, @intCast(total_size)) == -1) {
                 _ = c.close(fd);
-                // Don't leak a half-created segment in /dev/shm.
+                // NOTE: Don't leak a half-created segment in /dev/shm.
                 _ = c.shm_unlink(shm_name_z.ptr);
                 return ShmErr.ShmOpenFailed;
             }
         } else {
-            // Attaching to an existing segment. Read the file size before
-            // mmap so a truncated segment is rejected with a clean error
-            // instead of SIGBUSing on the first access past EOF.
             var file_size: usize = 0;
             {
                 const sz = c.lseek(fd, 0, 2);
@@ -262,9 +249,6 @@ pub const Channel = struct {
             @memcpy(hdr.name[0..name_len], name[0..name_len]);
             hdr.name[name_len] = 0;
         } else {
-            // Attaching to a segment we don't own: reject anything that
-            // doesn't match the requested geometry instead of reading
-            // garbage as a ring buffer.
             if (hdr.magic != GLU_MAGIC or hdr.msg_size != msg_size or hdr.capacity != capacity) {
                 _ = os.munmap(ptr, total_size_usize);
                 _ = c.close(fd);
@@ -280,7 +264,7 @@ pub const Channel = struct {
     ///
     /// The underlying POSIX shm is unlinked only when the last connection
     /// is closed (reference counting via `conns`).
-    pub fn close(self: *Channel) void {
+    pub fn close(self: *Shm) void {
         assert(self.fd != -1);
         const prev = @atomicRmw(u32, &self.header.conns, .Sub, 1, .acq_rel);
 
@@ -302,6 +286,69 @@ pub const Channel = struct {
     }
 
     pub const deinit = close;
+
+    /// Write a message into the ring buffer.
+    ///
+    /// Uses `self.header.msg_size` so a single entry point serves both Zig
+    /// and C callers without type-level polymorphism.
+    /// Blocks with a spin-loop if the buffer is full (slowest-reader
+    /// backpressure).
+    pub fn write(self: *Shm, msg: *const anyopaque) void {
+        assert(self.fd != -1);
+        const cap = self.cap;
+        const tos = self.tos;
+
+        if (tos == .reliable) {
+            while (self.header.write -% slowest_reader(&self.header.readers, self.header.write) >= cap) {
+                sweep_dead_readers(&self.header.readers);
+                if (self.header.write -% slowest_reader(&self.header.readers, self.header.write) < cap) break;
+                std.atomic.spinLoopHint();
+            }
+        }
+
+        const msg_size = self.msg_size;
+        const slot = self.ptr + @sizeOf(Header) + (self.header.write % cap) * msg_size;
+        @memcpy(slot, @as([*]const u8, @ptrCast(msg))[0..msg_size]);
+
+        // Publish the slot: make data visible to readers before advancing the cursor.
+        _ = @atomicRmw(u32, &self.header.write, .Add, 1, .release);
+    }
+
+    /// Return a pointer to the next unread slot for `sub_id` without
+    /// advancing the read cursor.
+    ///
+    /// The slot remains readable until the caller acknowledges it with
+    /// `ack`; the publisher only reuses a slot once every reader has
+    /// advanced past it. This makes the consume phase safe against the
+    /// publisher wrapping around mid-read.
+    pub fn peek(self: *Shm, sub_id: u32) *anyopaque {
+        assert(self.fd != -1);
+        assert(sub_id < MAX_READERS);
+        const msg_size = self.msg_size;
+        const entry = @atomicLoad(u64, &self.header.readers[sub_id], .acquire);
+        const cursor: u32 = @truncate(entry);
+        const idx = cursor % self.cap;
+        const slot = self.ptr + @sizeOf(Header) + idx * msg_size;
+        return @ptrCast(slot);
+    }
+
+    /// Advance the read cursor for `sub_id` after the message returned by
+    /// `peek` has been consumed.
+    ///
+    /// The release store publishes the consumed state so the publisher can
+    /// safely reuse the slot.
+    pub fn ack(self: *Shm, sub_id: u32) void {
+        assert(self.fd != -1);
+        assert(sub_id < MAX_READERS);
+
+        const entry = &self.header.readers[sub_id];
+        while (true) {
+            const cur = @atomicLoad(u64, entry, .monotonic);
+            const cursor: u32 = @truncate(cur);
+            const next = (cur & ~@as(u64, std.math.maxInt(u32))) | @as(u64, cursor +% 1);
+            if (@cmpxchgWeak(u64, entry, cur, next, .acq_rel, .monotonic) == null) return;
+        }
+    }
 };
 
 /// Force-unlink the shared memory segment backing topic `name`.
@@ -314,33 +361,6 @@ pub fn force_unlink(name: []const u8) void {
     if (shm_name(&shm_name_buf, name)) |nz| {
         _ = c.shm_unlink(nz.ptr);
     }
-}
-
-/// Write a message into the ring buffer.
-///
-/// Uses `chan.header.msg_size` so a single entry point serves both Zig
-/// and C callers without type-level polymorphism.
-/// Blocks with a spin-loop if the buffer is full (slowest-reader
-/// backpressure).
-pub fn write(chan: *Channel, msg: *const anyopaque) void {
-    assert(chan.fd != -1);
-    const cap = chan.cap;
-    const tos = chan.tos;
-
-    if (tos == .reliable) {
-        while (chan.header.write -% slowest_reader(&chan.header.readers, chan.header.write) >= cap) {
-            sweep_dead_readers(&chan.header.readers);
-            if (chan.header.write -% slowest_reader(&chan.header.readers, chan.header.write) < cap) break;
-            std.atomic.spinLoopHint();
-        }
-    }
-
-    const msg_size = chan.msg_size;
-    const slot = chan.ptr + @sizeOf(Header) + (chan.header.write % cap) * msg_size;
-    @memcpy(slot, @as([*]const u8, @ptrCast(msg))[0..msg_size]);
-
-    // Publish the slot: make data visible to readers before advancing the cursor.
-    _ = @atomicRmw(u32, &chan.header.write, .Add, 1, .release);
 }
 
 /// Search for Dead Readers and inactive them.
@@ -376,42 +396,6 @@ pub fn slowest_reader(readers: []const u64, write_cursor: u32) u32 {
         min = @min(min, cursor);
     }
     return min;
-}
-
-/// Return a pointer to the next unread slot for `sub_id` without
-/// advancing the read cursor.
-///
-/// The slot remains readable until the caller acknowledges it with
-/// `ack`; the publisher only reuses a slot once every reader has
-/// advanced past it. This makes the consume phase safe against the
-/// publisher wrapping around mid-read.
-pub fn peek(chan: *Channel, sub_id: u32) *anyopaque {
-    assert(chan.fd != -1);
-    assert(sub_id < MAX_READERS);
-    const msg_size = chan.msg_size;
-    const entry = @atomicLoad(u64, &chan.header.readers[sub_id], .acquire);
-    const cursor: u32 = @truncate(entry);
-    const idx = cursor % chan.cap;
-    const slot = chan.ptr + @sizeOf(Header) + idx * msg_size;
-    return @ptrCast(slot);
-}
-
-/// Advance the read cursor for `sub_id` after the message returned by
-/// `peek` has been consumed.
-///
-/// The release store publishes the consumed state so the publisher can
-/// safely reuse the slot.
-pub fn ack(chan: *Channel, sub_id: u32) void {
-    assert(chan.fd != -1);
-    assert(sub_id < MAX_READERS);
-
-    const entry = &chan.header.readers[sub_id];
-    while (true) {
-        const cur = @atomicLoad(u64, entry, .monotonic);
-        const cursor: u32 = @truncate(cur);
-        const next = (cur & ~@as(u64, std.math.maxInt(u32))) | @as(u64, cursor +% 1);
-        if (@cmpxchgWeak(u64, entry, cur, next, .acq_rel, .monotonic) == null) return;
-    }
 }
 
 fn reader_entry(pid: u32, cursor: u32) u64 {
@@ -471,15 +455,15 @@ test "writer not blocked when no active readers" {
 
     _ = c.shm_unlink("/glu_test_nowriterblock");
 
-    var chan = try Channel.open("/glu_test_nowriterblock", @sizeOf(TestMsg), 2, .reliable);
+    var chan = try Shm.open("/glu_test_nowriterblock", @sizeOf(TestMsg), 2, .reliable);
     defer chan.close();
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open("/glu_test_nowriterblock", @sizeOf(TestMsg), 2, .reliable) catch c.exit(1);
-        write(&child_chan, @ptrCast(&TestMsg{ .x = 1, .y = 1 }));
-        write(&child_chan, @ptrCast(&TestMsg{ .x = 2, .y = 2 }));
-        write(&child_chan, @ptrCast(&TestMsg{ .x = 3, .y = 3 }));
+        var child_chan = Shm.open("/glu_test_nowriterblock", @sizeOf(TestMsg), 2, .reliable) catch c.exit(1);
+        child_chan.write(@ptrCast(&TestMsg{ .x = 1, .y = 1 }));
+        child_chan.write(@ptrCast(&TestMsg{ .x = 2, .y = 2 }));
+        child_chan.write(@ptrCast(&TestMsg{ .x = 3, .y = 3 }));
         child_chan.close();
         c.exit(0);
     }
@@ -498,14 +482,14 @@ test "two readers read independently from the same channel" {
 
     _ = c.shm_unlink("/glu_test_two_readers");
 
-    var chan = try Channel.open("/glu_test_two_readers", @sizeOf(TestMsg), 8, .reliable);
+    var chan = try Shm.open("/glu_test_two_readers", @sizeOf(TestMsg), 8, .reliable);
     defer chan.close();
 
     @atomicStore(u64, &chan.header.readers[0], reader_entry(@intCast(std.os.linux.getpid()), 0), .release);
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open("/glu_test_two_readers", @sizeOf(TestMsg), 8, .reliable) catch c.exit(1);
+        var child_chan = Shm.open("/glu_test_two_readers", @sizeOf(TestMsg), 8, .reliable) catch c.exit(1);
         @atomicStore(u64, &child_chan.header.readers[1], reader_entry(@intCast(std.os.linux.getpid()), 0), .release);
 
         {
@@ -513,10 +497,10 @@ test "two readers read independently from the same channel" {
             _ = c.nanosleep(&ts, null);
         }
 
-        const m0: *const TestMsg = @ptrCast(@alignCast(peek(&child_chan, 1)));
-        ack(&child_chan, 1);
-        const m1: *const TestMsg = @ptrCast(@alignCast(peek(&child_chan, 1)));
-        ack(&child_chan, 1);
+        const m0: *const TestMsg = @ptrCast(@alignCast(child_chan.peek(1)));
+        child_chan.ack(1);
+        const m1: *const TestMsg = @ptrCast(@alignCast(child_chan.peek(1)));
+        child_chan.ack(1);
         if (m0.x != 10 or m0.y != 20) c.exit(1);
         if (m1.x != 30 or m1.y != 40) c.exit(1);
 
@@ -524,22 +508,22 @@ test "two readers read independently from the same channel" {
         c.exit(0);
     }
 
-    write(&chan, @ptrCast(&TestMsg{ .x = 10, .y = 20 }));
-    write(&chan, @ptrCast(&TestMsg{ .x = 30, .y = 40 }));
+    chan.write(@ptrCast(&TestMsg{ .x = 10, .y = 20 }));
+    chan.write(@ptrCast(&TestMsg{ .x = 30, .y = 40 }));
 
     {
         var ts = std.c.timespec{ .sec = 0, .nsec = 50_000_000 };
         _ = c.nanosleep(&ts, null);
     }
 
-    const m0: *const TestMsg = @ptrCast(@alignCast(peek(&chan, 0)));
+    const m0: *const TestMsg = @ptrCast(@alignCast(chan.peek(0)));
     try std.testing.expect(m0.x == 10);
     try std.testing.expect(m0.y == 20);
-    ack(&chan, 0);
-    const m1: *const TestMsg = @ptrCast(@alignCast(peek(&chan, 0)));
+    chan.ack(0);
+    const m1: *const TestMsg = @ptrCast(@alignCast(chan.peek(0)));
     try std.testing.expect(m1.x == 30);
     try std.testing.expect(m1.y == 40);
-    ack(&chan, 0);
+    chan.ack(0);
 
     _ = c.waitpid(pid, null, 0);
 }
@@ -549,13 +533,13 @@ test "cross-process: producer writes, consumer reads via fork" {
 
     _ = c.shm_unlink("/glu_test_fork");
 
-    var chan = try Channel.open("/glu_test_fork", @sizeOf(TestMsg), 5, .reliable);
+    var chan = try Shm.open("/glu_test_fork", @sizeOf(TestMsg), 5, .reliable);
     defer chan.close();
 
     const pid = c.fork();
     if (pid == 0) {
-        var child_chan = Channel.open("/glu_test_fork", @sizeOf(TestMsg), 5, .reliable) catch c.exit(1);
-        write(&child_chan, @ptrCast(&TestMsg{ .x = 42, .y = 99 }));
+        var child_chan = Shm.open("/glu_test_fork", @sizeOf(TestMsg), 5, .reliable) catch c.exit(1);
+        child_chan.write(@ptrCast(&TestMsg{ .x = 42, .y = 99 }));
         child_chan.close();
         c.exit(0);
     }
@@ -564,34 +548,34 @@ test "cross-process: producer writes, consumer reads via fork" {
         var ts = std.c.timespec{ .sec = 0, .nsec = 100_000_000 };
         _ = c.nanosleep(&ts, null);
     }
-    const msg: *const TestMsg = @ptrCast(@alignCast(peek(&chan, 0)));
+    const msg: *const TestMsg = @ptrCast(@alignCast(chan.peek(0)));
     try std.testing.expect(msg.x == 42);
     try std.testing.expect(msg.y == 99);
-    ack(&chan, 0);
+    chan.ack(0);
 
     _ = c.waitpid(pid, null, 0);
 }
 
-test "Channel.open rejects an existing segment with mismatched geometry" {
+test "Shm.open rejects an existing segment with mismatched geometry" {
     const TestMsg = packed struct { x: u32 };
 
     _ = c.shm_unlink("/glu_test_mismatch_attach");
 
-    var base = try Channel.open("/glu_test_mismatch_attach", @sizeOf(TestMsg), 8, .reliable);
+    var base = try Shm.open("/glu_test_mismatch_attach", @sizeOf(TestMsg), 8, .reliable);
     defer base.close();
 
-    try std.testing.expectError(error.InvalidSegment, Channel.open("/glu_test_mismatch_attach", @sizeOf(TestMsg) + 4, 8, .reliable));
-    try std.testing.expectError(error.InvalidSegment, Channel.open("/glu_test_mismatch_attach", @sizeOf(TestMsg), 16, .reliable));
+    try std.testing.expectError(error.InvalidSegment, Shm.open("/glu_test_mismatch_attach", @sizeOf(TestMsg) + 4, 8, .reliable));
+    try std.testing.expectError(error.InvalidSegment, Shm.open("/glu_test_mismatch_attach", @sizeOf(TestMsg), 16, .reliable));
 
-    var ok = try Channel.open("/glu_test_mismatch_attach", @sizeOf(TestMsg), 8, .reliable);
+    var ok = try Shm.open("/glu_test_mismatch_attach", @sizeOf(TestMsg), 8, .reliable);
     ok.close();
 }
 
-test "Channel.open rejects configurations whose data region overflows" {
+test "Shm.open rejects configurations whose data region overflows" {
     _ = c.shm_unlink("/glu_test_overflow");
 
     // (2^32-1)^2 wraps a u32 product (to 1); must be rejected up front.
-    try std.testing.expectError(error.InvalidSegment, Channel.open("/glu_test_overflow", std.math.maxInt(u32), std.math.maxInt(u32), .reliable));
+    try std.testing.expectError(error.InvalidSegment, Shm.open("/glu_test_overflow", std.math.maxInt(u32), std.math.maxInt(u32), .reliable));
 
     // No segment should have been created in /dev/shm as a side effect.
     const flags: c_int = @as(c_int, @bitCast(os.O{ .ACCMODE = .RDONLY }));

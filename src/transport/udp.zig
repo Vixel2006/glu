@@ -12,6 +12,9 @@ pub const SocketConfig = struct {
     recv_buf: ?i32 = null,
     send_buf: ?i32 = null,
     broadcast: bool = false,
+    /// Allow multiple sockets to bind the same address/port. Required by
+    /// multicast discovery, where every node shares one discovery port.
+    reuse_addr: bool = false,
     recv_timeout_ms: ?u32 = null,
     send_timeout_ms: ?u32 = null,
 };
@@ -22,6 +25,9 @@ pub const ReceiveResult = struct {
 };
 
 const IPPROTO_IP = 0;
+const IP_MULTICAST_IF = 32;
+const IP_MULTICAST_TTL = 33;
+const IP_MULTICAST_LOOP = 34;
 const IP_ADD_MEMBERSHIP = 35;
 const IP_DROP_MEMBERSHIP = 36;
 
@@ -42,17 +48,30 @@ fn apply_socket_opts(fd: i32, config: SocketConfig) void {
     if (config.send_timeout_ms) |ms| net.set_timeval(fd, c.SOL.SOCKET, @as(u32, @intCast(c.SO.SNDTIMEO)), ms);
 }
 
-pub fn bind(io: *IO, port: u16, config: SocketConfig) !Socket {
+const BindConfig = struct {
+    host: []const u8 = "0.0.0.0",
+    port: u16,
+};
+
+pub fn bind(io: *IO, bind_config: BindConfig, socket_config: SocketConfig) !Socket {
     const socket = try io.socket(posix.AF.INET, posix.SOCK.DGRAM, 0);
 
+    // Multiple nodes share the same discovery port, so a second bind to the
+    // same address/port would fail with EADDRINUSE. SO_REUSEADDR must be set
+    // before bind() to take effect on UDP sockets.
+    if (socket_config.reuse_addr) {
+        net.set_int(socket, c.SOL.SOCKET, @as(u32, @intCast(c.SO.REUSEADDR)), 1);
+    }
+
+    const parsed = try std.Io.net.IpAddress.parseIp4(bind_config.host, bind_config.port);
     const addr: posix.sockaddr.in = .{
-        .port = @byteSwap(port),
-        .addr = 0,
+        .port = @byteSwap(parsed.ip4.port),
+        .addr = @bitCast(parsed.ip4.bytes),
     };
 
     try io.bind(socket, addr);
 
-    apply_socket_opts(socket, config);
+    apply_socket_opts(socket, socket_config);
 
     return socket;
 }
@@ -135,13 +154,19 @@ pub fn receive(
     try io.recv(future, socket, buffer);
 }
 
-pub fn join_multicast(socket: Socket, group: []const u8) void {
+pub fn join_multicast(socket: Socket, group: []const u8, port: u16, interface: []const u8) void {
     assert(group.len > 0);
-    const parsed = (std.Io.net.IpAddress.parseIp4(group, 0) catch return).ip4;
+    const parsed_group = (std.Io.net.IpAddress.parseIp4(group, port) catch return).ip4;
+    const imr_interface: u32 = if (std.mem.eql(u8, interface, ""))
+        0
+    else blk: {
+        const parsed_iface = (std.Io.net.IpAddress.parseIp4(interface, 0) catch return).ip4;
+        break :blk @bitCast(parsed_iface.bytes);
+    };
 
     const mcreq = IpMcreq{
-        .imr_multiaddr = @bitCast(parsed.bytes),
-        .imr_interface = 0,
+        .imr_multiaddr = @bitCast(parsed_group.bytes),
+        .imr_interface = imr_interface,
     };
     _ = c.setsockopt(socket, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mcreq, @sizeOf(IpMcreq));
 }
@@ -157,11 +182,25 @@ pub fn leave_multicast(socket: Socket, group: []const u8) void {
     _ = c.setsockopt(socket, IPPROTO_IP, IP_DROP_MEMBERSHIP, &mcreq, @sizeOf(IpMcreq));
 }
 
+/// Set the interface outgoing multicast datagrams are transmitted on.
+pub fn set_multicast_if(socket: Socket, interface: []const u8) void {
+    assert(interface.len > 0);
+    const parsed = (std.Io.net.IpAddress.parseIp4(interface, 0) catch return).ip4;
+    const addr: u32 = @bitCast(parsed.bytes);
+    _ = c.setsockopt(socket, IPPROTO_IP, IP_MULTICAST_IF, &addr, @sizeOf(u32));
+}
+
+/// Enable/disable a socket receiving its own multicast datagrams.
+pub fn set_multicast_loop(socket: Socket, on: bool) void {
+    const enabled: u8 = @intFromBool(on);
+    _ = c.setsockopt(socket, IPPROTO_IP, IP_MULTICAST_LOOP, &enabled, @sizeOf(u8));
+}
+
 test "bind UDP socket" {
     var io = try IO.init(32, 0);
     defer io.deinit();
 
-    const socket = try bind(&io, 0, .{});
+    const socket = try bind(&io, .{ .port = 0 }, .{});
     defer _ = c.close(socket);
 }
 
@@ -169,10 +208,10 @@ test "send_to and receive_from round-trip" {
     var io = try IO.init(32, 0);
     defer io.deinit();
 
-    const socket1 = try bind(&io, 0, .{});
+    const socket1 = try bind(&io, .{ .port = 0 }, .{});
     defer _ = c.close(socket1);
 
-    const socket2 = try bind(&io, 0, .{});
+    const socket2 = try bind(&io, .{ .port = 0 }, .{});
     defer _ = c.close(socket2);
 
     var addr1: std.posix.sockaddr.in = undefined;

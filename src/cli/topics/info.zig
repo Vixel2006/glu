@@ -2,9 +2,9 @@ const std = @import("std");
 const utils = @import("../utils.zig");
 const parser = @import("../parser.zig");
 const discovery = @import("../../discovery/mod.zig");
-const slowest_reader = @import("../../channel.zig").slowest_reader;
-const MAX_READERS = @import("../../channel.zig").MAX_READERS;
-const Header = @import("../../channel.zig").Header;
+const slowest_reader = @import("../../channel/shm.zig").slowest_reader;
+const MAX_READERS = @import("../../channel/shm.zig").MAX_READERS;
+const Header = @import("../../channel/shm.zig").Header;
 
 /// Show detailed info about a topic (`glu topics info <topic>`).
 pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
