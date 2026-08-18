@@ -18,7 +18,7 @@ const Frame = extern struct {
     name: [constants.MAX_NAME_LEN + 1]u8,
 };
 
-const HEADER_SIZE = @sizeOf(Frame);
+pub const HEADER_SIZE = @sizeOf(Frame);
 
 var alive_networks: [256][]const u8 = std.mem.zeroes([256][]const u8);
 var dead_networks: [256][]const u8 = std.mem.zeroes([256][]const u8);
