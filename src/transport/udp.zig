@@ -65,7 +65,7 @@ pub fn bind(io: *IO, bind_config: BindConfig, socket_config: SocketConfig) !Sock
 
     const parsed = try std.Io.net.IpAddress.parseIp4(bind_config.host, bind_config.port);
     const addr: posix.sockaddr.in = .{
-        .port = parsed.ip4.port,
+        .port = @byteSwap(parsed.ip4.port),
         .addr = @bitCast(parsed.ip4.bytes),
     };
 

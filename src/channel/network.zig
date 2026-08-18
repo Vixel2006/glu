@@ -22,9 +22,9 @@ const PORT_SLOTS: u32 = 256;
 
 const MAX_NAME_LEN = 63;
 
-/// Maximum payload per message fragment and maximum number of in-flight messages per
-/// channel (the ring depth / flow-control window).
-const NET_FRAG_MAX = 4096;
+/// Maximum UDP payload over IPv4 (65535 - 20 IP header - 8 UDP header).
+/// One datagram carries a full frame (header + payload); no fragmentation.
+const NET_PAYLOAD_MAX = 65507;
 const NET_CAP_MAX = 32;
 
 /// Magic identifying a glu network frame (`"GLNW"`).
@@ -35,13 +35,10 @@ const NET_MAGIC = 0x474C4E57;
 const Frame = extern struct {
     magic: u32,
     seq: u32,
-    frag: u32,
     name: [MAX_NAME_LEN + 1]u8,
-    fragmented: bool,
 };
 
 const HEADER_SIZE = @sizeOf(Frame);
-const NET_FRAME = HEADER_SIZE + NET_FRAG_MAX;
 
 var alive_networks: [256][]const u8 = std.mem.zeroes([256][]const u8);
 var dead_networks: [256][]const u8 = std.mem.zeroes([256][]const u8);
@@ -62,10 +59,10 @@ pub const Network = struct {
     cap: u32,
     tos: ToS,
 
-    send_buf: [NET_CAP_MAX][HEADER_SIZE + NET_FRAG_MAX]u8 = std.mem.zeroes([NET_CAP_MAX][NET_FRAG_MAX]u8),
+    send_buf: [NET_CAP_MAX][NET_PAYLOAD_MAX]u8 = std.mem.zeroes([NET_CAP_MAX][NET_PAYLOAD_MAX]u8),
     next_send: u32 = 0,
 
-    recv_buf: [NET_CAP_MAX][HEADER_SIZE + NET_FRAG_MAX]u8 = std.mem.zeros([NET_CAP_MAX][NET_FRAG_MAX]u8),
+    recv_buf: [NET_CAP_MAX][NET_PAYLOAD_MAX]u8 = std.mem.zeros([NET_CAP_MAX][NET_PAYLOAD_MAX]u8),
     next_recv: u32 = 0,
 
     pub fn open(io: *IO, name: []const u8, msg_size: u32, capacity: u32, tos: ToS) anyerror!Network {
@@ -109,10 +106,8 @@ pub const Network = struct {
     pub fn send_to(self: *Network, sender: posix.socket_t, data: []const u8) *IO.Future {
         const frame: Frame = .{
             .magic = NET_MAGIC,
-            .seq = data.len,
-            .frag = 0,
+            .seq = self.next_send * data.len,
             .name = self.name,
-            .fragmented = false,
         };
         @memcpy(self.send_buf[self.next_send][0..HEADER_SIZE], std.mem.asBytes(&frame));
         @memcpy(self.send_buf[self.next_send][HEADER_SIZE .. HEADER_SIZE + data.len], data);
@@ -120,17 +115,22 @@ pub const Network = struct {
         const parsed = try std.Io.net.IpAddress.parseIp4(MULTICAST_HOST, self.port);
         const addr: posix.sockaddr.in = .{
             .addr = @bitCast(parsed.ip4.bytes),
-            .port = parsed.ip4.port,
+            .port = @byteSwap(parsed.ip4.port),
             .family = std.c.AF.INET,
         };
 
         var future: IO.Future = undefined;
         try self.io.send_to(&future, sender, self.send_buf[self.next_send], addr);
+        // TODO: When the future returns we should do the increament if the future is returning with the data.
 
         return future;
     }
 
-    pub fn recv(self: *Network) void {
-        _ = self;
+    pub fn recv(self: *Network) *IO.Future {
+        var future: IO.Future = undefined;
+        try self.io.recv_from(&future, self.socket, self.recv_buf[self.next_recv]);
+        // TODO: When the future returns we should do the increament if the future is returning with the data.
+
+        return future;
     }
 };
