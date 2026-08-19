@@ -39,7 +39,7 @@ pub const MULTICAST_HOST = "239.255.43.1";
 pub const PORT_BASE: u16 = 49152;
 pub const PORT_SLOTS: u32 = 256;
 
-/// Maximum UDP payload over IPv4 
+/// Maximum UDP payload over IPv4
 pub const NET_PAYLOAD_MAX = 65507;
 pub const NET_CAP_MAX = 8;
 
