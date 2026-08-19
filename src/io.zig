@@ -10,9 +10,6 @@ const io_uring_cqe = linux.io_uring_cqe;
 const io_uring_sqe = linux.io_uring_sqe;
 const log = std.log.scoped(.io);
 
-// Opaque import shims for the fiber scheduler.  Imported lazily so that
-// io.zig does not create a hard compile-time dependency on fiber/asyncio.zig
-// in environments that do not use the scheduler.
 const Fiber = @import("fiber/fiber.zig").Fiber;
 const asyncio = @import("fiber/asyncio.zig");
 

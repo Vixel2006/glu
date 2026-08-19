@@ -12,24 +12,10 @@ const SubErr = error{
     NoReaderSlots,
 };
 
-/// High-level subscriber wrapping a raw `Shm`.
-///
-/// Each subscriber occupies one slot in the channel's reader array
-/// (0 .. MAX_READERS-1). Multiple subscribers can attach to the
-/// same topic independently.
 pub const Subscriber = struct {
     channel: Shm,
     id: u32,
 
-    /// Create a new subscriber for topic `name`.
-    ///
-    /// The reader slot is claimed atomically (compare-and-swap on the
-    /// whole reader entry), so concurrent `init` calls across processes
-    /// never grab the same slot. The claim writes the owning PID and the
-    /// initial cursor (set to the current write position so a
-    /// late-joining subscriber only sees new messages) in a single atomic
-    /// step, so `sweep_dead_readers` can never clear a freshly claimed
-    /// slot based on a stale PID.
     pub fn init(name: []const u8, msg_size: u32, capacity: u32) SubErr!Subscriber {
         var chan = try Shm.open(name, msg_size, capacity, .reliable);
 
@@ -59,21 +45,12 @@ pub const Subscriber = struct {
         return .{ .id = id, .channel = chan };
     }
 
-    /// Close this subscriber and mark its reader slot as inactive.
-    ///
-    /// Clearing the reader entry to zero removes it from the
-    /// slowest-reader calculation so the publisher won't wait for us.
     pub fn deinit(self: *Subscriber) void {
         assert(self.id < MAX_READERS);
         @atomicStore(u64, &self.channel.header.readers[self.id], 0, .release);
         self.channel.close();
     }
 
-    /// Return the next unread message without consuming it.
-    ///
-    /// The returned pointer stays valid until `ack` is called. Copy the
-    /// message before acknowledging, otherwise the publisher may wrap
-    /// around and overwrite the slot.
     pub fn peek(self: *Subscriber) ?*anyopaque {
         assert(self.id < MAX_READERS);
         const entry = @atomicLoad(u64, &self.channel.header.readers[self.id], .acquire);
@@ -83,7 +60,6 @@ pub const Subscriber = struct {
         return null;
     }
 
-    /// Mark the most recently peeked message as consumed.
     pub fn ack(self: *Subscriber) void {
         assert(self.id < MAX_READERS);
         self.channel.ack(self.id);

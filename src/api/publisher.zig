@@ -14,25 +14,12 @@ const PubErr = error{
     ShmOpenFailed,
     MmapFailed,
     InvalidSegment,
-    /// The topic's segment is owned by a live publisher. Only one publisher
-    /// per topic is allowed.
     SegmentOwned,
 };
 
-/// High-level publisher wrapping a raw `Shm`.
-///
-/// Each topic can have at most one publisher. The publisher attaches to
-/// an existing segment or creates one if none exists. Unlinks on `deinit`.
 pub const Publisher = struct {
     channel: Shm,
 
-    /// Create (or attach to) a shared-memory channel for topic `name`.
-    ///
-    /// If the existing segment belongs to a live publisher a
-    /// `SegmentOwned` error is returned: a topic has at most one
-    /// publisher. A segment whose owner is dead or unknown is treated as
-    /// a stale leak (crashed publisher whose `conns` count could never be
-    /// decremented) and a fresh channel is created.
     pub fn init(name: []const u8, msg_size: u32, capacity: u32, tos: ToS) PubErr!Publisher {
         assert(msg_size > 0);
         assert(capacity > 0);
@@ -64,11 +51,6 @@ pub const Publisher = struct {
         self.channel.close();
     }
 
-    /// Reserve a slot in the ring buffer for writing.
-    ///
-    /// This is the first half of the two-phase publish pattern.
-    /// Fill the returned pointer then call `commit` to make the
-    /// message visible to subscribers. Blocks if the buffer is full.
     pub fn reserve(self: *Publisher) *anyopaque {
         const cap = self.channel.cap;
         const tos = self.channel.tos;
@@ -84,15 +66,10 @@ pub const Publisher = struct {
         return @ptrCast(slot);
     }
 
-    /// Commit a reserved slot, making it visible to subscribers.
-    ///
-    /// Must be paired with a prior `reserve` call. Advances the write
-    /// cursor with a release store so readers see the written data.
     pub fn commit(self: *Publisher) void {
         _ = @atomicRmw(u32, &self.channel.header.write, .Add, 1, .release);
     }
 
-    /// Write a message in one shot (reserve + copy + commit).
     pub fn publish(self: *Publisher, msg: *const anyopaque) void {
         self.channel.write(msg);
     }

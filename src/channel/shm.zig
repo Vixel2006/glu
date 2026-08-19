@@ -8,11 +8,6 @@ const constants = @import("../constants.zig");
 
 pub const ShmErr = error{ OutOfMemory, ShmOpenFailed, MmapFailed, InvalidSegment };
 
-/// Sanitise a topic name into a valid POSIX shm name.
-///
-/// POSIX `shm_open` requires the name to start with '/' and contain no
-/// other '/' characters, so inner slashes (topic paths like
-/// `/farm/weather`) are replaced with '_'.
 pub fn shm_name(buf: []u8, name: []const u8) ?[:0]u8 {
     if (name.len >= buf.len) return null;
     for (name, 0..) |ch, i| {
@@ -22,18 +17,6 @@ pub fn shm_name(buf: []u8, name: []const u8) ?[:0]u8 {
     return buf[0..name.len :0];
 }
 
-/// Validate the fields of a shared-memory header before they are trusted.
-///
-/// Headers live in `/dev/shm`, which any process on the machine can read or
-/// overwrite, so the header must be treated as untrusted input. Every field
-/// that will later drive slicing, indexing, or arithmetic is bounds-checked
-/// here instead of being asserted on.
-///
-/// `expected` carries the msg_size/capacity a caller asked for; when provided
-/// the header must match exactly (attach path). When `null` (inspection
-/// paths like `glu topics`), only structural sanity is checked.
-/// `file_size` is the on-disk size of the segment, used to reject truncated
-/// segments before mmap (a mapped-but-shorter file SIGBUSs on access).
 pub fn validate_header(
     hdr: *align(1) const Header,
     expected: ?struct { msg_size: u32, capacity: u32 },
@@ -68,17 +51,6 @@ pub const ToS = enum(u32) {
     best_effort = 1,
 };
 
-/// Layout of the shared memory header at the start of every shm channel.
-///
-/// The `name` field is padded to 64 bytes to push the `readers` array past
-/// the first cache line, reducing false sharing between writer and readers.
-///
-/// Each element of `readers` packs the owning subscriber PID in the high
-/// 32 bits and the subscriber's read cursor in the low 32 bits. A zero
-/// entry means the slot is unclaimed. Packing PID and cursor into a single
-/// 64-bit word lets a subscriber claim a slot with one atomic compare-and-swap,
-/// so `sweep_dead_readers` can never observe a stale PID on a freshly
-/// claimed slot.
 pub const Header = extern struct {
     magic: u32 = constants.GLU_MAGIC,
     write: u32,
@@ -104,28 +76,15 @@ comptime {
     std.debug.assert(@offsetOf(Header, "readers") == 104);
 }
 
-/// A POSIX shared-memory channel backed by `shm_open` + `mmap`.
-///
-/// Multiple processes can open the same named channel. The first opener
-/// creates and initialises the segment; subsequent openers attach to it
-/// and increment a reference counter. The last `close` unlinks the shm.
 pub const Shm = struct {
     fd: i32,
     ptr: [*]u8,
     header: *Header,
     size: usize,
-    /// The validated geometry captured at open time. The shared-memory
-    /// header can be mutated by another process after open, so all indexing
-    /// and mod/div below uses these snapshots instead of the raw header.
     cap: u32,
     msg_size: u32,
     tos: ToS,
 
-    /// Open (or attach to) a named shared memory channel.
-    ///
-    /// The first call with a given `name` creates the segment and
-    /// initialises the header. Subsequent calls attach to the existing
-    /// segment and bump the connection counter.
     pub fn open(name: []const u8, msg_size: u32, capacity: u32, tos: ToS) ShmErr!Shm {
         assert(msg_size > 0);
         assert(capacity > 0);
@@ -250,10 +209,6 @@ pub const Shm = struct {
         return .{ .fd = fd, .ptr = ptr, .header = hdr, .size = total_size_usize, .cap = capacity, .msg_size = msg_size, .tos = tos };
     }
 
-    /// Close this channel handle and unmap the shared memory.
-    ///
-    /// The underlying POSIX shm is unlinked only when the last connection
-    /// is closed (reference counting via `conns`).
     pub fn close(self: *Shm) void {
         assert(self.fd != -1);
         const prev = @atomicRmw(u32, &self.header.conns, .Sub, 1, .acq_rel);
@@ -277,12 +232,6 @@ pub const Shm = struct {
 
     pub const deinit = close;
 
-    /// Write a message into the ring buffer.
-    ///
-    /// Uses `self.header.msg_size` so a single entry point serves both Zig
-    /// and C callers without type-level polymorphism.
-    /// Blocks with a spin-loop if the buffer is full (slowest-reader
-    /// backpressure).
     pub fn write(self: *Shm, msg: *const anyopaque) void {
         assert(self.fd != -1);
         const cap = self.cap;
@@ -304,13 +253,6 @@ pub const Shm = struct {
         _ = @atomicRmw(u32, &self.header.write, .Add, 1, .release);
     }
 
-    /// Return a pointer to the next unread slot for `sub_id` without
-    /// advancing the read cursor.
-    ///
-    /// The slot remains readable until the caller acknowledges it with
-    /// `ack`; the publisher only reuses a slot once every reader has
-    /// advanced past it. This makes the consume phase safe against the
-    /// publisher wrapping around mid-read.
     pub fn peek(self: *Shm, sub_id: u32) *anyopaque {
         assert(self.fd != -1);
         assert(sub_id < constants.MAX_READERS);
@@ -322,11 +264,6 @@ pub const Shm = struct {
         return @ptrCast(slot);
     }
 
-    /// Advance the read cursor for `sub_id` after the message returned by
-    /// `peek` has been consumed.
-    ///
-    /// The release store publishes the consumed state so the publisher can
-    /// safely reuse the slot.
     pub fn ack(self: *Shm, sub_id: u32) void {
         assert(self.fd != -1);
         assert(sub_id < constants.MAX_READERS);
@@ -341,11 +278,6 @@ pub const Shm = struct {
     }
 };
 
-/// Force-unlink the shared memory segment backing topic `name`.
-///
-/// Used to reclaim a segment left behind by a crashed publisher whose
-/// `conns` refcount could never be decremented, so the file would
-/// otherwise leak in `/dev/shm` forever.
 pub fn force_unlink(name: []const u8) void {
     var shm_name_buf: [256:0]u8 = undefined;
     if (shm_name(&shm_name_buf, name)) |nz| {
@@ -353,17 +285,6 @@ pub fn force_unlink(name: []const u8) void {
     }
 }
 
-/// Search for Dead Readers and inactive them.
-///
-/// Each reader entry packs the owning PID in its high 32 bits. When that
-/// PID no longer corresponds to a live process the whole entry is cleared
-/// (back to zero), so the slot is unclaimed again and its cursor is
-/// ignored when we check for the slowest reader in the reliable
-/// connection mode of node communications.
-///
-/// The clear uses a compare-and-swap against the observed value so a slot
-/// that was just reclaimed by a new subscriber in the meantime is never
-/// clobbered.
 pub fn sweep_dead_readers(readers: *[constants.MAX_READERS]u64) void {
     for (readers) |*entry| {
         const pid: u32 = @intCast(entry.* >> 32);
@@ -373,11 +294,6 @@ pub fn sweep_dead_readers(readers: *[constants.MAX_READERS]u64) void {
     }
 }
 
-/// Returns the slowest (smallest) active read cursor.
-///
-/// Inactive readers (those with a zero entry) are skipped so they don't
-/// block the writer. If no readers are active the write cursor itself is
-/// returned, meaning the writer will never be held back.
 pub fn slowest_reader(readers: []const u64, write_cursor: u32) u32 {
     var min = write_cursor;
     for (readers) |entry| {
