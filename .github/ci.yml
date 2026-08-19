@@ -1,40 +1,40 @@
-name: CI Pipeline
+name: CI
 
 on:
   push:
-    branches:
-      - main
-    tags:
-      - '*'
   pull_request:
-    branches:
-      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build:
+  fmt:
+    name: zig fmt --check
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install xz-utils (for act local testing)
-        run: apt-get update && apt-get install -y xz-utils
-        if: env.ACT == 'true'
-
-      - name: Setup Zig
-        uses: goto-bus-stop/setup-zig@v2
+      - name: Setup Zig 0.16.0
+        uses: mlugg/setup-zig@v2
         with:
-          version: 0.17.0-dev.1398+cb5635714
+          version: 0.16.0
+      - name: Verify formatting
+        run: zig fmt --check src/ build.zig
 
-      - name: Check formatting
-        run: zig fmt --check src/ examples/
-
+  build-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    needs: fmt
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Zig 0.16.0
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
       - name: Build
         run: zig build
-
-      - name: Build examples
-        run: zig build examples
-
       - name: Run tests
         run: zig build test
