@@ -35,17 +35,13 @@ pub const MAX_READERS = 8;
 /// over this one group; traffic is demultiplexed by (port, name).
 pub const MULTICAST_HOST = "239.255.43.1";
 
-/// Base UDP port for network channels. The port for a channel with `name` is
-/// `PORT_BASE + fvn1a(name, 256)`, so two processes derive the same port from
-/// the name alone (no shared state). Colliding names share a port and are
-/// demultiplexed by name inside each frame.
+/// Base UDP port for network channels.
 pub const PORT_BASE: u16 = 49152;
 pub const PORT_SLOTS: u32 = 256;
 
-/// Maximum UDP payload over IPv4 (65535 - 20 IP header - 8 UDP header).
-/// One datagram carries a full frame (header + payload); no fragmentation.
+/// Maximum UDP payload over IPv4 
 pub const NET_PAYLOAD_MAX = 65507;
-pub const NET_CAP_MAX = 32;
+pub const NET_CAP_MAX = 8;
 
 /// Magic identifying a glu network frame (`"GLNW"`).
 pub const NET_MAGIC = 0x474C4E57;

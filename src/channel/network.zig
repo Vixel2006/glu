@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = std.debug.assert;
 const posix = std.posix;
 const linux = std.os.linux;
@@ -15,6 +16,8 @@ const constants = @import("../constants.zig");
 const Frame = extern struct {
     magic: u32,
     seq: u32,
+    frag: u32 = 1,
+    total: u32 = 1,
     name: [constants.MAX_NAME_LEN + 1]u8,
 };
 
@@ -38,6 +41,7 @@ pub const Session = struct {
     msg_size: u32,
     cap: u32,
     tos: ToS,
+    seq: u32 = 0,
 
     send_buf: [constants.NET_CAP_MAX][constants.NET_PAYLOAD_MAX]u8 = std.mem.zeroes([constants.NET_CAP_MAX][constants.NET_PAYLOAD_MAX]u8),
     next_send: u32 = 0,
@@ -57,6 +61,10 @@ pub const Session = struct {
 
         set_nonblocking(socket);
         udp.join_multicast(socket, constants.MULTICAST_HOST, port, "");
+
+        // NOTE: Remove the multicast loop in production so the sender doesn't recieve its messages back
+        // we leave the multicast loop enabled in debug mode for unit testing
+        if (comptime builtin.mode != .Debug) udp.set_multicast_loop(socket, false);
 
         _ = try hash.put(name, &alive_networks);
 
@@ -84,15 +92,7 @@ pub const Session = struct {
     pub const deinit = close;
 
     pub fn send(self: *Session, future: *IO.Future, data: []const u8) !void {
-        assert(data.len + HEADER_SIZE <= constants.NET_PAYLOAD_MAX);
-
-        const frame: Frame = .{
-            .magic = constants.NET_MAGIC,
-            .seq = self.next_send * @as(u32, @intCast(data.len)),
-            .name = self.name,
-        };
-        @memcpy(self.send_buf[self.next_send][0..HEADER_SIZE], std.mem.asBytes(&frame));
-        @memcpy(self.send_buf[self.next_send][HEADER_SIZE .. HEADER_SIZE + data.len], data);
+        defer self.seq += 1;
 
         const parsed = try std.Io.net.IpAddress.parseIp4(constants.MULTICAST_HOST, self.port);
         const addr: posix.sockaddr.in = .{
@@ -101,14 +101,29 @@ pub const Session = struct {
             .family = std.c.AF.INET,
         };
 
-        try self.io.send_to(future, self.socket, self.send_buf[self.next_send][0 .. HEADER_SIZE + data.len], addr);
-        // TODO: When the future returns we should do the increament if the future is returning with the data.
+        const frag_payload = constants.NET_PAYLOAD_MAX - HEADER_SIZE;
+        const n = @divFloor(data.len + frag_payload - 1, frag_payload);
 
+        for (0..n) |i| {
+            const s = (self.next_send + i) % constants.NET_CAP_MAX;
+            const frame: Frame = .{
+                .magic = constants.NET_MAGIC,
+                .seq = self.seq,
+                .frag = @intCast(i + 1),
+                .total = @intCast(n),
+                .name = self.name,
+            };
+            @memcpy(self.send_buf[s][0..HEADER_SIZE], std.mem.asBytes(&frame));
+            @memcpy(self.send_buf[s][HEADER_SIZE .. HEADER_SIZE + data.len], data);
+
+            if (i == n - 1) {
+                try self.io.send_to(future, self.socket, self.send_buf[self.next_send][0 .. HEADER_SIZE + data.len], addr);
+            }
+        }
     }
 
     pub fn recv(self: *Session, future: *IO.Future) !void {
         try self.io.recv_from(future, self.socket, &self.recv_buf[self.next_recv]);
-        // TODO: When the future returns we should do the increament if the future is returning with the data.
     }
 };
 

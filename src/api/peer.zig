@@ -13,8 +13,8 @@ pub const Peer = struct {
     }
 
     pub fn send(self: *Peer, future: *IO.Future, comptime T: type, data: *T) !void {
+        defer self.network.next_send += 1;
         try self.network.send(future, std.mem.asBytes(data));
-        self.network.next_send += 1;
     }
 
     pub fn recv(self: *Peer, future: *IO.Future) !void {
