@@ -1,6 +1,5 @@
 const std = @import("std");
 const utils = @import("../utils.zig");
-const table = @import("../table.zig");
 const parser = @import("../parser.zig");
 const discovery = @import("../../discovery/mod.zig");
 
@@ -23,30 +22,19 @@ pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
         return;
     }
 
-    var t = table.Table.init(&.{
-        .{ .header = "Topic" },
-        .{ .header = "Size", .right = true },
-        .{ .header = "Cap", .right = true },
-        .{ .header = "Conns", .right = true },
-        .{ .header = "Write", .right = true },
-        .{ .header = "Read", .right = true },
-        .{ .header = "Depth", .right = true },
-    });
+    try w.print("{s:<24} {s:>8} {s:>8} {s:>6} {s:>8} {s:>8} {s:>6}\n", .{ "Topic", "Size", "Cap", "Conns", "Write", "Read", "Depth" });
+    try w.print("{s:<24} {s:>8} {s:>8} {s:>6} {s:>8} {s:>8} {s:>6}\n", .{ "------------------------", "--------", "--------", "------", "--------", "--------", "------" });
 
     for (entry_buf[0..count]) |e| {
-        var cells: [7][16]u8 = undefined;
         const depth = e.write_pos - e.read_pos;
-        const row = [_][]const u8{
+        try w.print("{s:<24} {d:>8} {d:>8} {d:>6} {d:>8} {d:>8} {d:>6}\n", .{
             e.name[0..@min(e.name_len, e.name.len)],
-            std.fmt.bufPrint(&cells[1], "{d}", .{e.msg_size}) catch unreachable,
-            std.fmt.bufPrint(&cells[2], "{d}", .{e.capacity}) catch unreachable,
-            std.fmt.bufPrint(&cells[3], "{d}", .{e.conns}) catch unreachable,
-            std.fmt.bufPrint(&cells[4], "{d}", .{e.write_pos}) catch unreachable,
-            std.fmt.bufPrint(&cells[5], "{d}", .{e.read_pos}) catch unreachable,
-            std.fmt.bufPrint(&cells[6], "{d}", .{depth}) catch unreachable,
-        };
-        t.row(&row);
+            e.msg_size,
+            e.capacity,
+            e.conns,
+            e.write_pos,
+            e.read_pos,
+            depth,
+        });
     }
-
-    try t.render(w);
 }

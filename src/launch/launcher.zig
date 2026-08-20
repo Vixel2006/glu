@@ -86,22 +86,10 @@ pub fn launch_detached(io: std.Io, cfgs: []const NodeConfig, logs_dir: []const u
         var path_buf: [256]u8 = undefined;
         const path = std.fmt.bufPrint(&path_buf, "{s}/{s}.log", .{ logs_dir, cfg.name }) catch break :blk;
 
-        // Open-or-create without following a planted symlink. Exclusive first
-        // so we never truncate an attacker's target; if the file already
-        // exists it is reopened for real (truncating it intentionally).
-        var file: std.Io.File = cwd.createFile(io, path, .{ .read = true, .exclusive = true, .permissions = .fromMode(0o600) }) catch |err| fileblk: {
-            // Entry already exists: reopen without following symlinks and
-            // truncate it (matching the old createFile behaviour of resetting
-            // the log on relaunch), without touching an attacker's target.
-            switch (err) {
-                error.PathAlreadyExists => {
-                    var f = cwd.openFile(io, path, .{ .mode = .read_write, .follow_symlinks = false }) catch return LaunchErr.FileSystem;
-                    f.setLength(io, 0) catch return LaunchErr.FileSystem;
-                    break :fileblk f;
-                },
-                else => return LaunchErr.FileSystem,
-            }
-        };
+        var file: std.Io.File = cwd.createFile(io, path, .{
+            .truncate = true,
+            .permissions = .fromMode(0o600),
+        }) catch return LaunchErr.FileSystem;
         defer file.close(io);
 
         const child = std.process.spawn(io, .{

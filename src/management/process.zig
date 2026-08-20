@@ -66,16 +66,10 @@ pub fn start_node(io: std.Io, name: []const u8, logs_dir: []const u8) !bool {
 
     var path_buf: [256]u8 = undefined;
     const log_path = try std.fmt.bufPrint(&path_buf, "{s}/{s}.log", .{ logs_dir, name });
-    var file: std.Io.File = cwd.createFile(io, log_path, .{ .read = true, .exclusive = true, .permissions = .fromMode(0o600) }) catch |err| blk: {
-        switch (err) {
-            error.PathAlreadyExists => {
-                var f = cwd.openFile(io, log_path, .{ .mode = .read_write, .follow_symlinks = false }) catch return error.FileSystem;
-                f.setLength(io, 0) catch return error.FileSystem;
-                break :blk f;
-            },
-            else => return error.FileSystem,
-        }
-    };
+    var file: std.Io.File = cwd.createFile(io, log_path, .{
+        .truncate = true,
+        .permissions = .fromMode(0o600),
+    }) catch return error.FileSystem;
     defer file.close(io);
 
     const child = std.process.spawn(io, .{
@@ -91,26 +85,4 @@ pub fn start_node(io: std.Io, name: []const u8, logs_dir: []const u8) !bool {
         };
     }
     return true;
-}
-
-/// Restart a node: stop it (if running), then re-spawn from its manifest.
-///
-/// Returns `false` if the node has no persisted manifest to re-spawn from.
-pub fn restart_node(io: std.Io, name: []const u8, logs_dir: []const u8) !bool {
-    _ = try stop_node(io, name);
-    return try start_node(io, name, logs_dir);
-}
-
-/// Stop every registered node.
-///
-/// Reuses `stop_node` per entry so it stays consistent with selective stops.
-pub fn stop_all_nodes(io: std.Io) !usize {
-    var entry_buf: [128]Registry.NodeEntry = undefined;
-    const count = try Registry.list_alive(&entry_buf);
-
-    var stopped: usize = 0;
-    for (entry_buf[0..count]) |e| {
-        if (try stop_node(io, e.name[0..e.name_len])) stopped += 1;
-    }
-    return stopped;
 }

@@ -4,9 +4,7 @@ const parser = @import("parser.zig");
 const status = @import("status.zig");
 const launch = @import("launch.zig");
 const nodes_list = @import("nodes/list.zig");
-const nodes_start = @import("nodes/start.zig");
-const nodes_stop = @import("nodes/stop.zig");
-const nodes_restart = @import("nodes/restart.zig");
+const nodes_action = @import("nodes/action.zig");
 const nodes_logs = @import("nodes/logs.zig");
 const nodes_down = @import("nodes/down.zig");
 const topics_list = @import("topics/list.zig");
@@ -30,9 +28,9 @@ const leaves = [_]Leaf{
     .{ .path = "status", .usage = "glu status", .summary = "Overview of nodes and topics", .run = &status.cmd_status },
     .{ .path = "launch", .usage = "glu launch -f <file.toml> [-d]", .summary = "Launch nodes from a TOML config file", .run = &launch.cmd_launch },
     .{ .path = "nodes list", .usage = "glu nodes list", .summary = "List registered nodes", .run = &nodes_list.cmd_list, .alias = "ps" },
-    .{ .path = "nodes start", .usage = "glu nodes start <node> [node...]", .summary = "Start named nodes from their manifest", .run = &nodes_start.cmd_start, .alias = "start" },
-    .{ .path = "nodes stop", .usage = "glu nodes stop <node> [node...]", .summary = "Stop named nodes", .run = &nodes_stop.cmd_stop, .alias = "stop" },
-    .{ .path = "nodes restart", .usage = "glu nodes restart <node> [node...]", .summary = "Restart named nodes", .run = &nodes_restart.cmd_restart, .alias = "restart" },
+    .{ .path = "nodes start", .usage = "glu nodes start <node> [node...]", .summary = "Start named nodes from their manifest", .run = &nodes_action.cmd_start, .alias = "start" },
+    .{ .path = "nodes stop", .usage = "glu nodes stop <node> [node...]", .summary = "Stop named nodes", .run = &nodes_down.cmd_stop, .alias = "stop" },
+    .{ .path = "nodes restart", .usage = "glu nodes restart <node> [node...]", .summary = "Restart named nodes", .run = &nodes_action.cmd_restart, .alias = "restart" },
     .{ .path = "nodes logs", .usage = "glu nodes logs [--tail <n>] [--head <n>] [-f] <node>", .summary = "Print or follow a node's log", .run = &nodes_logs.cmd_logs, .alias = "logs" },
     .{ .path = "nodes down", .usage = "glu nodes down [node...]", .summary = "Stop all nodes, or the named ones", .run = &nodes_down.cmd_down, .alias = "down" },
     .{ .path = "topics list", .usage = "glu topics list", .summary = "List active topics in shared memory", .run = &topics_list.cmd_list, .alias = "list", .alias2 = "ls" },
@@ -42,11 +40,12 @@ const leaves = [_]Leaf{
 const Group = struct {
     name: []const u8,
     summary: []const u8,
+    members: []const u8,
 };
 
 const groups = [_]Group{
-    .{ .name = "nodes", .summary = "Manage node processes" },
-    .{ .name = "topics", .summary = "Inspect shared-memory topics" },
+    .{ .name = "nodes", .summary = "Manage node processes", .members = "list, start, stop, restart, logs, down" },
+    .{ .name = "topics", .summary = "Inspect shared-memory topics", .members = "list, info" },
 };
 
 fn is_group(name: []const u8) bool {
@@ -90,27 +89,6 @@ fn top_level(leaf: *const Leaf) bool {
     return std.mem.indexOfScalar(u8, leaf.path, ' ') == null;
 }
 
-/// Comma-separated member names for a group's summary, e.g. "list, start, stop".
-fn members(buf: []u8, group: []const u8) []const u8 {
-    var out: usize = 0;
-    var first = true;
-    for (&leaves) |*leaf| {
-        if (!in_group(leaf, group)) continue;
-        const sub = leaf.path[group.len + 1 ..];
-        if (!first) {
-            if (out + 2 > buf.len) return buf[0..out];
-            buf[out] = ',';
-            buf[out + 1] = ' ';
-            out += 2;
-        }
-        if (out + sub.len > buf.len) return buf[0..out];
-        @memcpy(buf[out .. out + sub.len], sub);
-        out += sub.len;
-        first = false;
-    }
-    return buf[0..out];
-}
-
 fn print_top(init: std.process.Init, to_stderr: bool) void {
     var fw = if (to_stderr) utils.err_writer(init) else utils.writer(init);
     const w = &fw.interface;
@@ -125,9 +103,8 @@ fn print_top(init: std.process.Init, to_stderr: bool) void {
             w.print("  {s:<8} {s}\n", .{ leaf.path, leaf.summary }) catch {};
         }
     }
-    var members_buf: [64]u8 = undefined;
     for (groups) |g| {
-        w.print("  {s:<8} {s} ({s})\n", .{ g.name, g.summary, members(&members_buf, g.name) }) catch {};
+        w.print("  {s:<8} {s} ({s})\n", .{ g.name, g.summary, g.members }) catch {};
     }
     w.print(
         \\
@@ -263,7 +240,6 @@ test "group membership" {
     try std.testing.expect(is_group("nodes"));
     try std.testing.expect(is_group("topics"));
     try std.testing.expect(!is_group("status"));
-    var buf: [64]u8 = undefined;
-    try std.testing.expectEqualStrings("list, start, stop, restart, logs, down", members(&buf, "nodes"));
-    try std.testing.expectEqualStrings("list, info", members(&buf, "topics"));
+    try std.testing.expectEqualStrings("list, start, stop, restart, logs, down", groups[0].members);
+    try std.testing.expectEqualStrings("list, info", groups[1].members);
 }

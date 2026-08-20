@@ -57,12 +57,3 @@ pub const VERSION = "0.2.0";
 
 /// Maximum node/topic entries in a `glu status` snapshot.
 pub const MAX_ENTRIES = 128;
-
-/// Maximum columns in a CLI table.
-pub const MAX_COLUMNS = 16;
-
-/// Maximum rows in a CLI table.
-pub const MAX_ROWS = 128;
-
-/// Maximum cell width in a CLI table.
-pub const MAX_CELL = 64;

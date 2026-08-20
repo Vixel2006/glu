@@ -4,7 +4,6 @@ const os = std.os.linux;
 
 const Topic = @import("topic.zig").Topic;
 const slowest_reader = @import("../channel/shm.zig").slowest_reader;
-const MAX_READERS = @import("../constants.zig").MAX_READERS;
 
 pub const ScanErr = error{
     ShmDirInaccessible,
@@ -73,9 +72,6 @@ pub fn scan_topics(entries: []TopicEntry) ScanErr!usize {
         const name_len = @min(hdr.name_len, 63);
         @memcpy(name_arr[0..name_len], hdr.name[0..name_len]);
 
-        var read_vals: [MAX_READERS]u64 = undefined;
-        @memcpy(&read_vals, &hdr.readers);
-
         entries[count] = .{
             .name = name_arr,
             .name_len = name_len,
@@ -85,7 +81,7 @@ pub fn scan_topics(entries: []TopicEntry) ScanErr!usize {
             .capacity = hdr.capacity,
             .conns = hdr.conns,
             .write_pos = hdr.write,
-            .read_pos = slowest_reader(&read_vals, hdr.write),
+            .read_pos = slowest_reader(&hdr.readers, hdr.write),
         };
         count += 1;
     }
