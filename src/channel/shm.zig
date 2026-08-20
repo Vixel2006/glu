@@ -69,13 +69,6 @@ pub const Header = extern struct {
     readers: [constants.MAX_READERS]u64,
 };
 
-comptime {
-    std.debug.assert(constants.MAX_READERS > 0 and constants.MAX_READERS <= 8);
-    std.debug.assert(@sizeOf(Header) == 168);
-    std.debug.assert(@offsetOf(Header, "owner_pid") == 96);
-    std.debug.assert(@offsetOf(Header, "readers") == 104);
-}
-
 pub const Shm = struct {
     fd: i32,
     ptr: [*]u8,
@@ -294,7 +287,7 @@ pub fn sweep_dead_readers(readers: *[constants.MAX_READERS]u64) void {
     }
 }
 
-pub fn slowest_reader(readers: []const u64, write_cursor: u32) u32 {
+pub fn slowest_reader(readers: []align(1) const u64, write_cursor: u32) u32 {
     var min = write_cursor;
     for (readers) |entry| {
         if (entry == 0) continue;

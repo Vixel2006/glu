@@ -1,6 +1,5 @@
 const std = @import("std");
 const utils = @import("../utils.zig");
-const table = @import("../table.zig");
 const parser = @import("../parser.zig");
 const Registry = @import("../../registry.zig");
 
@@ -21,20 +20,15 @@ pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
         return;
     }
 
-    var t = table.Table.init(&.{
-        .{ .header = "Node" },
-        .{ .header = "PID", .right = true },
-        .{ .header = "Uptime" },
-        .{ .header = "Status", .right = true },
-    });
+    try w.print("{s:<20} {s:>6} {s:<10} {s:>6}\n", .{ "Node", "PID", "Uptime", "Status" });
+    try w.print("{s:<20} {s:>6} {s:<10} {s:>6}\n", .{ "--------------------", "------", "----------", "------" });
 
     for (entry_buf[0..count]) |e| {
         var pid_buf: [16]u8 = undefined;
         var up_buf: [32]u8 = undefined;
         const pid = std.fmt.bufPrint(&pid_buf, "{d}", .{e.pid}) catch unreachable;
-        const uptime = utils.format_uptime(&up_buf, e.uptime);
-        t.row(&.{ e.name[0..e.name_len], pid, uptime, if (e.alive) "alive" else "dead" });
+        const uptime = utils.format_uptime(&up_buf, if (e.alive) utils.proc_uptime(e.pid) else 0);
+        try w.print("{s:<20} {s:>6} {s:<10} {s:>6}\n", .{ e.name[0..e.name_len], pid, uptime, if (e.alive) "alive" else "dead" });
     }
-
-    try t.render(w);
 }
+

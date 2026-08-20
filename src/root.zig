@@ -35,7 +35,6 @@ comptime {
     _ = @import("transport/tcp.zig");
     _ = @import("transport/udp.zig");
     _ = @import("cli/parser.zig");
-    _ = @import("cli/table.zig");
     _ = @import("cli/dispatch.zig");
     _ = @import("launch/toml.zig");
     _ = @import("launch/launcher.zig");

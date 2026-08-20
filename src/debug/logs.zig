@@ -1,8 +1,4 @@
 const std = @import("std");
-const posix = std.posix;
-const linux = std.os.linux;
-
-const IO = @import("../io.zig").IO;
 const constants = @import("../constants.zig");
 
 /// Clean up the logs directory by deleting it entirely.
@@ -49,82 +45,44 @@ pub fn count_tail_lines(buf: []const u8, n: u64) usize {
     return start;
 }
 
-/// Open `<logs_dir>/<node>.log` for reading via io_uring.
-///
-/// Returns the fd, or `null` when no matching log file exists.
-fn open_log(io: *IO, logs_dir: []const u8, node: []const u8) !?posix.fd_t {
-    var path_buf: [256:0]u8 = undefined;
-    const path_len = (std.fmt.bufPrint(path_buf[0..255], "{s}/{s}.log", .{ logs_dir, node }) catch return error.NameTooLong).len;
-    path_buf[path_len] = 0;
-
-    var compl: IO.Future = undefined;
-    io.openat(&compl, posix.AT.FDCWD, path_buf[0..], .{ .ACCMODE = .RDONLY }, 0) catch |err| {
-        if (err == error.FileNotFound) return null;
-        return err;
+fn open_log_file(io: std.Io, logs_dir: []const u8, node: []const u8) !?std.Io.File {
+    var path_buf: [256]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "{s}/{s}.log", .{ logs_dir, node }) catch return error.NameTooLong;
+    return std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
     };
-    return io.wait(&compl, posix.fd_t) catch |err| {
-        if (err == error.FileNotFound) return null;
-        return err;
-    };
-}
-
-/// Stat an open fd and return its size in bytes.
-fn file_size(io: *IO, fd: posix.fd_t) !u64 {
-    var stx: linux.Statx = undefined;
-    var compl: IO.Future = undefined;
-    try io.statx(&compl, fd, "", posix.AT.EMPTY_PATH, linux.STATX.BASIC_STATS, &stx);
-    try io.wait(&compl, void);
-    return stx.size;
-}
-
-/// Read `buf.len` bytes at `offset` from `fd` via io_uring.
-fn read_chunk(io: *IO, fd: posix.fd_t, offset: u64, buf: []u8) !usize {
-    var compl: IO.Future = undefined;
-    try io.read(&compl, fd, buf, offset);
-    return try io.wait(&compl, usize);
-}
-
-/// Close an fd via io_uring, swallowing errors.
-fn close_fd(io: *IO, fd: posix.fd_t) void {
-    var compl: IO.Future = undefined;
-    io.close(&compl, fd) catch return;
-    io.wait(&compl, void) catch {};
 }
 
 /// Read the first `n` lines from a node's log file into `buf`.
 ///
-/// Uses glu's io_uring engine (openat/statx/read) rather than blocking
-/// file I/O. Returns the number of bytes written, or 0 when no matching
+/// Returns the number of bytes written, or 0 when no matching
 /// log file exists or the file is empty.
 pub fn read_log_head(logs_dir: []const u8, node: []const u8, n: u64, buf: []u8) !usize {
-    var ring = try IO.init(16, 0);
-    defer ring.deinit();
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var file = (try open_log_file(io, logs_dir, node)) orelse return 0;
+    defer file.close(io);
 
-    const fd = (try open_log(&ring, logs_dir, node)) orelse return 0;
-    defer close_fd(&ring, fd);
-
-    const size = try file_size(&ring, fd);
+    const size: u64 = @intCast(file.length(io) catch return 0);
     const to_read: usize = @intCast(@min(size, @as(u64, buf.len)));
-    const got = try read_chunk(&ring, fd, 0, buf[0..to_read]);
+    const got = file.readPositionalAll(io, buf[0..to_read], 0) catch return 0;
 
     return count_head_lines(buf[0..got], n);
 }
 
 /// Read the last `n` lines from a node's log file into `buf`.
 ///
-/// Uses glu's io_uring engine (openat/statx/read) rather than blocking
-/// file I/O. Returns the number of bytes written, or 0 when no matching
+/// Returns the number of bytes written, or 0 when no matching
 /// log file exists or the file is empty.
 pub fn read_log_tail(logs_dir: []const u8, node: []const u8, n: u64, buf: []u8) !usize {
-    var ring = try IO.init(16, 0);
-    defer ring.deinit();
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var file = (try open_log_file(io, logs_dir, node)) orelse return 0;
+    defer file.close(io);
 
-    const fd = (try open_log(&ring, logs_dir, node)) orelse return 0;
-    defer close_fd(&ring, fd);
-
-    const size = try file_size(&ring, fd);
+    const size: u64 = @intCast(file.length(io) catch return 0);
     const to_read: usize = @intCast(@min(size, @as(u64, buf.len)));
-    const got = try read_chunk(&ring, fd, size - to_read, buf[0..to_read]);
+    const offset = if (size > to_read) size - to_read else 0;
+    const got = file.readPositionalAll(io, buf[0..to_read], offset) catch return 0;
 
     const start = count_tail_lines(buf[0..got], n);
     const len = got - start;
@@ -132,33 +90,27 @@ pub fn read_log_tail(logs_dir: []const u8, node: []const u8, n: u64, buf: []u8) 
     return len;
 }
 
-/// A handle for streaming appended log bytes via io_uring.
+/// A handle for streaming appended log bytes.
 ///
 /// Holds the log file open, tracks the last-read offset, and reports
 /// newly appended bytes on each `poll`.
 pub const LogFollower = struct {
-    ring: IO,
-    fd: posix.fd_t,
+    file: std.Io.File,
     offset: u64,
 
     /// Open a node's log file for following. Errors with
     /// `error.FileNotFound` if no matching log exists.
     pub fn init(logs_dir: []const u8, node: []const u8) !LogFollower {
-        var ring = try IO.init(16, 0);
-        errdefer ring.deinit();
-
-        const fd = (try open_log(&ring, logs_dir, node)) orelse {
-            ring.deinit();
-            return error.FileNotFound;
-        };
-        // Start from the current end so only newly-appended bytes are streamed.
-        const size = try file_size(&ring, fd);
-        return .{ .ring = ring, .fd = fd, .offset = size };
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var file = (try open_log_file(io, logs_dir, node)) orelse return error.FileNotFound;
+        errdefer file.close(io);
+        const size: u64 = @intCast(try file.length(io));
+        return .{ .file = file, .offset = size };
     }
 
     pub fn deinit(self: *LogFollower) void {
-        close_fd(&self.ring, self.fd);
-        self.ring.deinit();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.file.close(io);
     }
 
     /// Read any bytes appended since the last poll into `buf`.
@@ -167,7 +119,7 @@ pub const LogFollower = struct {
     /// (after sleeping on `sleep_io` so the caller does not busy-loop).
     /// If the file is truncated or rotated, reading resumes from the top.
     pub fn poll(self: *LogFollower, sleep_io: std.Io, buf: []u8) !usize {
-        const size = try file_size(&self.ring, self.fd);
+        const size: u64 = @intCast(try self.file.length(sleep_io));
 
         if (size < self.offset) {
             // Truncated or rotated: restart from the beginning.
@@ -179,7 +131,7 @@ pub const LogFollower = struct {
         }
 
         const to_read: usize = @intCast(@min(@as(u64, buf.len), size - self.offset));
-        const n = try read_chunk(&self.ring, self.fd, self.offset, buf[0..to_read]);
+        const n = try self.file.readPositionalAll(sleep_io, buf[0..to_read], self.offset);
         self.offset += n;
         return n;
     }

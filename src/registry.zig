@@ -38,10 +38,6 @@ pub fn valid_name(name: []const u8) bool {
     return true;
 }
 
-fn check_name(name: []const u8) RegistryErr!void {
-    if (!valid_name(name)) return RegistryErr.InvalidName;
-}
-
 /// Ensure the registry directory exists with the right permissions and is
 /// owned by us, returning it as an open handle for subsequent operations.
 ///
@@ -68,17 +64,12 @@ fn registry_dir(io: std.Io) RegistryErr!std.Io.Dir {
     return dir;
 }
 
-fn registry_path(name: []const u8, suffix: []const u8, buf: []u8) RegistryErr![]const u8 {
-    check_name(name) catch return RegistryErr.InvalidName;
-    return std.fmt.bufPrint(buf, "{s}/{s}{s}", .{ constants.REGISTRY_DIR, name, suffix }) catch return RegistryErr.FileSystem;
-}
-
 /// Open registry file `basename` for reading, never following symlinks.
 ///
 /// Resolution is anchored to the opened (ownership-verified) registry
 /// directory handle, so a planted parent symlink isn't followed.
 fn open_registry_file(io: std.Io, name: []const u8, suffix: []const u8) RegistryErr!std.Io.File {
-    check_name(name) catch return RegistryErr.InvalidName;
+    if (!valid_name(name)) return RegistryErr.InvalidName;
     var sub_path_buf: [128]u8 = undefined;
     const sub_path = std.fmt.bufPrint(&sub_path_buf, "{s}{s}", .{ name, suffix }) catch return RegistryErr.FileSystem;
 
@@ -96,9 +87,6 @@ pub const NodeEntry = struct {
     name_len: u32,
     pid: u32,
     alive: bool,
-
-    /// Seconds since the process started (0 if unknown).
-    uptime: u64,
 };
 
 /// Create-or-overwrite a registry entry securely.
@@ -124,9 +112,7 @@ fn write_registry_file(io: std.Io, name: []const u8, suffix: []const u8, content
     defer file.close(io);
 
     file.setLength(io, 0) catch return RegistryErr.FileSystem;
-    var fw: std.Io.File.Writer = file.writerStreaming(io, &.{});
-    const w: *std.Io.Writer = &fw.interface;
-    w.writeAll(content) catch return RegistryErr.FileSystem;
+    file.writePositionalAll(io, content, 0) catch return RegistryErr.FileSystem;
 }
 
 /// Register a node by name with an explicit PID.
@@ -206,27 +192,23 @@ pub fn get_pid(name: []const u8) RegistryErr!?u32 {
 
 /// Register the current process under `name`.
 pub fn register(name: []const u8) RegistryErr!void {
-    if (!valid_name(name)) return RegistryErr.InvalidName;
-    var buf: [32]u8 = undefined;
-    const content = std.fmt.bufPrint(&buf, "{d}", .{os.getpid()}) catch return RegistryErr.FileSystem;
-    try write_registry_file(std.Io.Threaded.global_single_threaded.io(), name, ".pid", content);
+    return register_pid(name, @intCast(os.getpid()));
 }
 
 pub fn unregister(name: []const u8) void {
-    const io = std.Io.Threaded.global_single_threaded.io();
     if (!valid_name(name)) {
         std.log.warn("unregister: refusing unsafe node name", .{});
         return;
     }
-    const cwd = std.Io.Dir.cwd();
-    var path_buf: [256]u8 = undefined;
-    const path = std.fmt.bufPrint(&path_buf, "{s}/{s}.pid", .{ constants.REGISTRY_DIR, name }) catch |err| {
-        std.log.err("unregister: failed to format path for node '{s}': {}", .{ name, err });
-        return;
-    };
-    cwd.deleteFile(io, path) catch |err| switch (err) {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var dir = registry_dir(io) catch return;
+    defer dir.close(io);
+
+    var path_buf: [128]u8 = undefined;
+    const sub_path = std.fmt.bufPrint(&path_buf, "{s}.pid", .{name}) catch return;
+    dir.deleteFile(io, sub_path) catch |err| switch (err) {
         error.FileNotFound => {},
-        else => |e| std.log.err("unregister: failed to delete file '{s}': {}", .{ path, e }),
+        else => |e| std.log.err("unregister: failed to delete file '{s}': {}", .{ sub_path, e }),
     };
 }
 
@@ -239,77 +221,6 @@ pub fn is_alive(pid: u32) bool {
     const path_len = (std.fmt.bufPrint(&buf, "/proc/{d}/status", .{pid}) catch return false).len;
     buf[path_len] = 0;
     return c.access(buf[0..path_len :0], 0) == 0;
-}
-
-/// Seconds since the process started, or 0 if it cannot be determined.
-///
-/// Computed from `/proc/<pid>/stat` (`starttime`, in clock ticks) and the
-/// system boot time in `/proc/stat`, converted to wall-clock seconds.
-pub fn proc_uptime(pid: u32) u64 {
-    const tck: u64 = @intCast(@max(c.sysconf(2), 1)); // _SC_CLK_TCK
-    const btime = boot_sec() orelse return 0;
-
-    var buf: [512]u8 = undefined;
-    const path = std.fmt.bufPrint(&buf, "/proc/{d}/stat", .{pid}) catch return 0;
-    buf[path.len] = 0;
-
-    const fd = c.open(buf[0..path.len :0], os.O{ .ACCMODE = .RDONLY });
-    if (fd == -1) return 0;
-    defer _ = c.close(fd);
-
-    const n = c.read(fd, &buf, buf.len);
-    if (n <= 0) return 0;
-
-    // After the `comm` (which may contain spaces and parentheses) the 20th
-    // whitespace-separated field is `starttime`, in clock ticks.
-    var i: usize = 0;
-    while (i < n and buf[i] != ')') i += 1;
-    if (i >= n) return 0;
-    i += 1;
-
-    var field: usize = 0;
-    var start_ticks: u64 = 0;
-    while (i < n and field < 20) {
-        while (i < n and buf[i] == ' ') i += 1;
-        if (i >= n) break;
-        field += 1;
-        const j = i;
-        while (i < n and buf[i] != ' ') i += 1;
-        if (field == 20) {
-            start_ticks = std.fmt.parseInt(u64, buf[j..i], 10) catch return 0;
-            break;
-        }
-    }
-    if (field < 20) return 0;
-
-    var ts: os.timespec = undefined;
-    if (os.clock_gettime(os.CLOCK.REALTIME, &ts) != 0) return 0;
-    const now: u64 = @intCast(@max(@as(i64, ts.sec), 0));
-
-    const started = btime + @divTrunc(start_ticks, tck);
-    return if (now > started) now - started else 0;
-}
-
-/// System boot time in seconds since the Unix epoch, from `/proc/stat`.
-///
-/// The `btime` line sits near the end of the file, so use a buffer large
-/// enough to hold the whole file.
-fn boot_sec() ?u64 {
-    var buf: [16384]u8 = undefined;
-    const fd = c.open("/proc/stat", os.O{ .ACCMODE = .RDONLY });
-    if (fd == -1) return null;
-    defer _ = c.close(fd);
-
-    const n = c.read(fd, &buf, buf.len);
-    if (n <= 0) return null;
-
-    var it = std.mem.tokenizeScalar(u8, buf[0..@as(usize, @intCast(n))], '\n');
-    while (it.next()) |line| {
-        if (std.mem.startsWith(u8, line, "btime ")) {
-            return std.fmt.parseInt(u64, std.mem.trim(u8, line[6..], " \t"), 10) catch null;
-        }
-    }
-    return null;
 }
 
 /// List all registered nodes and their health status.
@@ -361,7 +272,6 @@ pub fn list_alive(entries: []NodeEntry) RegistryErr!usize {
             .name_len = name_len,
             .pid = pid,
             .alive = alive,
-            .uptime = if (alive) proc_uptime(pid) else 0,
         };
         count += 1;
     }

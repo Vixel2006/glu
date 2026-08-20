@@ -3,7 +3,6 @@ const utils = @import("../utils.zig");
 const parser = @import("../parser.zig");
 const discovery = @import("../../discovery/mod.zig");
 const slowest_reader = @import("../../channel/shm.zig").slowest_reader;
-const MAX_READERS = @import("../../constants.zig").MAX_READERS;
 const Header = @import("../../channel/shm.zig").Header;
 
 /// Show detailed info about a topic (`glu topics info <topic>`).
@@ -33,9 +32,7 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
     // name_len is attacker-controlled shared memory; clamp before slicing.
     const name_slice = hdr.name[0..@min(hdr.name_len, hdr.name.len)];
     const data_size = @as(u64, hdr.msg_size) * @as(u64, hdr.capacity);
-    var read_vals: [MAX_READERS]u64 = undefined;
-    @memcpy(&read_vals, &hdr.readers);
-    const slowest = slowest_reader(&read_vals, hdr.write);
+    const slowest = slowest_reader(&hdr.readers, hdr.write);
     const depth = hdr.write -% slowest;
     const pct = if (hdr.capacity > 0) @as(f64, @floatFromInt(depth)) / @as(f64, @floatFromInt(hdr.capacity)) * 100.0 else 0.0;
 
@@ -52,7 +49,7 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
     try w.print("Write Pos:   {d}\n", .{write_pos});
     try w.print("Queued:      {d} ({d:.1}% full)\n", .{ depth, pct });
     try w.print("Readers:\n", .{});
-    for (&read_vals, 0..) |entry, i| {
+    for (&hdr.readers, 0..) |entry, i| {
         if (entry == 0) {
             try w.print("  [{d}] inactive\n", .{i});
         } else {

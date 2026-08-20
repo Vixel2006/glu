@@ -33,7 +33,7 @@ pub const Topic = struct {
         var name_buf: [256:0]u8 = undefined;
         const name_z = shm_name(&name_buf, name) orelse return error.InvalidTopic;
 
-        const fd = c.shm_open(name_z.ptr, @as(c_int, @bitCast(os.O{ .ACCMODE = .RDWR })), 0);
+        const fd = c.shm_open(name_z.ptr, @as(c_int, @bitCast(os.O{ .ACCMODE = .RDONLY })), 0);
         if (fd == -1) return error.TopicNotFound;
         errdefer _ = os.close(fd);
 
