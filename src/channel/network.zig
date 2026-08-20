@@ -10,6 +10,7 @@ const IO = @import("../io.zig").IO;
 const time = @import("../time.zig");
 const ToS = @import("shm.zig").ToS;
 const constants = @import("../constants.zig");
+const discovery = @import("../discovery/mod.zig");
 
 /// Fixed-size header at the start of every datagram. A data frame is the
 /// header followed by the message payload
@@ -25,9 +26,6 @@ pub const HEADER_SIZE = @sizeOf(Frame);
 
 /// Maximum payload carried in a single frame's datagram.
 pub const FRAG_PAYLOAD: usize = constants.NET_PAYLOAD_MAX - HEADER_SIZE;
-
-var alive_networks: [256][]const u8 = std.mem.zeroes([256][]const u8);
-var dead_networks: [256][]const u8 = std.mem.zeroes([256][]const u8);
 
 fn set_nonblocking(fd: i32) void {
     const flags = linux.fcntl(fd, linux.F.GETFL, 0);
@@ -76,7 +74,9 @@ pub const Session = struct {
         // we leave the multicast loop enabled in debug mode for unit testing
         if (comptime builtin.mode != .Debug) udp.set_multicast_loop(socket, false);
 
-        _ = try hash.put(name, &alive_networks);
+        discovery.register_net_channel(name, @intCast(linux.getpid()), port, msg_size, capacity, @intFromEnum(tos)) catch |err| {
+            std.log.warn("failed to register net channel '{s}': {}", .{ name, err });
+        };
 
         var self: Session = .{
             .io = io,
@@ -95,8 +95,7 @@ pub const Session = struct {
 
     pub fn close(self: *Session) !void {
         udp.leave_multicast(self.socket, constants.MULTICAST_HOST);
-        try hash.delete(&self.name, &alive_networks);
-        _ = try hash.put(&self.name, &dead_networks);
+        discovery.unregister_net_channel(std.mem.sliceTo(&self.name, 0));
     }
 
     pub const deinit = close;

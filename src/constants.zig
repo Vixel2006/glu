@@ -1,6 +1,9 @@
 /// Directory where per-node registry files (`.pid`, `.argv`) are stored.
 pub const REGISTRY_DIR = "/tmp/glu/nodes";
 
+/// Directory where active network channel registrations are stored.
+pub const NET_REGISTRY_DIR = "/tmp/glu/net";
+
 /// Permissions applied to the registry directory itself.
 pub const REGISTRY_MODE: u32 = 0o700;
 
