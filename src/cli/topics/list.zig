@@ -38,4 +38,3 @@ pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
         });
     }
 }
-

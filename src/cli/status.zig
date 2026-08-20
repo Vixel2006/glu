@@ -75,4 +75,3 @@ fn owner_name(buf: []u8, nodes: []const Registry.NodeEntry, pid: u32) []const u8
     }
     return std.fmt.bufPrint(buf, "{d}", .{pid}) catch "-";
 }
-

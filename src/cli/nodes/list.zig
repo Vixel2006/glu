@@ -31,4 +31,3 @@ pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
         try w.print("{s:<20} {s:>6} {s:<10} {s:>6}\n", .{ e.name[0..e.name_len], pid, uptime, if (e.alive) "alive" else "dead" });
     }
 }
-

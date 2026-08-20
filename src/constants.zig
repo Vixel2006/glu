@@ -57,4 +57,3 @@ pub const VERSION = "0.2.0";
 
 /// Maximum node/topic entries in a `glu status` snapshot.
 pub const MAX_ENTRIES = 128;
-

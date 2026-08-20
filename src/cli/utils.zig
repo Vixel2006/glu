@@ -67,4 +67,3 @@ pub fn proc_uptime(pid: u32) u64 {
 
     return if (now_boot > started) now_boot - started else 0;
 }
-
