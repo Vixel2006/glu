@@ -9,6 +9,7 @@ const nodes_logs = @import("nodes/logs.zig");
 const nodes_down = @import("nodes/down.zig");
 const topics_list = @import("topics/list.zig");
 const topics_info = @import("topics/info.zig");
+const net_cmd = @import("net.zig");
 const constants = @import("../constants.zig");
 
 const RunFn = *const fn (init: std.process.Init, args: *parser.Args) anyerror!void;
@@ -35,6 +36,9 @@ const leaves = [_]Leaf{
     .{ .path = "nodes down", .usage = "glu nodes down [node...]", .summary = "Stop all nodes, or the named ones", .run = &nodes_down.cmd_down, .alias = "down" },
     .{ .path = "topics list", .usage = "glu topics list", .summary = "List active topics in shared memory", .run = &topics_list.cmd_list, .alias = "list", .alias2 = "ls" },
     .{ .path = "topics info", .usage = "glu topics info <topic>", .summary = "Show detailed info about a topic", .run = &topics_info.cmd_info, .alias = "info" },
+    .{ .path = "net list", .usage = "glu net list", .summary = "List active network channels", .run = &net_cmd.cmd_list },
+    .{ .path = "net info", .usage = "glu net info <channel>", .summary = "Show detailed info about a network channel", .run = &net_cmd.cmd_info },
+    .{ .path = "net sniff", .usage = "glu net sniff <channel> [-v]", .summary = "Sniff live traffic on a network channel", .run = &net_cmd.cmd_sniff, .alias = "sniff" },
 };
 
 const Group = struct {
@@ -46,6 +50,7 @@ const Group = struct {
 const groups = [_]Group{
     .{ .name = "nodes", .summary = "Manage node processes", .members = "list, start, stop, restart, logs, down" },
     .{ .name = "topics", .summary = "Inspect shared-memory topics", .members = "list, info" },
+    .{ .name = "net", .summary = "Discover and inspect network channels", .members = "list, info, sniff" },
 };
 
 fn is_group(name: []const u8) bool {
@@ -222,6 +227,7 @@ test "aliases resolve to tree commands" {
         .{ "list", "topics list" },
         .{ "ls", "topics list" },
         .{ "info", "topics info" },
+        .{ "sniff", "net sniff" },
     };
     for (cases) |c| {
         try std.testing.expectEqualStrings(c[1], find_alias(c[0]).?.path);
@@ -233,13 +239,16 @@ test "tree paths resolve directly" {
     try std.testing.expectEqualStrings("launch", find_path("launch").?.path);
     try std.testing.expectEqualStrings("nodes stop", find_group("nodes", "stop").?.path);
     try std.testing.expectEqualStrings("topics info", find_group("topics", "info").?.path);
+    try std.testing.expectEqualStrings("net sniff", find_group("net", "sniff").?.path);
     try std.testing.expect(find_group("nodes", "bogus") == null);
 }
 
 test "group membership" {
     try std.testing.expect(is_group("nodes"));
     try std.testing.expect(is_group("topics"));
+    try std.testing.expect(is_group("net"));
     try std.testing.expect(!is_group("status"));
     try std.testing.expectEqualStrings("list, start, stop, restart, logs, down", groups[0].members);
     try std.testing.expectEqualStrings("list, info", groups[1].members);
+    try std.testing.expectEqualStrings("list, info, sniff", groups[2].members);
 }
