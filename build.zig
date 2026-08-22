@@ -27,6 +27,22 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    // C ABI shared library (libglu.so)
+    const lib = b.addLibrary(.{
+        .name = "glu",
+        .linkage = .dynamic,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/c_api.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{},
+        }),
+        .use_llvm = true,
+        .use_lld = true,
+    });
+    b.installArtifact(lib);
+
     const run_step = b.step("run", "Run the app");
 
     const run_cmd = b.addRunArtifact(exe);
