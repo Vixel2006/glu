@@ -43,6 +43,9 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(lib);
 
+    // C header for consumers of libglu.so
+    lib.installHeader(b.path("glu/c/glu.h"), "glu/glu.h");
+
     const run_step = b.step("run", "Run the app");
 
     const run_cmd = b.addRunArtifact(exe);
