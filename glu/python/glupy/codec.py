@@ -16,7 +16,7 @@ def _resolve_c_type(field_type: Any, owner: type, field_name: str) -> Any:
         field_type, (ctypes._SimpleCData, ctypes.Array, ctypes.Structure)
     ):
         return field_type
-    if is_dataclass(field_type):
+    if isinstance(field_type, type) and is_dataclass(field_type):
         return get_codec(field_type).ctypes_cls
     raise TypeError(
         f"Unsupported annotation {field_type!r} for field {owner.__name__}.{field_name}. "

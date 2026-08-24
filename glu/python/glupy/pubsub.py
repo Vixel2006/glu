@@ -222,7 +222,7 @@ class Subscriber(_Handle):
 
     def read_as(self, target_type: Optional[Type[T]] = None, timeout: Optional[float] = None) -> T:
         codec = self._codec_for(target_type)
-        return self._poll_read(lambda: self._read_once_as(codec), timeout)
+        return cast(T, self._poll_read(lambda: self._read_once_as(codec), timeout))
 
     def _read_once(self) -> Optional[Any]:
         if self._msg_type is not None:
