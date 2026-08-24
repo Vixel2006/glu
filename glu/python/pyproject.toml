@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "glupy"
+dynamic = ["version"]
+description = "Python bindings for GLU - fast, zero-copy robotics middleware"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "GLU Contributors" }
+]
+requires-python = ">=3.9"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: System :: Hardware",
+]
+keywords = ["robotics", "middleware", "shared-memory", "zero-copy", "pubsub", "ipc"]
+
+[project.urls]
+Homepage = "https://github.com/Vixel2006/glu"
+Documentation = "https://github.com/Vixel2006/glu/tree/main/glu/python"
+Issues = "https://github.com/Vixel2006/glu/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["glupy*"]
+
+[tool.setuptools.package-data]
+glupy = ["py.typed", "*.so", "lib/*.so"]
+
+[tool.setuptools.dynamic]
+version = { attr = "glupy._version.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: tests that require a built libglu.so (deselect with '-m \"not integration\"')",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+src = ["glupy", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+    "RUF", # ruff-specific
+]
+ignore = [
+    "UP035",  # typing.Dict/List etc. kept for 3.9 runtime compatibility
+    "UP006",
+]
+
+[tool.mypy]
+strict = true
+files = ["glupy"]
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = "glupy.*"
+implicit_reexport = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
