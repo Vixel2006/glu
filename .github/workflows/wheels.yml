@@ -1,0 +1,108 @@
+name: Wheels
+
+on:
+  push:
+    tags:
+      - "py-v*"
+  workflow_dispatch:
+
+concurrency:
+  group: wheels-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ZIG_VERSION: "0.16.0"
+
+jobs:
+  sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist
+        run: |
+          pip install build
+          python -m build --sdist glu/python
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: glu/python/dist/*.tar.gz
+
+  wheel:
+    name: wheel ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64
+            zig_target: x86_64-linux-gnu
+            plat_tag: manylinux_2_28_x86_64
+          - target: aarch64
+            zig_target: aarch64-linux-gnu
+            plat_tag: manylinux_2_28_aarch64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Setup Zig ${{ env.ZIG_VERSION }}
+        uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+      - name: Cross-compile libglu.so (${{ matrix.zig_target }})
+        run: zig build -Doptimize=ReleaseFast -Dtarget=${{ matrix.zig_target }}
+      - name: Bundle library and build wheel
+        run: |
+          cd glu/python
+          mkdir -p glupy/lib
+          cp ../../zig-out/lib/libglu.so glupy/lib/
+          pip install wheel
+          pip wheel . --no-deps -w dist/
+          # glupy is pure Python (ctypes dlopens at runtime), so retag the
+          # universal wheel for the target platform.
+          python -m wheel tags --platform-tag ${{ matrix.plat_tag }} \
+            dist/glupy-*-py3-none-any.whl
+      - name: Smoke test bundled wheel (native target only)
+        if: matrix.target == 'x86_64'
+        run: |
+          cd /tmp/opencode
+          python -m venv smoke-venv
+          ./smoke-venv/bin/pip install "$GITHUB_WORKSPACE/glu/python/dist"/glupy-*${{ matrix.plat_tag }}.whl
+          ./smoke-venv/bin/python -c "
+          from dataclasses import dataclass
+          import glupy
+
+          @dataclass
+          class M:
+              v: glupy.u32
+
+          assert glupy.sizeof(M) == 4
+          assert glupy.__version__
+          print('smoke ok:', glupy.__version__)
+          "
+
+  publish:
+    name: Publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/py-v')
+    needs: [sdist, wheel]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # trusted publishing
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1

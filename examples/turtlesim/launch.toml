@@ -1,0 +1,11 @@
+# glu launch configuration for turtlesim example
+
+[[node]]
+name = "turtle_sim"
+bin = "python3"
+extra_cfg = ["examples/turtlesim/turtle_node.py"]
+
+[[node]]
+name = "turtle_gui"
+bin = "python3"
+extra_cfg = ["examples/turtlesim/gui_node.py"]
