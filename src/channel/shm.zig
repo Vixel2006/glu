@@ -85,121 +85,68 @@ pub const Shm = struct {
 
         const data_size = std.math.mul(u64, msg_size, capacity) catch return ShmErr.InvalidSegment;
         const total_size = std.math.add(u64, data_size, @sizeOf(Header)) catch return ShmErr.InvalidSegment;
-        if (total_size > std.math.maxInt(std.c.off_t) or total_size > std.math.maxInt(usize)) {
-            return ShmErr.InvalidSegment;
-        }
-        const total_size_usize: usize = @intCast(total_size);
+        if (total_size > std.math.maxInt(std.c.off_t) or total_size > std.math.maxInt(usize)) return ShmErr.InvalidSegment;
+        const size: usize = @intCast(total_size);
 
-        var shm_name_buf: [256:0]u8 = undefined;
-        const shm_name_z = shm_name(&shm_name_buf, name) orelse return ShmErr.ShmOpenFailed;
+        var name_buf: [256:0]u8 = undefined;
+        const shm_z = shm_name(&name_buf, name) orelse return ShmErr.ShmOpenFailed;
 
         // Attempt to create the segment exclusively.
-        const excl_flags: c_int = @as(c_int, @bitCast(os.O{
-            .ACCMODE = .RDWR,
-            .CREAT = true,
-            .EXCL = true,
-        }));
-        var fd: i32 = c.shm_open(shm_name_z.ptr, excl_flags, 0o600);
         var created = true;
-
+        var fd = c.shm_open(shm_z.ptr, @bitCast(os.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true }), 0o600);
         if (fd == -1) {
-            const rdwr_flags: c_int = @as(c_int, @bitCast(os.O{
-                .ACCMODE = .RDWR,
-            }));
-            fd = c.shm_open(shm_name_z.ptr, rdwr_flags, 0);
+            fd = c.shm_open(shm_z.ptr, @bitCast(os.O{ .ACCMODE = .RDWR }), 0);
             created = false;
         }
-
         if (fd == -1) return ShmErr.ShmOpenFailed;
 
-        if (created) {
-            if (c.ftruncate(fd, @intCast(total_size)) == -1) {
-                _ = c.close(fd);
-                // NOTE: Don't leak a half-created segment in /dev/shm.
-                _ = c.shm_unlink(shm_name_z.ptr);
-                return ShmErr.ShmOpenFailed;
-            }
-        } else {
-            var file_size: usize = 0;
-            {
-                const sz = c.lseek(fd, 0, 2);
-                if (sz < @as(std.c.off_t, @intCast(@sizeOf(Header)))) {
-                    _ = c.close(fd);
-                    return ShmErr.InvalidSegment;
-                }
-                file_size = @intCast(sz);
-            }
-
-            const mapped = os.mmap(
-                null,
-                total_size_usize,
-                os.PROT{ .READ = true, .WRITE = true },
-                os.MAP{ .TYPE = .SHARED },
-                fd,
-                0,
-            );
-
-            if (mapped == ~@as(usize, 0)) {
-                _ = c.close(fd);
-                return ShmErr.MmapFailed;
-            }
-
-            const ptr: [*]u8 = @ptrFromInt(mapped);
-            const hdr: *Header = @ptrCast(@alignCast(ptr));
-
-            // Reject anything that doesn't match, instead of reading garbage
-            // as a ring buffer.
-            if (!validate_header(hdr, .{ .msg_size = msg_size, .capacity = capacity }, file_size)) {
-                _ = os.munmap(ptr, total_size_usize);
-                _ = c.close(fd);
-                return ShmErr.InvalidSegment;
-            }
-            _ = @atomicRmw(u32, &hdr.conns, .Add, 1, .acq_rel);
-
-            return .{ .fd = fd, .ptr = ptr, .header = hdr, .size = total_size_usize, .cap = capacity, .msg_size = msg_size, .tos = tos };
-        }
-
-        const mapped = os.mmap(
-            null,
-            total_size_usize,
-            os.PROT{ .READ = true, .WRITE = true },
-            os.MAP{ .TYPE = .SHARED },
-            fd,
-            0,
-        );
-
-        if (mapped == ~@as(usize, 0)) {
+        errdefer {
             _ = c.close(fd);
-            if (created) _ = c.shm_unlink(shm_name_z.ptr);
-            return ShmErr.MmapFailed;
+            // NOTE: Don't leak a half-created segment in /dev/shm.
+            if (created) _ = c.shm_unlink(shm_z.ptr);
         }
+
+        var file_size: usize = size;
+        if (created) {
+            if (c.ftruncate(fd, @intCast(total_size)) == -1) return ShmErr.ShmOpenFailed;
+        } else {
+            // Guard against SIGBUS from mapping beyond EOF.
+            const sz = c.lseek(fd, 0, 2);
+            if (sz < @sizeOf(Header)) return ShmErr.InvalidSegment;
+            file_size = @intCast(sz);
+        }
+
+        const mapped = os.mmap(null, size, os.PROT{ .READ = true, .WRITE = true }, os.MAP{ .TYPE = .SHARED }, fd, 0);
+        if (mapped == ~@as(usize, 0)) return ShmErr.MmapFailed;
 
         const ptr: [*]u8 = @ptrFromInt(mapped);
         const hdr: *Header = @ptrCast(@alignCast(ptr));
+        errdefer _ = os.munmap(ptr, size);
 
-        if (created) {
-            hdr.magic = constants.GLU_MAGIC;
-            hdr.write = 0;
-            for (&hdr.readers) |*r| r.* = 0;
-            hdr.owner_pid = @intCast(std.os.linux.getpid());
-            hdr.conns = 1;
-            hdr.msg_size = msg_size;
-            hdr.capacity = capacity;
-            hdr.tos = @intFromEnum(tos);
-            const name_len = @min(@as(u32, @intCast(name.len)), 63);
-            hdr.name_len = name_len;
-            @memcpy(hdr.name[0..name_len], name[0..name_len]);
-            hdr.name[name_len] = 0;
+        if (!created) {
+            // Reject anything that doesn't match, instead of reading garbage
+            // as a ring buffer.
+            if (!validate_header(hdr, .{ .msg_size = msg_size, .capacity = capacity }, file_size)) return ShmErr.InvalidSegment;
         } else {
-            if (hdr.magic != constants.GLU_MAGIC or hdr.msg_size != msg_size or hdr.capacity != capacity) {
-                _ = os.munmap(ptr, total_size_usize);
-                _ = c.close(fd);
-                return ShmErr.InvalidSegment;
-            }
-            _ = @atomicRmw(u32, &hdr.conns, .Add, 1, .acq_rel);
+            const name_len: u32 = @intCast(@min(name.len, 63));
+            hdr.* = std.mem.zeroInit(Header, .{
+                .magic = constants.GLU_MAGIC,
+                .conns = 1,
+                .msg_size = msg_size,
+                .capacity = capacity,
+                .tos = @intFromEnum(tos),
+                .owner_pid = @as(u32, @intCast(std.os.linux.getpid())),
+                .name_len = name_len,
+            });
+            @memcpy(hdr.name[0..name_len], name[0..name_len]);
         }
 
-        return .{ .fd = fd, .ptr = ptr, .header = hdr, .size = total_size_usize, .cap = capacity, .msg_size = msg_size, .tos = tos };
+        // We add a new connection with publisher, and subscribers, so when a publisher is stopped
+        // and then we start it back, it will return to publish to the same channel that the subs
+        // are waiting for messages at.
+        _ = @atomicRmw(u32, &hdr.conns, .Add, 1, .acq_rel);
+
+        return .{ .fd = fd, .ptr = ptr, .header = hdr, .size = size, .cap = capacity, .msg_size = msg_size, .tos = tos };
     }
 
     pub fn close(self: *Shm) void {

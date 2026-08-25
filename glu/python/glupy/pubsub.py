@@ -43,6 +43,16 @@ class Publisher(_Handle):
         if not self._handle:
             raise_last_error(f"Failed to create Publisher for '{topic}'")
 
+    def unlink(self) -> None:
+        """Unlink the topic segment from shared memory."""
+        shm_unlink(self._topic)
+
+    def close(self, unlink: bool = False) -> None:
+        """Close publisher handle, optionally unlinking the shared memory segment."""
+        super().close()
+        if unlink:
+            self.unlink()
+
     @property
     def topic(self) -> str:
         return self._topic
@@ -160,6 +170,16 @@ class Subscriber(_Handle):
         )
         if not self._handle:
             raise_last_error(f"Failed to create Subscriber for '{topic}'")
+
+    def unlink(self) -> None:
+        """Unlink the topic segment from shared memory."""
+        shm_unlink(self._topic)
+
+    def close(self, unlink: bool = False) -> None:
+        """Close subscriber handle, optionally unlinking the shared memory segment."""
+        super().close()
+        if unlink:
+            self.unlink()
 
     @property
     def topic(self) -> str:
