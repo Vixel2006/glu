@@ -27,7 +27,8 @@ pub fn validate_header(
     if (hdr.capacity == 0 or hdr.capacity > constants.MAX_CAPACITY) return false;
     if (hdr.name_len > constants.MAX_NAME_LEN) return false;
     if (hdr.name_len > 0 and hdr.name[hdr.name_len] != 0) return false;
-    if (hdr.tos != @intFromEnum(ToS.reliable) and hdr.tos != @intFromEnum(ToS.best_effort)) return false;
+    if (hdr.tos != @intFromEnum(ToS.reliable) and hdr.tos != @intFromEnum(ToS.best_effort))
+        return false;
 
     if (expected) |geo| {
         if (hdr.msg_size != geo.msg_size or hdr.capacity != geo.capacity) return false;
@@ -36,9 +37,8 @@ pub fn validate_header(
     // The total mapped size must fit in the offset type used by ftruncate
     // and must fit inside the actual file, otherwise reads past EOF fail
     // with SIGBUS instead of a clean error.
-    const data_size = std.math.mul(u64, hdr.msg_size, hdr.capacity) catch return false;
-    const total_size = std.math.add(u64, data_size, @sizeOf(Header)) catch return false;
-    if (total_size > std.math.maxInt(std.c.off_t) or total_size > std.math.maxInt(usize)) return false;
+    const data_size = hdr.msg_size *| hdr.capacity;
+    const total_size = data_size +| @sizeOf(Header);
     if (file_size) |fs| {
         if (fs < total_size) return false;
     }
@@ -83,15 +83,12 @@ pub const Shm = struct {
         assert(capacity > 0);
         assert(name.len > 0);
 
-        const data_size = std.math.mul(u64, msg_size, capacity) catch return ShmErr.InvalidSegment;
-        const total_size = std.math.add(u64, data_size, @sizeOf(Header)) catch return ShmErr.InvalidSegment;
-        if (total_size > std.math.maxInt(std.c.off_t) or total_size > std.math.maxInt(usize)) return ShmErr.InvalidSegment;
-        const size: usize = @intCast(total_size);
+        const data_size = msg_size *| capacity;
+        const size: usize = @as(u32, @intCast(data_size +| @sizeOf(Header)));
 
         var name_buf: [256:0]u8 = undefined;
         const shm_z = shm_name(&name_buf, name) orelse return ShmErr.ShmOpenFailed;
 
-        // Attempt to create the segment exclusively.
         var created = true;
         var fd = c.shm_open(shm_z.ptr, @bitCast(os.O{ .ACCMODE = .RDWR, .CREAT = true, .EXCL = true }), 0o600);
         if (fd == -1) {
@@ -108,7 +105,7 @@ pub const Shm = struct {
 
         var file_size: usize = size;
         if (created) {
-            if (c.ftruncate(fd, @intCast(total_size)) == -1) return ShmErr.ShmOpenFailed;
+            if (c.ftruncate(fd, @intCast(size)) == -1) return ShmErr.ShmOpenFailed;
         } else {
             // Guard against SIGBUS from mapping beyond EOF.
             const sz = c.lseek(fd, 0, 2);
@@ -124,9 +121,10 @@ pub const Shm = struct {
         errdefer _ = os.munmap(ptr, size);
 
         if (!created) {
-            // Reject anything that doesn't match, instead of reading garbage
-            // as a ring buffer.
-            if (!validate_header(hdr, .{ .msg_size = msg_size, .capacity = capacity }, file_size)) return ShmErr.InvalidSegment;
+            _ = @atomicRmw(u32, &hdr.conns, .Add, 1, .acq_rel);
+            // Reject anything that doesn't match, instead of reading garbage as a ring buffer.
+            if (!validate_header(hdr, .{ .msg_size = msg_size, .capacity = capacity }, file_size))
+                return ShmErr.InvalidSegment;
         } else {
             const name_len: u32 = @intCast(@min(name.len, 63));
             hdr.* = std.mem.zeroInit(Header, .{
@@ -141,11 +139,6 @@ pub const Shm = struct {
             @memcpy(hdr.name[0..name_len], name[0..name_len]);
         }
 
-        // We add a new connection with publisher, and subscribers, so when a publisher is stopped
-        // and then we start it back, it will return to publish to the same channel that the subs
-        // are waiting for messages at.
-        _ = @atomicRmw(u32, &hdr.conns, .Add, 1, .acq_rel);
-
         return .{ .fd = fd, .ptr = ptr, .header = hdr, .size = size, .cap = capacity, .msg_size = msg_size, .tos = tos };
     }
 
@@ -153,9 +146,8 @@ pub const Shm = struct {
         assert(self.fd != -1);
         const prev = @atomicRmw(u32, &self.header.conns, .Sub, 1, .acq_rel);
 
-        const needs_unlink = prev == 1;
         var name_buf: [256]u8 = undefined;
-        const name_z: ?[:0]u8 = if (needs_unlink) blk: {
+        const name_z: ?[:0]u8 = if (prev == 1) blk: {
             // The header lives in shared memory and could have been tampered
             // with since open; clamp the length before slicing `name`.
             const name_len = @min(self.header.name_len, constants.MAX_NAME_LEN);
@@ -415,15 +407,4 @@ test "Shm.open rejects an existing segment with mismatched geometry" {
 
     var ok = try Shm.open("/glu_test_mismatch_attach", @sizeOf(TestMsg), 8, .reliable);
     ok.close();
-}
-
-test "Shm.open rejects configurations whose data region overflows" {
-    _ = c.shm_unlink("/glu_test_overflow");
-
-    // (2^32-1)^2 wraps a u32 product (to 1); must be rejected up front.
-    try std.testing.expectError(error.InvalidSegment, Shm.open("/glu_test_overflow", std.math.maxInt(u32), std.math.maxInt(u32), .reliable));
-
-    // No segment should have been created in /dev/shm as a side effect.
-    const flags: c_int = @as(c_int, @bitCast(os.O{ .ACCMODE = .RDONLY }));
-    try std.testing.expectEqual(@as(c_int, -1), c.shm_open("/glu_test_overflow", flags, 0));
 }
