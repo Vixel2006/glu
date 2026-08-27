@@ -3,7 +3,7 @@ const assert = std.debug.assert;
 const c = @import("std").c;
 const os = @import("std").os.linux;
 
-const is_alive = @import("../registry.zig").is_alive;
+const is_alive = @import("../utils.zig").is_alive;
 const constants = @import("../constants.zig");
 
 pub const ShmErr = error{ OutOfMemory, ShmOpenFailed, MmapFailed, InvalidSegment };

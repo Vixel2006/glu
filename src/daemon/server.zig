@@ -6,17 +6,15 @@ const protocol = @import("protocol.zig");
 const supervisor = @import("supervisor.zig");
 const constants = @import("../constants.zig");
 
-const DaemonState = @import("state.zig").DaemonState;
-const ShmTopic = @import("state.zig").ShmTopic;
-const NetChannel = @import("state.zig").NetChannel;
+const state = @import("state.zig");
 
 pub const Server = struct {
     sock_fd: i32,
-    state: *DaemonState,
+    state: *state.DaemonState,
     running: std.atomic.Value(bool),
     io: std.Io,
 
-    pub fn init(io: std.Io, state: *DaemonState) !Server {
+    pub fn init(io: std.Io, dstate: *state.DaemonState) !Server {
         const sock_path = constants.DAEMON_SOCK;
 
         // Ensure directory exists
@@ -47,7 +45,7 @@ pub const Server = struct {
 
         return .{
             .sock_fd = fd,
-            .state = state,
+            .state = dstate,
             .running = std.atomic.Value(bool).init(true),
             .io = io,
         };
@@ -338,7 +336,7 @@ pub const Server = struct {
             .register_shm => {
                 if (payload.len >= @sizeOf(protocol.WireShmTopic)) {
                     const wt: *const protocol.WireShmTopic = @ptrCast(@alignCast(payload.ptr));
-                    var entry = ShmTopic{
+                    var entry = state.ShmTopic{
                         .name_len = wt.name_len,
                         .owner_pid = wt.owner_pid,
                         .msg_size = wt.msg_size,
@@ -346,7 +344,7 @@ pub const Server = struct {
                         .tos = wt.tos,
                     };
                     const name_slice = wt.name[0..@min(wt.name_len, 63)];
-                    entry.set_name(name_slice);
+                    state.set_name(state.ShmTopic, &entry, name_slice);
 
                     self.state.register_shm(entry);
                 }
@@ -373,7 +371,7 @@ pub const Server = struct {
             .register_net => {
                 if (payload.len >= @sizeOf(protocol.WireNetChannel)) {
                     const wn: *const protocol.WireNetChannel = @ptrCast(@alignCast(payload.ptr));
-                    var entry = NetChannel{
+                    var entry = state.NetChannel{
                         .name_len = wn.name_len,
                         .owner_pid = wn.owner_pid,
                         .port = wn.port,
@@ -382,7 +380,7 @@ pub const Server = struct {
                         .tos = wn.tos,
                     };
                     const name_slice = wn.name[0..@min(wn.name_len, 63)];
-                    entry.set_name(name_slice);
+                    state.set_name(state.NetChannel, &entry, name_slice);
 
                     self.state.register_net(entry);
                 }
