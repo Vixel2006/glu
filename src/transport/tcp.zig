@@ -3,7 +3,9 @@ const assert = std.debug.assert;
 const c = std.c;
 const mem = std.mem;
 const posix = std.posix;
+
 const IO = @import("../io.zig").IO;
+const ConnectAddress = @import("../io.zig").ConnectAddress;
 const net = @import("net.zig");
 
 pub const Socket = posix.socket_t;
@@ -83,13 +85,14 @@ pub fn listen(io: *IO, port: u16, config: Config) !Server {
 
     // Bind to the configured address. Defaults to all interfaces.
     const parsed = try std.Io.net.IpAddress.parse(config.host, port);
-    const addr: posix.sockaddr.in = switch (parsed) {
+    const addr = ConnectAddress{ .inet = switch (parsed) {
         .ip4 => |ip4| .{
             .port = @byteSwap(ip4.port),
             .addr = @bitCast(ip4.bytes),
+            .family = posix.AF.INET,
         },
         .ip6 => return error.AddressFamilyNotSupported,
-    };
+    }};
     try io.bind(socket, addr);
     try io.listen(socket, 128);
 
@@ -118,13 +121,14 @@ pub fn connect(
     assert(port > 0);
 
     const parsed = try std.Io.net.IpAddress.parse(host, port);
-    const addr: posix.sockaddr.in = switch (parsed) {
+    const addr = ConnectAddress{ .inet = switch (parsed) {
         .ip4 => |ip4| .{
             .port = @byteSwap(ip4.port),
             .addr = @bitCast(ip4.bytes),
+            .family = posix.AF.INET,
         },
-        .ip6 => return error.AddressFamilyNotSupported, // TODO: We should add support for ipv6 in the future
-    };
+        .ip6 => return error.AddressFamilyNotSupported,
+    }};
 
     const socket = try io.socket(posix.AF.INET, posix.SOCK.STREAM, 0);
     errdefer _ = c.close(socket);

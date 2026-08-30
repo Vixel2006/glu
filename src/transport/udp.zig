@@ -4,6 +4,7 @@ const c = std.c;
 const posix = std.posix;
 const mem = std.mem;
 const net = @import("net.zig");
+const ConnectAddress = @import("../io.zig").ConnectAddress;
 const IO = @import("../io.zig").IO;
 
 pub const Socket = posix.socket_t;
@@ -64,10 +65,11 @@ pub fn bind(io: *IO, bind_config: BindConfig, socket_config: SocketConfig) !Sock
     }
 
     const parsed = try std.Io.net.IpAddress.parseIp4(bind_config.host, bind_config.port);
-    const addr: posix.sockaddr.in = .{
+    const addr = ConnectAddress{ .inet = .{
         .port = @byteSwap(parsed.ip4.port),
         .addr = @bitCast(parsed.ip4.bytes),
-    };
+        .family = posix.AF.INET,
+    } };
 
     try io.bind(socket, addr);
 
@@ -89,13 +91,14 @@ pub fn send_to(
     assert(data.len > 0);
 
     const parsed = try std.Io.net.IpAddress.parse(host, port);
-    const addr: posix.sockaddr.in = switch (parsed) {
+    const addr = ConnectAddress{ .inet = switch (parsed) {
         .ip4 => |ip4| .{
             .port = @byteSwap(ip4.port),
             .addr = @bitCast(ip4.bytes),
+            .family = posix.AF.INET,
         },
         .ip6 => return error.AddressFamilyNotSupported,
-    };
+    } };
 
     try io.send_to(future, socket, data, addr);
 }

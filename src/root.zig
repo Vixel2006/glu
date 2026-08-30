@@ -29,8 +29,8 @@ comptime {
     _ = @import("transport/net.zig");
     _ = @import("transport/tcp.zig");
     _ = @import("transport/udp.zig");
-    _ = @import("cli/parser.zig");
-    _ = @import("cli/dispatch.zig");
+    //_ = @import("cli/parser.zig");
+    //_ = @import("cli/dispatch.zig");
     _ = @import("launch/toml.zig");
     _ = @import("launch/launcher.zig");
     _ = @import("fiber/fiber.zig");

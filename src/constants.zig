@@ -60,3 +60,6 @@ pub const VERSION = "0.2.0";
 
 /// Maximum node/topic entries in a `glu status` snapshot.
 pub const MAX_ENTRIES = 128;
+
+/// Path to the daemon's Unix domain socket.
+pub const DAEMON_SOCK = "/tmp/glu/glud.sock";

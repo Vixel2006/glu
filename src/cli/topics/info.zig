@@ -1,9 +1,11 @@
 const std = @import("std");
 const utils = @import("../utils.zig");
 const parser = @import("../parser.zig");
-const discovery = @import("../../discovery/mod.zig");
 const slowest_reader = @import("../../channel/shm.zig").slowest_reader;
 const Header = @import("../../channel/shm.zig").Header;
+const dispatch = @import("../dispatch.zig");
+const daemon_client = @import("../../daemon/client.zig");
+const protocol = @import("../../daemon/protocol.zig");
 
 /// Show detailed info about a topic (`glu topics info <topic>`).
 pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
@@ -15,6 +17,29 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
         ew.interface.writeAll("usage: glu topics info <topic>\n") catch {};
         return error.MissingArgument;
     };
+
+    // First check via daemon if topic exists
+    var client = try dispatch.get_client(init);
+    defer client.deinit();
+
+    var entry_buf: [128]protocol.WireShmTopic = undefined;
+    const count = client.list_topics(&entry_buf) catch |err| {
+        try w.print("error: cannot list topics: {}\n", .{err});
+        return;
+    };
+
+    var found = false;
+    for (entry_buf[0..count]) |e| {
+        if (std.mem.eql(u8, e.name[0..e.name_len], topic_name)) {
+            found = true;
+            break;
+        }
+    }
+
+    if (!found) {
+        try w.print("error: topic '{s}' not found\n", .{topic_name});
+        return;
+    }
 
     var t = discovery.Topic.open(topic_name) catch |err| {
         const msg = switch (err) {
@@ -29,7 +54,6 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
     defer t.close();
 
     const hdr = t.header;
-    // name_len is attacker-controlled shared memory; clamp before slicing.
     const name_slice = hdr.name[0..@min(hdr.name_len, hdr.name.len)];
     const data_size = @as(u64, hdr.msg_size) * @as(u64, hdr.capacity);
     const slowest = slowest_reader(&hdr.readers, hdr.write);

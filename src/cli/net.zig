@@ -7,6 +7,9 @@ const hash = @import("../hash.zig");
 const constants = @import("../constants.zig");
 const FRAG_PAYLOAD = @import("../channel/network.zig").FRAG_PAYLOAD;
 const HEADER_SIZE = @import("../channel/network.zig").HEADER_SIZE;
+const dispatch = @import("dispatch.zig");
+const daemon_client = @import("../daemon/client.zig");
+const protocol = @import("../daemon/protocol.zig");
 
 /// List active network channels (`glu net list`).
 pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
@@ -14,8 +17,11 @@ pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
     var fw = utils.writer(init);
     const w = &fw.interface;
 
-    var entry_buf: [128]discovery.NetChannelEntry = undefined;
-    const count = discovery.scan_net_channels(&entry_buf) catch |err| {
+    var client = try dispatch.get_client(init);
+    defer client.deinit();
+
+    var entry_buf: [128]protocol.WireNetChannel = undefined;
+    const count = client.list_net(&entry_buf) catch |err| {
         try w.print("error: cannot read network channels: {}\n", .{err});
         return;
     };
@@ -53,9 +59,12 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
 
     const port = @as(u16, @intCast(constants.PORT_BASE + hash.fvn1a(name, constants.PORT_SLOTS)));
 
-    var entry_buf: [128]discovery.NetChannelEntry = undefined;
-    const count = discovery.scan_net_channels(&entry_buf) catch 0;
-    var matched: ?discovery.NetChannelEntry = null;
+    var client = try dispatch.get_client(init);
+    defer client.deinit();
+
+    var entry_buf: [128]protocol.WireNetChannel = undefined;
+    const count = client.list_net(&entry_buf) catch 0;
+    var matched: ?protocol.WireNetChannel = null;
     for (entry_buf[0..count]) |e| {
         if (std.mem.eql(u8, e.name[0..e.name_len], name)) {
             matched = e;

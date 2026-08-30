@@ -10,11 +10,33 @@ pub const Endpoint = struct {
     port: u16,
 };
 
-pub fn address_to_endpoint(addr: posix.sockaddr.in) Endpoint {
+pub fn address_to_endpoint(addr: posix.sockaddr) Endpoint {
     var ep = Endpoint{ .host = undefined, .host_len = 0, .port = 0 };
-    ep.port = @byteSwap(addr.port);
-    const bytes: *const [4]u8 = @ptrCast(&addr.addr);
-    ep.host_len = (std.fmt.bufPrint(&ep.host, "{d}.{d}.{d}.{d}", .{ bytes[0], bytes[1], bytes[2], bytes[3] }) catch unreachable).len;
+    switch (addr.family) {
+        posix.AF.INET => {
+            const addr_in: *const posix.sockaddr.in = @alignCast(@ptrCast(&addr));
+            ep.port = @byteSwap(addr_in.port);
+            const bytes: *const [4]u8 = @ptrCast(&addr_in.addr);
+            ep.host_len = (std.fmt.bufPrint(&ep.host, "{d}.{d}.{d}.{d}", .{ bytes[0], bytes[1], bytes[2], bytes[3] }) catch unreachable).len;
+        },
+        posix.AF.INET6 => {
+            const addr_in6: *const posix.sockaddr.in6 = @alignCast(@ptrCast(&addr));
+            const bytes: *const [16]u8 = @ptrCast(&addr_in6.addr);
+            ep.port = @byteSwap(addr_in6.port);
+            const groups: *const [8]u16 = @alignCast(@ptrCast(bytes));
+            ep.host_len = (std.fmt.bufPrint(&ep.host, "{x}:{x}:{x}:{x}:{x}:{x}:{x}:{x}", .{
+                std.mem.bigToNative(u16, groups[0]),
+                std.mem.bigToNative(u16, groups[1]),
+                std.mem.bigToNative(u16, groups[2]),
+                std.mem.bigToNative(u16, groups[3]),
+                std.mem.bigToNative(u16, groups[4]),
+                std.mem.bigToNative(u16, groups[5]),
+                std.mem.bigToNative(u16, groups[6]),
+                std.mem.bigToNative(u16, groups[7]),
+            }) catch unreachable).len;
+        },
+        else => {},
+    }
     return ep;
 }
 
@@ -35,10 +57,11 @@ pub fn set_timeval(fd: i32, level: c_int, opt: u32, ms: u32) void {
 }
 
 test "address_to_endpoint from IPv4" {
-    const addr: posix.sockaddr.in = .{
+    const addr_in: posix.sockaddr.in = .{
         .port = @byteSwap(@as(u16, 8080)),
         .addr = @bitCast(@as([4]u8, .{ 127, 0, 0, 1 })),
     };
+    const addr: posix.sockaddr = @bitCast(addr_in);
     const ep = address_to_endpoint(addr);
     try std.testing.expectEqual(@as(u16, 8080), ep.port);
     try std.testing.expectEqualStrings("127.0.0.1", ep.host[0..ep.host_len]);

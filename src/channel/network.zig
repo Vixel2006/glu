@@ -7,10 +7,10 @@ const linux = std.os.linux;
 const hash = @import("../hash.zig");
 const udp = @import("../transport/udp.zig");
 const IO = @import("../io.zig").IO;
+const ConnectAddress = @import("../io.zig").ConnectAddress;
 const time = @import("../time.zig");
 const ToS = @import("shm.zig").ToS;
 const constants = @import("../constants.zig");
-const discovery = @import("../discovery/mod.zig");
 
 /// Fixed-size header at the start of every datagram. A data frame is the
 /// header followed by the message payload
@@ -74,10 +74,6 @@ pub const Session = struct {
         // we leave the multicast loop enabled in debug mode for unit testing
         if (comptime builtin.mode != .Debug) udp.set_multicast_loop(socket, false);
 
-        discovery.register_net_channel(name, @intCast(linux.getpid()), port, msg_size, capacity, @intFromEnum(tos)) catch |err| {
-            std.log.warn("failed to register net channel '{s}': {}", .{ name, err });
-        };
-
         var self: Session = .{
             .io = io,
             .socket = socket,
@@ -95,7 +91,6 @@ pub const Session = struct {
 
     pub fn close(self: *Session) !void {
         udp.leave_multicast(self.socket, constants.MULTICAST_HOST);
-        discovery.unregister_net_channel(std.mem.sliceTo(&self.name, 0));
     }
 
     pub const deinit = close;
@@ -104,11 +99,11 @@ pub const Session = struct {
         defer self.seq += 1;
 
         const parsed = try std.Io.net.IpAddress.parseIp4(constants.MULTICAST_HOST, self.port);
-        const addr: posix.sockaddr.in = .{
+        const addr = ConnectAddress{ .inet = .{
             .addr = @bitCast(parsed.ip4.bytes),
             .port = @byteSwap(parsed.ip4.port),
             .family = std.c.AF.INET,
-        };
+        } };
 
         assert(data.len > 0);
         const n = @divFloor(data.len + FRAG_PAYLOAD - 1, FRAG_PAYLOAD);
