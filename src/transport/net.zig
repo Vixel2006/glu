@@ -14,16 +14,16 @@ pub fn address_to_endpoint(addr: posix.sockaddr) Endpoint {
     var ep = Endpoint{ .host = undefined, .host_len = 0, .port = 0 };
     switch (addr.family) {
         posix.AF.INET => {
-            const addr_in: *const posix.sockaddr.in = @alignCast(@ptrCast(&addr));
+            const addr_in: *const posix.sockaddr.in = @ptrCast(@alignCast(&addr));
             ep.port = @byteSwap(addr_in.port);
             const bytes: *const [4]u8 = @ptrCast(&addr_in.addr);
             ep.host_len = (std.fmt.bufPrint(&ep.host, "{d}.{d}.{d}.{d}", .{ bytes[0], bytes[1], bytes[2], bytes[3] }) catch unreachable).len;
         },
         posix.AF.INET6 => {
-            const addr_in6: *const posix.sockaddr.in6 = @alignCast(@ptrCast(&addr));
+            const addr_in6: *const posix.sockaddr.in6 = @ptrCast(@alignCast(&addr));
             const bytes: *const [16]u8 = @ptrCast(&addr_in6.addr);
             ep.port = @byteSwap(addr_in6.port);
-            const groups: *const [8]u16 = @alignCast(@ptrCast(bytes));
+            const groups: *const [8]u16 = @ptrCast(@alignCast(bytes));
             ep.host_len = (std.fmt.bufPrint(&ep.host, "{x}:{x}:{x}:{x}:{x}:{x}:{x}:{x}", .{
                 std.mem.bigToNative(u16, groups[0]),
                 std.mem.bigToNative(u16, groups[1]),

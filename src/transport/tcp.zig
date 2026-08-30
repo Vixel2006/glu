@@ -92,7 +92,7 @@ pub fn listen(io: *IO, port: u16, config: Config) !Server {
             .family = posix.AF.INET,
         },
         .ip6 => return error.AddressFamilyNotSupported,
-    }};
+    } };
     try io.bind(socket, addr);
     try io.listen(socket, 128);
 
@@ -128,7 +128,7 @@ pub fn connect(
             .family = posix.AF.INET,
         },
         .ip6 => return error.AddressFamilyNotSupported,
-    }};
+    } };
 
     const socket = try io.socket(posix.AF.INET, posix.SOCK.STREAM, 0);
     errdefer _ = c.close(socket);
