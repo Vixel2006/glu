@@ -7,7 +7,7 @@ const IO = @import("../io.zig");
 const constants = @import("../constants.zig");
 const protoocl = @import("protocol.zig");
 
-const Client = struct {
+pub const Client = struct {
     io: *IO.IO,
     socket: posix.socket_t,
 
