@@ -35,7 +35,7 @@ pub const Client = struct {
         _ = linux.close(self.socket);
     }
 
-    pub fn connect(self: *Client, fut: *IO.IO.Future) !void {
+    pub fn connect(self: *Client, max_attempts: u32) !void {
         var path_buf: [108]u8 = [_]u8{0} ** 108;
         @memcpy(path_buf[0..constants.DAEMON_SOCK.len], constants.DAEMON_SOCK);
         const addr: IO.ConnectAddress = .{
@@ -44,7 +44,21 @@ pub const Client = struct {
                 .path = path_buf,
             },
         };
-        try self.io.connect(fut, self.socket, addr);
+
+        var ts: std.os.linux.kernel_timespec = .{ .sec = 0, .nsec = std.time.ns_per_ms };
+
+        var attempts: u32 = 0;
+        while (attempts < max_attempts) : (attempts += 1) {
+            var fut: IO.IO.Future = undefined;
+            try self.io.connect(&fut, self.socket, addr);
+            if (self.io.wait(&fut, void)) |_| {
+                return;
+            } else |_| {
+                var t: IO.IO.Future = undefined;
+                self.io.timeout(&t, &ts, 0) catch {};
+                self.io.wait(&t, void) catch {};
+            }
+        }
     }
 
     pub fn send(self: *Client, fut: *IO.IO.Future, buf: []const u8) !void {
@@ -117,8 +131,7 @@ test "connect a client to daemon server and send a message" {
     var client: Client = try Client.init(&parent_io, "/tmp/glu/test.sock");
     defer client.deinit();
 
-    var conn_fut: IO.IO.Future = undefined;
-    try client.connect(&conn_fut);
+    try client.connect(100);
 
     const send_buf = "Hello, World!";
     var send_fut: IO.IO.Future = undefined;

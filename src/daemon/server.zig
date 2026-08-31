@@ -120,19 +120,7 @@ test "daemon server accepts a PING from the client and replies" {
     var client = try Client.init(&client_io, "/tmp/glu/test.sock");
     defer client.deinit();
 
-    var conn_fut: IO.IO.Future = undefined;
-    var connected = false;
-    var attempts: u32 = 0;
-    while (!connected and attempts < 10000) : (attempts += 1) {
-        conn_fut = undefined;
-        client.connect(&conn_fut) catch continue;
-        _ = client_io.wait(&conn_fut, void) catch {
-            std.Thread.yield() catch {};
-            continue;
-        };
-        connected = true;
-    }
-    try std.testing.expect(connected);
+    try client.connect(100);
 
     const ping: protocol.CMD = .PING;
     var send_fut: IO.IO.Future = undefined;
