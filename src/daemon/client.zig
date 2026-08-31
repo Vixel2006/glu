@@ -26,9 +26,7 @@ const Client = struct {
 
         const addr: IO.ConnectAddress = .{ .unix = un_addr };
 
-        io.bind(fd, addr) catch |err| {
-            log.err("Daemon client can't bind socket: {s}", .{@errorName(err)});
-        };
+        try io.bind(fd, addr);
 
         return .{ .io = io, .socket = fd };
     }
@@ -46,21 +44,15 @@ const Client = struct {
                 .path = path_buf,
             },
         };
-        self.io.connect(fut, self.socket, addr) catch |err| {
-            log.err("can't connect to daemon server: {s}", .{@errorName(err)});
-        };
+        try self.io.connect(fut, self.socket, addr);
     }
 
-    pub fn send(self: *Client, fut: *IO.IO.Future, buf: []const u8) void {
-        self.io.send(fut, self.socket, buf) catch |err| {
-            log.err("client can't send message to daemon server: {s}", .{@errorName(err)});
-        };
+    pub fn send(self: *Client, fut: *IO.IO.Future, buf: []const u8) !void {
+        try self.io.send(fut, self.socket, buf);
     }
 
-    pub fn recv(self: *Client, fut: *IO.IO.Future, buf: []u8) void {
-        self.io.recv(fut, self.socket, buf) catch |err| {
-            log.err("client can't recieve message from daemon server: {s}", .{@errorName(err)});
-        };
+    pub fn recv(self: *Client, fut: *IO.IO.Future, buf: []u8) !void {
+        try self.io.recv(fut, self.socket, buf);
     }
 };
 
@@ -130,7 +122,7 @@ test "connect a client to daemon server and send a message" {
 
     const send_buf = "Hello, World!";
     var send_fut: IO.IO.Future = undefined;
-    client.send(&send_fut, send_buf);
+    try client.send(&send_fut, send_buf);
     _ = try parent_io.wait(&send_fut, usize);
 
     var status: c_int = undefined;
