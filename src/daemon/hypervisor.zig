@@ -34,8 +34,11 @@ const Hypervisor = struct {
         _ = self;
     }
 
+    pub fn register_node() void {}
+    pub fn unregister_node() void {}
+
     pub fn register_shm(self: *Hypervisor, shm_req: *protocol.SHM_CHAN) void {
-        putChan(
+        put_chan(
             protocol.SHM_CHAN,
             constants.MAX_SHM_CHANS,
             &self.shm_keys,
@@ -46,7 +49,7 @@ const Hypervisor = struct {
     }
 
     pub fn unregister_shm(self: *Hypervisor, name: *protocol.SHM_NAME) void {
-        deleteChan(
+        delete_chan(
             protocol.SHM_CHAN,
             constants.MAX_SHM_CHANS,
             &self.shm_keys,
@@ -59,7 +62,7 @@ const Hypervisor = struct {
     }
 
     pub fn register_net(self: *Hypervisor, net_req: *protocol.NET_CHAN) void {
-        putChan(
+        put_chan(
             protocol.NET_CHAN,
             constants.MAX_NET_CHANS,
             &self.net_keys,
@@ -70,7 +73,7 @@ const Hypervisor = struct {
     }
 
     pub fn unregister_net(self: *Hypervisor, name: *protocol.NET_NAME) void {
-        deleteChan(
+        delete_chan(
             protocol.NET_CHAN,
             constants.MAX_NET_CHANS,
             &self.net_keys,
@@ -83,7 +86,7 @@ const Hypervisor = struct {
     }
 };
 
-fn putChan(
+fn put_chan(
     comptime T: type,
     comptime cap: usize,
     keys: *[cap][]const u8,
@@ -104,7 +107,7 @@ fn putChan(
     count.* += 1;
 }
 
-fn deleteChan(
+fn delete_chan(
     comptime T: type,
     comptime cap: usize,
     keys: *[cap][]const u8,
