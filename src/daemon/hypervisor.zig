@@ -35,7 +35,14 @@ const Hypervisor = struct {
     }
 
     pub fn register_shm(self: *Hypervisor, shm_req: *protocol.SHM_CHAN) void {
-        putChan(protocol.SHM_CHAN, constants.MAX_SHM_CHANS, &self.shm_keys, &self.alive_shm_chans, &self.alive_shm_chans_count, shm_req);
+        putChan(
+            protocol.SHM_CHAN,
+            constants.MAX_SHM_CHANS,
+            &self.shm_keys,
+            &self.alive_shm_chans,
+            &self.alive_shm_chans_count,
+            shm_req,
+        );
     }
 
     pub fn unregister_shm(self: *Hypervisor, name: *protocol.SHM_NAME) void {
