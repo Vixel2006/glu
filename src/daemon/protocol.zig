@@ -20,25 +20,32 @@ pub const CMD = enum(u8) {
     UNREG_NET = 0x08,
 };
 
-pub const NODE_REQ = linux.pid_t;
+pub const Node = struct {
+    pid: linux.pid_t,
+    uptime: linux.timespec,
+};
 
-pub const REG_SHM_REQ = struct {
+pub const NODE_PID = linux.pid_t;
+
+pub const SHM_CHAN = struct {
     name: [64]u8,
     name_len: u32,
     writer_pid: linux.pid_t,
+    num_readers: u32,
     msg_size: u32,
     capacity: u32,
     tos: u32,
 };
 
-pub const UNREG_SHM_REQ = [64]u8;
+pub const SHM_NAME = [64]u8;
 
-pub const REG_NET_REQ = struct {
-    name: [64]u64,
+pub const NET_CHAN = struct {
+    name: [64]u8,
     name_len: u32,
     msg_size: u32,
     capacity: u32,
+    num_reg: u32,
     port: u16,
 };
 
-pub const UNREG_NET_REQ = [64]u8;
+pub const NET_NAME = [64]u8;

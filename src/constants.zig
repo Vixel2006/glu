@@ -52,6 +52,12 @@ pub const NET_MAGIC = 0x474C4E57;
 /// Maximum number of nodes in a single launch manifest.
 pub const MAX_NODES = 16;
 
+/// Maximum number of shared memory channels in a single launch
+pub const MAX_SHM_CHANS = 64;
+
+/// Maximum
+pub const MAX_NET_CHANS = 64;
+
 /// Maximum `extra_cfg` arguments per node in a launch manifest.
 pub const MAX_ARGS = 8;
 

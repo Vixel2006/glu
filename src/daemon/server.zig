@@ -54,10 +54,10 @@ const Server = struct {
         try self.io.recv(&fut, client_fd, &buf);
         _ = try self.io.wait(&fut, usize);
 
+        fut = undefined;
         const cmd = std.mem.bytesAsValue(protocol.CMD, buf[0..@sizeOf(protocol.CMD)]);
         switch (cmd.*) {
             .PING => {
-                fut = undefined;
                 try self.io.send(&fut, client_fd, "");
                 _ = try self.io.wait(&fut, usize);
             },

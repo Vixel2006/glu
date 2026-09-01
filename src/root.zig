@@ -37,4 +37,5 @@ comptime {
     _ = @import("fiber/asyncio.zig");
     _ = @import("daemon/client.zig");
     _ = @import("daemon/server.zig");
+    _ = @import("daemon/hypervisor.zig");
 }
