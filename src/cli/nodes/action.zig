@@ -1,22 +1,25 @@
 const std = @import("std");
 const utils = @import("../utils.zig");
 const parser = @import("../parser.zig");
-const management = @import("../../management/process.zig");
 const constants = @import("../../constants.zig");
+const dispatch = @import("../dispatch.zig");
 
 fn node_action(
     init: std.process.Init,
     args: *parser.Args,
     comptime verb: []const u8,
-    action: *const fn (std.Io, []const u8, []const u8) anyerror!bool,
+    action: *const fn (daemon_client.Client, []const u8) anyerror!bool,
 ) !void {
     var fw = utils.writer(init);
     const w = &fw.interface;
 
+    var client = try dispatch.get_client(init);
+    defer client.deinit();
+
     var any = false;
     while (args.next()) |name| {
         any = true;
-        const ok = action(init.io, name, constants.LOGS_DIR) catch |err| {
+        const ok = action(client, name) catch |err| {
             try w.print(verb ++ " {s}: {s}\n", .{ name, @errorName(err) });
             continue;
         };
@@ -34,14 +37,29 @@ fn node_action(
     }
 }
 
-fn restart_fn(io: std.Io, name: []const u8, logs_dir: []const u8) !bool {
-    _ = try management.stop_node(io, name);
-    return try management.start_node(io, name, logs_dir);
+fn start_fn(client: daemon_client.Client, name: []const u8) !bool {
+    return client.start_node(name);
 }
+
+fn stop_fn(client: daemon_client.Client, name: []const u8) !bool {
+    return client.stop_node(name);
+}
+
+fn restart_fn(client: daemon_client.Client, name: []const u8) !bool {
+    _ = try client.stop_node(name);
+    return client.start_node(name);
+}
+
+const daemon_client = @import("../../daemon/client.zig");
 
 /// Start one or more named nodes (`glu nodes start <node> [node...]`).
 pub fn cmd_start(init: std.process.Init, args: *parser.Args) !void {
-    return node_action(init, args, "start", management.start_node);
+    return node_action(init, args, "start", start_fn);
+}
+
+/// Stop one or more named nodes (`glu nodes stop <node> [node...]`).
+pub fn cmd_stop(init: std.process.Init, args: *parser.Args) !void {
+    return node_action(init, args, "stop", stop_fn);
 }
 
 /// Restart one or more named nodes (`glu nodes restart <node> [node...]`).

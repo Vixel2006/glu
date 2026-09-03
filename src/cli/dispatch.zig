@@ -11,6 +11,12 @@ const topics_list = @import("topics/list.zig");
 const topics_info = @import("topics/info.zig");
 const net_cmd = @import("net.zig");
 const constants = @import("../constants.zig");
+const daemon_client = @import("../daemon/client.zig");
+const IO = @import("../io.zig").IO;
+
+pub fn get_client(init: std.process.Init) daemon_client.ClientErr!daemon_client.Client {
+    return daemon_client.Client.ensure_daemon_running(init.io);
+}
 
 const RunFn = *const fn (init: std.process.Init, args: *parser.Args) anyerror!void;
 

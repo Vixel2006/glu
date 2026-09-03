@@ -18,6 +18,37 @@ fn unexpected_errno(name: []const u8, err: posix.E) posix.UnexpectedError {
     return posix.unexpectedErrno(err);
 }
 
+fn sockaddrLen(family: posix.sa_family_t) usize {
+    return switch (family) {
+        posix.AF.INET => @sizeOf(posix.sockaddr.in),
+        posix.AF.UNIX => @sizeOf(posix.sockaddr.un),
+        else => @sizeOf(posix.sockaddr.storage),
+    };
+}
+
+pub const ConnectAddress = union(enum) {
+    inet: posix.sockaddr.in,
+    unix: posix.sockaddr.un,
+
+    pub fn len(self: ConnectAddress) usize {
+        return switch (self) {
+            .inet => @sizeOf(posix.sockaddr.in),
+            .unix => @sizeOf(posix.sockaddr.un),
+        };
+    }
+
+    pub fn family(self: ConnectAddress) posix.sa_family_t {
+        return switch (self) {
+            .inet => |v| v.family,
+            .unix => |v| v.family,
+        };
+    }
+
+    pub fn ptr(self: *const ConnectAddress) *const posix.sockaddr {
+        return @ptrCast(self);
+    }
+};
+
 pub const IO = struct {
     ring: IoUring,
     completed: Queue(Future),
@@ -167,11 +198,11 @@ pub const IO = struct {
         }
     }
 
-    pub fn bind(self: *IO, sock: posix.socket_t, address: posix.sockaddr.in) !void {
+    pub fn bind(self: *IO, sock: posix.socket_t, address: ConnectAddress) !void {
         _ = self;
-        const addr: *const posix.sockaddr = @ptrCast(&address);
+        const addr: *const posix.sockaddr = address.ptr();
         while (true) {
-            const rc = posix.system.bind(sock, addr, @sizeOf(posix.sockaddr.in));
+            const rc = posix.system.bind(sock, addr, @intCast(address.len()));
             switch (posix.errno(rc)) {
                 .SUCCESS => return,
                 .INTR => continue,
@@ -216,7 +247,7 @@ pub const IO = struct {
         },
         connect: struct {
             socket: posix.socket_t,
-            address: posix.sockaddr.in,
+            address: ConnectAddress,
         },
         read: struct {
             fd: posix.fd_t,
@@ -260,15 +291,16 @@ pub const IO = struct {
         send_to: struct {
             socket: posix.socket_t,
             buffer: []const u8,
-            address: posix.sockaddr.in,
+            address: ConnectAddress,
+            addrlen: posix.socklen_t = 0,
             iov: [1]posix.iovec_const = undefined,
             msg: std.os.linux.msghdr_const = undefined,
         },
         recv_from: struct {
             socket: posix.socket_t,
             buffer: []u8,
-            address: posix.sockaddr.in = undefined,
-            addrlen: posix.socklen_t = @sizeOf(posix.sockaddr.in),
+            address: posix.sockaddr = undefined,
+            addrlen: posix.socklen_t = @sizeOf(posix.sockaddr.storage),
             iov: [1]posix.iovec = undefined,
             msg: std.os.linux.msghdr = undefined,
         },
@@ -301,11 +333,12 @@ pub const IO = struct {
                     sqe.prep_close(op.fd);
                 },
                 .connect => |*op| {
-                    const addr: *const posix.sockaddr = @ptrCast(&op.address);
+                    const addr: *const posix.sockaddr = op.address.ptr();
+                    const addrlen = op.address.len();
                     sqe.prep_connect(
                         op.socket,
                         addr,
-                        @sizeOf(posix.sockaddr.in),
+                        @intCast(addrlen),
                     );
                 },
                 .read => |op| {
@@ -344,13 +377,13 @@ pub const IO = struct {
                     sqe.prep_nop();
                 },
                 .send_to => |*op| {
-                    const addr: *const posix.sockaddr = @ptrCast(&op.address);
+                    const addr: *const posix.sockaddr = op.address.ptr();
                     op.iov = [1]posix.iovec_const{
                         .{ .base = op.buffer.ptr, .len = op.buffer.len },
                     };
                     op.msg = std.os.linux.msghdr_const{
                         .name = addr,
-                        .namelen = @sizeOf(posix.sockaddr.in),
+                        .namelen = op.addrlen,
                         .iov = &op.iov,
                         .iovlen = 1,
                         .control = null,
@@ -870,7 +903,7 @@ pub const IO = struct {
         self: *IO,
         future: *Future,
         sock: posix.socket_t,
-        address: posix.sockaddr.in,
+        address: ConnectAddress,
     ) !void {
         future.* = .{
             .io = self,
@@ -1065,7 +1098,7 @@ pub const IO = struct {
         future: *Future,
         sock: posix.socket_t,
         buffer: []const u8,
-        address: posix.sockaddr.in,
+        address: ConnectAddress,
     ) !void {
         future.* = .{
             .io = self,
@@ -1074,6 +1107,7 @@ pub const IO = struct {
                     .socket = sock,
                     .buffer = buffer,
                     .address = address,
+                    .addrlen = @intCast(address.len()),
                 },
             },
         };
@@ -1314,7 +1348,7 @@ test "tcp connect accept send recv round-trip" {
     defer _ = std.c.close(listener);
     const one: c_int = 1;
     _ = std.c.setsockopt(listener, std.c.SOL.SOCKET, std.c.SO.REUSEADDR, &one, @sizeOf(c_int));
-    try io.bind(listener, .{ .port = 0, .addr = 0 });
+    try io.bind(listener, .{ .inet = .{ .port = 0, .addr = 0, .family = posix.AF.INET } });
     try io.listen(listener, 16);
 
     var sockname: posix.sockaddr.in = undefined;
@@ -1334,7 +1368,7 @@ test "tcp connect accept send recv round-trip" {
         .port = @byteSwap(port),
         .addr = @bitCast(@as([4]u8, .{ 127, 0, 0, 1 })),
     };
-    try io.connect(&compl_connect, client, addr);
+    try io.connect(&compl_connect, client, .{ .inet = addr });
 
     try io.wait(&compl_connect, void);
     const server_fd = try io.wait(&compl_accept, posix.socket_t);
@@ -1366,8 +1400,8 @@ test "udp send_to recv_from round-trip" {
     const s2 = try io.socket(posix.AF.INET, posix.SOCK.DGRAM, 0);
     defer _ = std.c.close(s2);
 
-    try io.bind(s1, .{ .port = 0, .addr = 0 });
-    try io.bind(s2, .{ .port = 0, .addr = 0 });
+    try io.bind(s1, .{ .inet = .{ .port = 0, .addr = 0, .family = posix.AF.INET } });
+    try io.bind(s2, .{ .inet = .{ .port = 0, .addr = 0, .family = posix.AF.INET } });
 
     var sockname: posix.sockaddr.in = undefined;
     var namelen: posix.socklen_t = @sizeOf(posix.sockaddr.in);
@@ -1385,7 +1419,7 @@ test "udp send_to recv_from round-trip" {
     var compl_recv: IO.Future = undefined;
     var buf: [64]u8 = undefined;
 
-    try io.send_to(&compl_send, s2, msg, addr);
+    try io.send_to(&compl_send, s2, msg, .{ .inet = addr });
     try io.recv_from(&compl_recv, s1, &buf);
 
     try testing.expectEqual(@as(usize, msg.len), try io.wait(&compl_send, usize));
@@ -1454,7 +1488,7 @@ test "connect to a closed port returns ConnectionRefused" {
     defer io.deinit();
 
     const probe = try io.socket(posix.AF.INET, posix.SOCK.STREAM, 0);
-    try io.bind(probe, .{ .port = 0, .addr = 0 });
+    try io.bind(probe, .{ .inet = .{ .port = 0, .addr = 0 } });
     var sockname: posix.sockaddr.in = undefined;
     var namelen: posix.socklen_t = @sizeOf(posix.sockaddr.in);
     try testing.expect(std.c.getsockname(probe, @ptrCast(&sockname), &namelen) == 0);
@@ -1469,7 +1503,7 @@ test "connect to a closed port returns ConnectionRefused" {
         .addr = @bitCast(@as([4]u8, .{ 127, 0, 0, 1 })),
     };
     var compl: IO.Future = undefined;
-    try io.connect(&compl, s, addr);
+    try io.connect(&compl, s, .{ .inet = addr });
     try testing.expectError(error.ConnectionRefused, io.wait(&compl, void));
 }
 
@@ -1499,7 +1533,7 @@ test "accept on a non-listening socket returns SocketNotListening" {
     defer io.deinit();
     const s = try io.socket(posix.AF.INET, posix.SOCK.STREAM, 0);
     defer _ = std.c.close(s);
-    try io.bind(s, .{ .port = 0, .addr = 0 });
+    try io.bind(s, .{ .inet = .{ .port = 0, .addr = 0, .family = posix.AF.INET } });
 
     var compl: IO.Future = undefined;
     try io.accept(&compl, s);

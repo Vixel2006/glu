@@ -1,7 +1,6 @@
 const std = @import("std");
 const posix = std.posix;
 const c = std.c;
-const hash = @import("../hash.zig");
 const constants = @import("../constants.zig");
 const Frame = @import("../channel/network.zig").Frame;
 const HEADER_SIZE = @import("../channel/network.zig").HEADER_SIZE;
@@ -25,7 +24,7 @@ pub const NetSniffer = struct {
     total_drops: u64 = 0,
 
     pub fn init(channel_name: []const u8) !NetSniffer {
-        const port = @as(u16, @intCast(constants.PORT_BASE + hash.fvn1a(channel_name, constants.PORT_SLOTS)));
+        const port = @as(u16, @intCast(constants.PORT_BASE + @as(u32, @intCast(std.hash.Fnv1a_64.hash(channel_name) % constants.PORT_SLOTS))));
 
         const fd = c.socket(c.AF.INET, c.SOCK.DGRAM, 0);
         if (fd < 0) return error.SocketCreationFailed;

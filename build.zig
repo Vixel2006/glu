@@ -27,6 +27,23 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    const glud_exe = b.addExecutable(.{
+        .name = "glud",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/glud.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "glu", .module = mod },
+            },
+        }),
+        .use_llvm = true,
+        .use_lld = true,
+    });
+
+    b.installArtifact(glud_exe);
+
     // C ABI shared library (libglu.so)
     const lib = b.addLibrary(.{
         .name = "glu",

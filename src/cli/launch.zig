@@ -1,30 +1,10 @@
 const std = @import("std");
-const os = std.os.linux;
 const utils = @import("utils.zig");
 const parser = @import("parser.zig");
-const discovery = @import("../discovery/mod.zig");
-const debug = @import("../debug/mod.zig");
-const launch_mod = @import("../launch/launcher.zig");
 const toml = @import("../launch/toml.zig");
-const Registry = @import("../registry.zig");
 const constants = @import("../constants.zig");
-
-var launched_children: []launch_mod.LaunchedNode = &.{};
-var launch_io: std.Io = undefined;
-var g_interrupted: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
-
-/// Async-signal-safe SIGINT handler.
-///
-/// Only sets a flag and kills the children (both async-signal-safe).
-/// All file I/O cleanup (registry unregister, topic/log cleanup) is
-/// deferred to the main thread in `cmd_launch`; doing file operations
-/// from a signal handler is not async-signal-safe and can deadlock.
-fn handle_sigint(_: os.SIG) callconv(.c) void {
-    g_interrupted.store(true, .seq_cst);
-    for (launched_children) |*n| {
-        n.child.kill(launch_io);
-    }
-}
+const dispatch = @import("dispatch.zig");
+const debug = @import("../debug/mod.zig");
 
 /// Launch nodes from a TOML config (`glu launch -f <file> [-d]`).
 pub fn cmd_launch(init: std.process.Init, args: *parser.Args) !void {
@@ -57,48 +37,17 @@ pub fn cmd_launch(init: std.process.Init, args: *parser.Args) !void {
     var fw = utils.writer(init);
     const w = &fw.interface;
 
+    var client = try dispatch.get_client(init);
+    defer client.deinit();
+
     if (detach) {
-        try launch_mod.launch_detached(init.io, nodes, "/tmp/glu/logs");
-        w.print("launched {d} node(s) in background\n", .{nodes.len}) catch {};
+        const spawned = try client.launch(nodes);
+        w.print("launched {d} node(s) in background\n", .{spawned}) catch {};
         return;
     }
 
-    var children_buf: [constants.MAX_NODES]launch_mod.LaunchedNode = undefined;
-    const launched_len = try launch_mod.launch(init.io, nodes, &children_buf);
-    launched_children = children_buf[0..launched_len];
-    launch_io = init.io;
-
-    var sa: os.Sigaction = .{
-        .handler = .{ .handler = handle_sigint },
-        .mask = os.sigemptyset(),
-        .flags = 0,
-    };
-    _ = os.sigaction(os.SIG.INT, &sa, null);
-
-    w.print("launched {d} node(s)\n", .{launched_children.len}) catch {};
-
-    for (launched_children) |*n| {
-        const term = n.child.wait(init.io) catch |err| {
-            if (g_interrupted.load(.seq_cst)) break;
-            w.print("error waiting for node '{s}': {}\n", .{ n.name, err }) catch {};
-            continue;
-        };
-        switch (term) {
-            .exited => |code| w.print("node '{s}' exited with code {d}\n", .{ n.name, code }) catch {},
-            .signal => |sig| w.print("node '{s}' killed by signal {}\n", .{ n.name, sig }) catch {},
-            else => w.print("node '{s}' terminated unexpectedly\n", .{n.name}) catch {},
-        }
-        if (g_interrupted.load(.seq_cst)) break;
-    }
-
-    // Cleanup must run on the main thread: the signal handler only flags
-    // the interrupt and kills the children.
-    if (g_interrupted.load(.seq_cst)) {
-        for (launched_children) |*n| {
-            Registry.unregister(n.name);
-        }
-        discovery.cleanup_topics();
-    }
+    const spawned = try client.launch(nodes);
+    w.print("launched {d} node(s)\n", .{spawned}) catch {};
 
     debug.cleanup_logs(init.io);
 }

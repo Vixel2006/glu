@@ -3,8 +3,10 @@ const assert = std.debug.assert;
 const c = @import("std").c;
 const os = @import("std").os.linux;
 
-const is_alive = @import("../registry.zig").is_alive;
+const is_alive = @import("../utils.zig").is_alive;
 const constants = @import("../constants.zig");
+const Client = @import("../daemon/client.zig").Client;
+const WireShmTopic = @import("../daemon/protocol.zig").WireShmTopic;
 
 pub const ShmErr = error{ OutOfMemory, ShmOpenFailed, MmapFailed, InvalidSegment };
 
@@ -139,6 +141,13 @@ pub const Shm = struct {
             @memcpy(hdr.name[0..name_len], name[0..name_len]);
         }
 
+        // TODO: here we should be able to start a client to the daemon and register the shm in it
+        // I think a good design is that, we have the main that will dispatch and stuff.
+        // the thing is that this will run in a process of itself I think. if in the process we get
+        // a client, then we just do like client.ping() if the daemon is alive
+        // we will do the client.register_shm(). this way we have registered the shm channel
+        // in our daemon and we can simply work from there.
+
         return .{ .fd = fd, .ptr = ptr, .header = hdr, .size = size, .cap = capacity, .msg_size = msg_size, .tos = tos };
     }
 
@@ -159,6 +168,8 @@ pub const Shm = struct {
         _ = os.close(self.fd);
         self.fd = -1;
 
+        // TODO: here we should also call the client.unregister_shm() so that we can unregister
+        // the channel in the daemon for discovery and registery.
         if (name_z) |nz| _ = c.shm_unlink(nz.ptr);
     }
 
