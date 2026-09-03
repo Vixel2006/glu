@@ -10,7 +10,7 @@ pub const ToS = @import("channel/shm.zig").ToS;
 pub const Publisher = @import("api/publisher.zig").Publisher;
 pub const Subscriber = @import("api/subscriber.zig").Subscriber;
 pub const Peer = @import("api/peer.zig").Peer;
-pub const debug = @import("debug/mod.zig");
+//pub const debug = @import("debug/mod.zig");
 pub const net = @import("transport/net.zig");
 pub const tcp = @import("transport/tcp.zig");
 pub const fiber = @import("fiber/fiber.zig");
@@ -37,5 +37,5 @@ comptime {
     _ = @import("fiber/asyncio.zig");
     _ = @import("daemon/client.zig");
     _ = @import("daemon/server.zig");
-    _ = @import("daemon/hypervisor.zig");
+    _ = @import("daemon/inventory.zig");
 }

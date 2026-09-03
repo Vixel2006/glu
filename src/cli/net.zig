@@ -3,7 +3,6 @@ const utils = @import("utils.zig");
 const parser = @import("parser.zig");
 const discovery = @import("../discovery/mod.zig");
 const debug = @import("../debug/mod.zig");
-const hash = @import("../hash.zig");
 const constants = @import("../constants.zig");
 const FRAG_PAYLOAD = @import("../channel/network.zig").FRAG_PAYLOAD;
 const HEADER_SIZE = @import("../channel/network.zig").HEADER_SIZE;
@@ -57,7 +56,7 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
         return error.MissingArgument;
     };
 
-    const port = @as(u16, @intCast(constants.PORT_BASE + hash.fvn1a(name, constants.PORT_SLOTS)));
+    const port = @as(u16, @intCast(constants.PORT_BASE + @as(u32, @intCast(std.hash.Fnv1a_64.hash(name) % constants.PORT_SLOTS))));
 
     var client = try dispatch.get_client(init);
     defer client.deinit();

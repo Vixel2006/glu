@@ -1,13 +1,7 @@
 const std = @import("std");
 const linux = std.os.linux;
 
-// +-------------------------------------------------+
-// |                  UDP Header                     |
-// +-------------------------------------------------+
-// |                 CMD FLAG (u8)                   |
-// +-------------------------------------------------|
-// |                    PAYLOAD                      |
-// +-------------------------------------------------+
+const constants = @import("../constants.zig");
 
 pub const CMD = enum(u8) {
     PING = 0x01,
@@ -21,11 +15,17 @@ pub const CMD = enum(u8) {
 };
 
 pub const Node = struct {
-    pid: linux.pid_t,
-    uptime: linux.timespec,
+    name: []const u8 = "",
+    path: []const u8 = "",
+    bin: []const u8 = "",
+    extra_cfg: [constants.MAX_ARGS][]const u8 = undefined,
+    pid: ?linux.pid_t,
+    uptime: ?linux.timespec,
 };
 
 pub const NODE_PID = linux.pid_t;
+
+pub const NODE_NAME = [64]u8;
 
 pub const SHM_CHAN = struct {
     name: [64]u8,

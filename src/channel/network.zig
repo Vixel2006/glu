@@ -4,7 +4,6 @@ const assert = std.debug.assert;
 const posix = std.posix;
 const linux = std.os.linux;
 
-const hash = @import("../hash.zig");
 const udp = @import("../transport/udp.zig");
 const IO = @import("../io.zig").IO;
 const ConnectAddress = @import("../io.zig").ConnectAddress;
@@ -63,7 +62,7 @@ pub const Session = struct {
         assert(capacity <= constants.NET_CAP_MAX);
         assert(name.len > 0 and name.len <= constants.MAX_NAME_LEN);
 
-        const port = @as(u16, @intCast(constants.PORT_BASE + hash.fvn1a(name, constants.PORT_SLOTS)));
+        const port = @as(u16, @intCast(constants.PORT_BASE + @as(u32, @intCast(std.hash.Fnv1a_64.hash(name) % constants.PORT_SLOTS))));
         var socket = try udp.bind(io, .{ .host = constants.MULTICAST_HOST, .port = port }, .{ .reuse_addr = true });
         errdefer udp.close(&socket);
 
@@ -206,7 +205,7 @@ test "open and close a network channel" {
     var net = try Session.open(&io, "test_channel", 1024, 8, .best_effort);
     defer net.close() catch {};
 
-    try std.testing.expectEqual(constants.PORT_BASE + hash.fvn1a("test_channel", constants.PORT_SLOTS), @as(u32, net.port));
+    try std.testing.expectEqual(constants.PORT_BASE + @as(u32, @intCast(std.hash.Fnv1a_64.hash("test_channel") % constants.PORT_SLOTS)), @as(u32, net.port));
     try std.testing.expectEqual(@as(u32, 1024), net.msg_size);
     try std.testing.expectEqual(@as(u32, 8), net.cap);
     try std.testing.expectEqual(@as(u32, "test_channel".len), net.name_len);
