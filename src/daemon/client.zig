@@ -1,32 +1,28 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const posix = std.posix;
 const linux = std.os.linux;
 const log = std.log;
 
 const IO = @import("../io.zig");
 const constants = @import("../constants.zig");
-const protoocl = @import("protocol.zig");
+const protocol = @import("protocol.zig");
+
+/// How many connect attempts a best-effort daemon notification makes before
+/// giving up. Each failed attempt costs roughly a millisecond.
+const NOTIFY_ATTEMPTS: u32 = 3;
+
+/// Size of the largest request payload (`protocol.SHM_CHAN`).
+const MAX_REQUEST = @sizeOf(protocol.SHM_CHAN);
 
 pub const Client = struct {
     io: *IO.IO,
     socket: posix.socket_t,
 
-    pub fn init(io: *IO.IO, path: []const u8) !Client {
+    pub fn init(io: *IO.IO) !Client {
         const fd: posix.socket_t =
             try io.socket(@intCast(posix.AF.UNIX), @intCast(posix.SOCK.STREAM), 0);
-
-        var path_buf: [108]u8 = [_]u8{0} ** 108;
-        @memcpy(path_buf[0..path.len], path);
-
-        const un_addr: posix.sockaddr.un = .{
-            .family = posix.AF.UNIX,
-            .path = path_buf,
-        };
         errdefer _ = linux.close(fd);
-
-        const addr: IO.ConnectAddress = .{ .unix = un_addr };
-
-        try io.bind(fd, addr);
 
         return .{ .io = io, .socket = fd };
     }
@@ -59,6 +55,8 @@ pub const Client = struct {
                 self.io.wait(&t, void) catch {};
             }
         }
+
+        return error.ConnectionFailed;
     }
 
     pub fn send(self: *Client, fut: *IO.IO.Future, buf: []const u8) !void {
@@ -67,6 +65,49 @@ pub const Client = struct {
 
     pub fn recv(self: *Client, fut: *IO.IO.Future, buf: []u8) !void {
         try self.io.recv(fut, self.socket, buf);
+    }
+
+    pub fn daemon_running() bool {
+        return std.c.access(constants.DAEMON_SOCK.ptr, std.c.F_OK) == 0;
+    }
+
+    pub fn notify(io: *IO.IO, comptime cmd: protocol.CMD, payload: []const u8) !void {
+        if (!daemon_running()) return;
+        var client = try Client.init(io);
+        defer client.deinit();
+        client.connect(NOTIFY_ATTEMPTS) catch return;
+        try client.request(cmd, payload);
+    }
+
+    pub fn request(self: *Client, comptime cmd: protocol.CMD, payload: []const u8) !void {
+        assert(payload.len <= MAX_REQUEST);
+        var buf: [1 + MAX_REQUEST]u8 = undefined;
+        buf[0] = @intFromEnum(cmd);
+        @memcpy(buf[1..][0..payload.len], payload);
+
+        var fut: IO.IO.Future = undefined;
+        try self.send(&fut, buf[0 .. 1 + payload.len]);
+        _ = try self.io.wait(&fut, usize);
+    }
+
+    pub fn ping(self: *Client) !void {
+        try self.request(.PING, "");
+    }
+
+    pub fn register_shm(self: *Client, req: *const protocol.SHM_CHAN) !void {
+        try self.request(.REG_SHM, std.mem.asBytes(req));
+    }
+
+    pub fn unregister_shm(self: *Client, name: *const protocol.SHM_NAME) !void {
+        try self.request(.UNREG_SHM, std.mem.asBytes(name));
+    }
+
+    pub fn register_net(self: *Client, req: *const protocol.NET_CHAN) !void {
+        try self.request(.REG_NET, std.mem.asBytes(req));
+    }
+
+    pub fn unregister_net(self: *Client, name: *const protocol.NET_NAME) !void {
+        try self.request(.UNREG_NET, std.mem.asBytes(name));
     }
 };
 
@@ -95,6 +136,7 @@ test "connect a client to daemon server and send a message" {
     };
 
     cwd.deleteFile(cwd_io, DAEMON_SOCK) catch {};
+    defer cwd.deleteFile(cwd_io, DAEMON_SOCK) catch {};
     try io.bind(fd, conn_addr);
     defer _ = linux.close(fd);
     errdefer _ = linux.close(fd);
@@ -127,8 +169,7 @@ test "connect a client to daemon server and send a message" {
     var parent_io: IO.IO = try IO.IO.init(64, 0);
     defer parent_io.deinit();
 
-    cwd.deleteFile(cwd_io, "/tmp/glu/test.sock") catch {};
-    var client: Client = try Client.init(&parent_io, "/tmp/glu/test.sock");
+    var client: Client = try Client.init(&parent_io);
     defer client.deinit();
 
     try client.connect(100);

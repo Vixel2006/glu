@@ -10,6 +10,8 @@ const ConnectAddress = @import("../io.zig").ConnectAddress;
 const time = @import("../time.zig");
 const ToS = @import("shm.zig").ToS;
 const constants = @import("../constants.zig");
+const Client = @import("../daemon/client.zig").Client;
+const protocol = @import("../daemon/protocol.zig");
 
 /// Fixed-size header at the start of every datagram. A data frame is the
 /// header followed by the message payload
@@ -30,6 +32,34 @@ fn set_nonblocking(fd: i32) void {
     const flags = linux.fcntl(fd, linux.F.GETFL, 0);
     const nonblock = @as(u32, @bitCast(linux.O{ .NONBLOCK = true }));
     _ = linux.fcntl(fd, linux.F.SETFL, flags | nonblock);
+}
+
+/// Best-effort daemon notification. Uses the caller's event loop for the
+/// short register/unregister exchange; a no-op when the daemon is not running.
+fn notify_daemon(io: *IO, comptime cmd: protocol.CMD, payload: []const u8) void {
+    if (!Client.daemon_running()) return;
+    Client.notify(io, cmd, payload) catch |err| {
+        std.log.err("net daemon notify: {s}", .{@errorName(err)});
+    };
+}
+
+fn register_net_channel(io: *IO, name: []const u8, msg_size: u32, capacity: u32, port: u16) void {
+    var req: protocol.NET_CHAN = std.mem.zeroes(protocol.NET_CHAN);
+    const name_len = @min(name.len, 64);
+    @memcpy(req.name[0..name_len], name[0..name_len]);
+    req.name_len = @intCast(name_len);
+    req.msg_size = msg_size;
+    req.capacity = capacity;
+    req.num_reg = 1;
+    req.port = port;
+    notify_daemon(io, .REG_NET, std.mem.asBytes(&req));
+}
+
+fn unregister_net_channel(io: *IO, name: []const u8) void {
+    var unreg: protocol.NET_NAME = std.mem.zeroes(protocol.NET_NAME);
+    const name_len = @min(name.len, 64);
+    @memcpy(unreg[0..name_len], name[0..name_len]);
+    notify_daemon(io, .UNREG_NET, std.mem.asBytes(&unreg));
 }
 
 pub const Session = struct {
@@ -85,10 +115,15 @@ pub const Session = struct {
         };
         @memcpy(self.name[0..name.len], name);
 
+        // Register the channel with the daemon for discovery/registry.
+        register_net_channel(io, self.name[0..self.name_len], msg_size, capacity, port);
+
         return self;
     }
 
     pub fn close(self: *Session) !void {
+        // Unregister the channel in the daemon for discovery/registry.
+        unregister_net_channel(self.io, self.name[0..self.name_len]);
         udp.leave_multicast(self.socket, constants.MULTICAST_HOST);
     }
 
