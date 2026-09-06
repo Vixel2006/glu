@@ -6,7 +6,7 @@ const assert = std.debug.assert;
 const constants = @import("../constants.zig");
 const protocol = @import("protocol.zig");
 
-const Inventory = struct {
+pub const Inventory = struct {
     alive_nodes: std.StringHashMap(protocol.Node),
     dead_nodes: std.StringHashMap(protocol.Node),
 
@@ -86,15 +86,22 @@ const Inventory = struct {
     }
 
     pub fn start_node(self: *Inventory, node: *protocol.Node) !void {
-        const pid = try posix.fork();
+        const rc = linux.fork();
+        const pid: linux.pid_t = if (posix.errno(rc) == .SUCCESS) @intCast(rc) else return error.ForkFailed;
         if (pid == 0) {
             var argv: [constants.MAX_ARGS + 2]?[*:0]const u8 = .{null} ** (constants.MAX_ARGS + 2);
-            argv[0] = node.bin.ptr;
+
+            var bin_buf: [4096]u8 = undefined;
+            argv[0] = std.fmt.bufPrintZ(&bin_buf, "{s}", .{node.bin}) catch linux.exit_group(1);
+
+            var arg_bufs: [constants.MAX_ARGS][1024]u8 = undefined;
             for (node.extra_cfg, 0..) |arg, i| {
                 if (arg.len == 0) break;
-                argv[i + 1] = arg.ptr;
+                argv[i + 1] = std.fmt.bufPrintZ(&arg_bufs[i], "{s}", .{arg}) catch linux.exit_group(1);
             }
-            _ = std.c.execve(node.bin.ptr, @ptrCast(&argv));
+
+            const envp = [_]?[*:0]const u8{null};
+            _ = std.c.execve(argv[0].?, @ptrCast(&argv), @ptrCast(&envp));
             linux.exit_group(1);
         }
         node.*.pid = pid;

@@ -6,15 +6,36 @@ const log = std.log;
 const IO = @import("../io.zig");
 const constants = @import("../constants.zig");
 const protocol = @import("protocol.zig");
-const Client = @import("client.zig").Client;
+const Inventory = @import("inventory.zig").Inventory;
 
 const Server = struct {
     io: *IO.IO,
-    socket: posix.socket_t,
+    socket: posix.socket_t = -1,
+    inventory: Inventory,
+    allocator: std.mem.Allocator,
+    payloads: std.ArrayList([]align(8) u8),
 
-    pub fn init(io: *IO.IO) !Server {
+    pub fn init(io: *IO.IO, allocator: std.mem.Allocator) !Server {
+        return .{
+            .io = io,
+            .allocator = allocator,
+            .inventory = Inventory.init(allocator),
+            .payloads = .empty,
+        };
+    }
+
+    pub fn deinit(self: *Server) void {
+        for (self.payloads.items) |blob| self.allocator.free(blob);
+        self.payloads.deinit(self.allocator);
+        self.inventory.deinit();
+        if (self.socket != -1) _ = linux.close(self.socket);
+    }
+
+    pub fn listen(self: *Server, backlog: u32) !void {
         const fd: posix.socket_t =
-            try io.socket(@intCast(posix.AF.UNIX), @intCast(posix.SOCK.STREAM), 0);
+            try self.io.socket(@intCast(posix.AF.UNIX), @intCast(posix.SOCK.STREAM), 0);
+        errdefer _ = linux.close(fd);
+        self.socket = fd;
 
         var path_buf: [108]u8 = [_]u8{0} ** 108;
         @memcpy(path_buf[0..constants.DAEMON_SOCK.len], constants.DAEMON_SOCK);
@@ -24,18 +45,8 @@ const Server = struct {
             .path = path_buf,
         };
 
-        try io.bind(fd, IO.ConnectAddress{ .unix = addr });
-        errdefer _ = linux.close(fd);
-
-        return .{ .io = io, .socket = fd };
-    }
-
-    pub fn deinit(self: *Server) void {
-        _ = linux.close(self.socket);
-    }
-
-    pub fn listen(self: *Server, backlog: u32) !void {
-        try self.io.listen(self.socket, backlog);
+        try self.io.bind(fd, IO.ConnectAddress{ .unix = addr });
+        try self.io.listen(fd, backlog);
 
         //while (true) {
         var fut: IO.IO.Future = undefined;
@@ -47,93 +58,231 @@ const Server = struct {
         //}
     }
 
+    /// Copy the payload into daemon-owned storage so name keys used by the
+    /// inventory stay valid after the request buffer is gone.
+    fn persist(self: *Server, comptime T: type, bytes: []const u8) !*T {
+        const blob = try self.allocator.alignedAlloc(u8, std.mem.Alignment.of(protocol.Node), @sizeOf(T));
+        @memcpy(blob, bytes);
+        errdefer self.allocator.free(blob);
+        try self.payloads.append(self.allocator, blob);
+        return @ptrCast(blob.ptr);
+    }
+
     pub fn handle_request(self: *Server, client_fd: posix.socket_t) !void {
         var fut: IO.IO.Future = undefined;
         var buf: [1024]u8 = undefined;
 
         try self.io.recv(&fut, client_fd, &buf);
-        _ = try self.io.wait(&fut, usize);
+        const len = try self.io.wait(&fut, usize);
+        const data = buf[0..len];
 
         fut = undefined;
-        const cmd = std.mem.bytesAsValue(protocol.CMD, buf[0..@sizeOf(protocol.CMD)]);
+        const cmd = std.mem.bytesAsValue(protocol.CMD, data[0..@sizeOf(protocol.CMD)]);
         switch (cmd.*) {
             .PING => {
                 try self.io.send(&fut, client_fd, "");
                 _ = try self.io.wait(&fut, usize);
             },
             .START_NODE => {
-                // TODO: here we should actually start a node,
+                const off = @sizeOf(protocol.CMD);
+                if (data.len < off + @sizeOf(protocol.Node)) return error.ShortMessage;
+                const node = try self.persist(protocol.Node, data[off .. off + @sizeOf(protocol.Node)]);
+                self.inventory.start_node(node) catch |e| log.err("start node: {s}", .{@errorName(e)});
             },
             .STOP_NODE => {
-                // TODO: Here we will stop a node,
+                const off = @sizeOf(protocol.CMD);
+                if (data.len < off + @sizeOf(protocol.NODE_NAME)) return error.ShortMessage;
+                var name = std.mem.bytesToValue(protocol.NODE_NAME, data[off .. off + @sizeOf(protocol.NODE_NAME)]);
+                self.inventory.stop_node(std.mem.sliceTo(name[0..], 0));
             },
             .RESTART_NODE => {
-                // TODO: Here we restart a node,
+                const off = @sizeOf(protocol.CMD);
+                if (data.len < off + @sizeOf(protocol.NODE_NAME)) return error.ShortMessage;
+                var name = std.mem.bytesToValue(protocol.NODE_NAME, data[off .. off + @sizeOf(protocol.NODE_NAME)]);
+                self.inventory.restart_node(std.mem.sliceTo(name[0..], 0));
             },
             .REG_SHM => {
-                // TODO: Here we handle registering a shared memory channel
+                const off = @sizeOf(protocol.CMD);
+                if (data.len < off + @sizeOf(protocol.SHM_CHAN)) return error.ShortMessage;
+                const req = try self.persist(protocol.SHM_CHAN, data[off .. off + @sizeOf(protocol.SHM_CHAN)]);
+                self.inventory.register_shm(req);
             },
             .UNREG_SHM => {
-                // TODO: Here we handle un-registering a shared memory channel
+                const off = @sizeOf(protocol.CMD);
+                if (data.len < off + @sizeOf(protocol.SHM_NAME)) return error.ShortMessage;
+                var name = std.mem.bytesToValue(protocol.SHM_NAME, data[off .. off + @sizeOf(protocol.SHM_NAME)]);
+                self.inventory.unregister_shm(&name);
             },
             .REG_NET => {
-                // TODO: Here we handle registering a network channel
+                const off = @sizeOf(protocol.CMD);
+                if (data.len < off + @sizeOf(protocol.NET_CHAN)) return error.ShortMessage;
+                const req = try self.persist(protocol.NET_CHAN, data[off .. off + @sizeOf(protocol.NET_CHAN)]);
+                self.inventory.register_net(req);
             },
             .UNREG_NET => {
-                // TODO: Here we handle un-registering a network channel
+                const off = @sizeOf(protocol.CMD);
+                if (data.len < off + @sizeOf(protocol.NET_NAME)) return error.ShortMessage;
+                var name = std.mem.bytesToValue(protocol.NET_NAME, data[off .. off + @sizeOf(protocol.NET_NAME)]);
+                self.inventory.unregister_net(&name);
             },
         }
     }
 };
 
-test "daemon server accepts a PING from the client and replies" {
-    const c = std.c;
+fn cmd_buffer(comptime cmd: protocol.CMD, payload: anytype) [@sizeOf(protocol.CMD) + @sizeOf(@TypeOf(payload))]u8 {
+    var buf: [@sizeOf(protocol.CMD) + @sizeOf(@TypeOf(payload))]u8 = undefined;
+    buf[0] = @intFromEnum(cmd);
+    @memcpy(buf[@sizeOf(protocol.CMD)..], std.mem.asBytes(&payload));
+    return buf;
+}
 
-    var daemon_path: [constants.DAEMON_SOCK.len + 1]u8 = undefined;
-    @memcpy(daemon_path[0..constants.DAEMON_SOCK.len], constants.DAEMON_SOCK);
-    daemon_path[constants.DAEMON_SOCK.len] = 0;
-    _ = linux.unlink(@ptrCast(&daemon_path));
-
-    const test_path = "/tmp/glu/test.sock";
-    var test_path_buf: [test_path.len + 1]u8 = undefined;
-    @memcpy(test_path_buf[0..test_path.len], test_path);
-    test_path_buf[test_path.len] = 0;
-    _ = linux.unlink(@ptrCast(&test_path_buf));
-
-    const pid = c.fork();
-    if (pid == 0) {
-        // --- child: daemon server ---
-        var child_io: IO.IO = IO.IO.init(64, 0) catch linux.exit_group(1);
-        defer child_io.deinit();
-
-        var server = Server.init(&child_io) catch linux.exit_group(1);
-        defer server.deinit();
-
-        server.listen(0) catch linux.exit_group(1);
-        linux.exit_group(0);
+fn send_request(io: *IO.IO, server: *Server, payload: []const u8) !void {
+    var fds: [2]posix.socket_t = undefined;
+    const rc = linux.socketpair(posix.AF.UNIX, posix.SOCK.STREAM, 0, &fds);
+    if (posix.errno(rc) != .SUCCESS) return error.SocketPairFailed;
+    defer {
+        _ = linux.close(fds[0]);
+        _ = linux.close(fds[1]);
     }
 
-    // --- parent: client ---
-    var client_io: IO.IO = try IO.IO.init(64, 0);
-    defer client_io.deinit();
+    var fut: IO.IO.Future = undefined;
+    try io.send(&fut, fds[1], payload);
+    _ = try io.wait(&fut, usize);
 
-    var client = try Client.init(&client_io, "/tmp/glu/test.sock");
-    defer client.deinit();
+    try server.handle_request(fds[0]);
+}
 
-    try client.connect(100);
+test "daemon handles PING and replies" {
+    var io: IO.IO = try IO.IO.init(64, 0);
+    defer io.deinit();
 
-    const ping: protocol.CMD = .PING;
-    var send_fut: IO.IO.Future = undefined;
-    try client.send(&send_fut, std.mem.asBytes(&ping));
-    _ = try client_io.wait(&send_fut, usize);
+    var server = try Server.init(&io, std.testing.allocator);
+    defer server.deinit();
 
-    var recv_fut: IO.IO.Future = undefined;
-    var buf: [1024]u8 = undefined;
-    try client.recv(&recv_fut, &buf);
-    const len = try client_io.wait(&recv_fut, usize);
+    const name = "shm_chan";
 
-    try std.testing.expect(len == 0);
+    var reg: protocol.SHM_CHAN = std.mem.zeroes(protocol.SHM_CHAN);
+    @memcpy(reg.name[0..name.len], name);
+    reg.name_len = @intCast(name.len);
+    reg.writer_pid = 42;
+    reg.msg_size = 2048;
+    reg.capacity = 16;
 
-    var status: c_int = undefined;
-    _ = c.waitpid(pid, &status, 0);
+    const payload = cmd_buffer(.REG_SHM, reg);
+    try send_request(&io, &server, &payload);
+
+    const entry = server.inventory.alive_shm.get(name) orelse return error.NotRegistered;
+    try std.testing.expectEqual(@as(u32, 2048), entry.msg_size);
+    try std.testing.expectEqual(@as(u32, 16), entry.capacity);
+
+    var unreg: protocol.SHM_NAME = std.mem.zeroes(protocol.SHM_NAME);
+    @memcpy(unreg[0..name.len], name);
+    const unreg_payload = cmd_buffer(.UNREG_SHM, unreg);
+    try send_request(&io, &server, &unreg_payload);
+
+    try std.testing.expect(server.inventory.alive_shm.get(name) == null);
+    try std.testing.expect(server.inventory.dead_shm.get(name) != null);
+}
+
+test "daemon handles REG_SHM and UNREG_SHM" {
+    var io: IO.IO = try IO.IO.init(64, 0);
+    defer io.deinit();
+
+    var server = try Server.init(&io, std.testing.allocator);
+    defer server.deinit();
+
+    const name = "shm_chan";
+
+    var reg: protocol.SHM_CHAN = std.mem.zeroes(protocol.SHM_CHAN);
+    @memcpy(reg.name[0..name.len], name);
+    reg.name_len = @intCast(name.len);
+    reg.writer_pid = 42;
+    reg.msg_size = 2048;
+    reg.capacity = 16;
+
+    const payload = cmd_buffer(.REG_SHM, reg);
+    try send_request(&io, &server, &payload);
+
+    const entry = server.inventory.alive_shm.get(name) orelse return error.NotRegistered;
+    try std.testing.expectEqual(@as(u32, 2048), entry.msg_size);
+    try std.testing.expectEqual(@as(u32, 16), entry.capacity);
+
+    var unreg: protocol.SHM_NAME = std.mem.zeroes(protocol.SHM_NAME);
+    @memcpy(unreg[0..name.len], name);
+    const unreg_payload = cmd_buffer(.UNREG_SHM, unreg);
+    try send_request(&io, &server, &unreg_payload);
+
+    try std.testing.expect(server.inventory.alive_shm.get(name) == null);
+    try std.testing.expect(server.inventory.dead_shm.get(name) != null);
+}
+
+test "daemon handles REG_NET and UNREG_NET" {
+    var io: IO.IO = try IO.IO.init(64, 0);
+    defer io.deinit();
+
+    var server = try Server.init(&io, std.testing.allocator);
+    defer server.deinit();
+
+    const name = "net_chan";
+
+    var reg: protocol.NET_CHAN = std.mem.zeroes(protocol.NET_CHAN);
+    @memcpy(reg.name[0..name.len], name);
+    reg.name_len = @intCast(name.len);
+    reg.msg_size = 512;
+    reg.capacity = 4;
+    reg.num_reg = 1;
+    reg.port = 49152;
+
+    const payload = cmd_buffer(.REG_NET, reg);
+    try send_request(&io, &server, &payload);
+
+    const entry = server.inventory.alive_net.get(name) orelse return error.NotRegistered;
+    try std.testing.expectEqual(@as(u32, 512), entry.msg_size);
+    try std.testing.expectEqual(@as(u16, 49152), entry.port);
+
+    var unreg: protocol.NET_NAME = std.mem.zeroes(protocol.NET_NAME);
+    @memcpy(unreg[0..name.len], name);
+    const unreg_payload = cmd_buffer(.UNREG_NET, unreg);
+    try send_request(&io, &server, &unreg_payload);
+
+    try std.testing.expect(server.inventory.alive_net.get(name) == null);
+    try std.testing.expect(server.inventory.dead_net.get(name) != null);
+}
+
+test "daemon handles START_NODE, STOP_NODE and RESTART_NODE" {
+    var io: IO.IO = try IO.IO.init(64, 0);
+    defer io.deinit();
+
+    var server = try Server.init(&io, std.testing.allocator);
+    defer server.deinit();
+
+    const name = "node_alpha";
+
+    const node = protocol.Node{
+        .name = name,
+        .path = "",
+        .bin = "/bin/true",
+        .extra_cfg = .{""} ** constants.MAX_ARGS,
+        .pid = null,
+        .uptime = null,
+    };
+    const start_payload = cmd_buffer(.START_NODE, node);
+    try send_request(&io, &server, &start_payload);
+
+    const entry = server.inventory.alive_nodes.get(name) orelse return error.NotStarted;
+    try std.testing.expect(entry.pid != null);
+
+    var stop_name: protocol.NODE_NAME = std.mem.zeroes(protocol.NODE_NAME);
+    @memcpy(stop_name[0..name.len], name);
+    const stop_payload = cmd_buffer(.STOP_NODE, stop_name);
+    try send_request(&io, &server, &stop_payload);
+
+    try std.testing.expect(server.inventory.alive_nodes.get(name) == null);
+    try std.testing.expect(server.inventory.dead_nodes.get(name) != null);
+
+    const restart_payload = cmd_buffer(.RESTART_NODE, stop_name);
+    try send_request(&io, &server, &restart_payload);
+
+    const restarted = server.inventory.alive_nodes.get(name) orelse return error.NotRestarted;
+    try std.testing.expect(restarted.pid != null);
 }
