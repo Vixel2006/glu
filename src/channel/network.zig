@@ -34,8 +34,6 @@ fn set_nonblocking(fd: i32) void {
     _ = linux.fcntl(fd, linux.F.SETFL, flags | nonblock);
 }
 
-/// Best-effort daemon notification. Uses the caller's event loop for the
-/// short register/unregister exchange; a no-op when the daemon is not running.
 fn notify_daemon(io: *IO, comptime cmd: protocol.CMD, payload: []const u8) void {
     if (!Client.daemon_running()) return;
     Client.notify(io, cmd, payload) catch |err| {
