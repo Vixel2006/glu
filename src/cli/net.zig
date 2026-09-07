@@ -1,14 +1,13 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 const parser = @import("parser.zig");
-const discovery = @import("../discovery/mod.zig");
 const debug = @import("../debug/mod.zig");
 const constants = @import("../constants.zig");
 const FRAG_PAYLOAD = @import("../channel/network.zig").FRAG_PAYLOAD;
 const HEADER_SIZE = @import("../channel/network.zig").HEADER_SIZE;
-const dispatch = @import("dispatch.zig");
-const daemon_client = @import("../daemon/client.zig");
 const protocol = @import("../daemon/protocol.zig");
+const daemon_client = @import("../daemon/client.zig");
+const IO = @import("../io.zig").IO;
 
 /// List active network channels (`glu net list`).
 pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
@@ -16,10 +15,12 @@ pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
     var fw = utils.writer(init);
     const w = &fw.interface;
 
-    var client = try dispatch.get_client(init);
+    var io = try IO.init(32, 0);
+    defer io.deinit();
+    var client = try daemon_client.Client.ensure_running(&io);
     defer client.deinit();
 
-    var entry_buf: [128]protocol.WireNetChannel = undefined;
+    var entry_buf: [constants.MAX_ENTRIES]protocol.NET_CHAN = undefined;
     const count = client.list_net(&entry_buf) catch |err| {
         try w.print("error: cannot read network channels: {}\n", .{err});
         return;
@@ -58,12 +59,14 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
 
     const port = @as(u16, @intCast(constants.PORT_BASE + @as(u32, @intCast(std.hash.Fnv1a_64.hash(name) % constants.PORT_SLOTS))));
 
-    var client = try dispatch.get_client(init);
+    var io = try IO.init(32, 0);
+    defer io.deinit();
+    var client = try daemon_client.Client.ensure_running(&io);
     defer client.deinit();
 
-    var entry_buf: [128]protocol.WireNetChannel = undefined;
+    var entry_buf: [constants.MAX_ENTRIES]protocol.NET_CHAN = undefined;
     const count = client.list_net(&entry_buf) catch 0;
-    var matched: ?protocol.WireNetChannel = null;
+    var matched: ?protocol.NET_CHAN = null;
     for (entry_buf[0..count]) |e| {
         if (std.mem.eql(u8, e.name[0..e.name_len], name)) {
             matched = e;

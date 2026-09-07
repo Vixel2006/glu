@@ -41,7 +41,7 @@ fn notify_daemon(io: *IO, comptime cmd: protocol.CMD, payload: []const u8) void 
     };
 }
 
-fn register_net_channel(io: *IO, name: []const u8, msg_size: u32, capacity: u32, port: u16) void {
+fn register_net_channel(io: *IO, name: []const u8, msg_size: u32, capacity: u32, port: u16, tos: ToS) void {
     var req: protocol.NET_CHAN = std.mem.zeroes(protocol.NET_CHAN);
     const name_len = @min(name.len, 64);
     @memcpy(req.name[0..name_len], name[0..name_len]);
@@ -50,6 +50,8 @@ fn register_net_channel(io: *IO, name: []const u8, msg_size: u32, capacity: u32,
     req.capacity = capacity;
     req.num_reg = 1;
     req.port = port;
+    req.owner_pid = @intCast(std.os.linux.getpid());
+    req.tos = @intFromEnum(tos);
     notify_daemon(io, .REG_NET, std.mem.asBytes(&req));
 }
 
@@ -114,7 +116,7 @@ pub const Session = struct {
         @memcpy(self.name[0..name.len], name);
 
         // Register the channel with the daemon for discovery/registry.
-        register_net_channel(io, self.name[0..self.name_len], msg_size, capacity, port);
+        register_net_channel(io, self.name[0..self.name_len], msg_size, capacity, port, tos);
 
         return self;
     }

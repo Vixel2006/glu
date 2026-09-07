@@ -2,7 +2,6 @@ const std = @import("std");
 const assert = std.debug.assert;
 const posix = std.posix;
 const linux = std.os.linux;
-const log = std.log;
 
 const IO = @import("../io.zig");
 const constants = @import("../constants.zig");
@@ -10,10 +9,16 @@ const protocol = @import("protocol.zig");
 
 /// How many connect attempts a best-effort daemon notification makes before
 /// giving up. Each failed attempt costs roughly a millisecond.
-const NOTIFY_ATTEMPTS: u32 = 3;
+const CONNECT_ATTEMPTS: u32 = 3;
 
-/// Size of the largest request payload (`protocol.SHM_CHAN`).
-const MAX_REQUEST = @sizeOf(protocol.SHM_CHAN);
+/// Size of the largest request payload (`protocol.Node`).
+const MAX_REQUEST = @sizeOf(protocol.Node);
+
+pub const ClientErr = error{
+    DaemonNotRunning,
+    ConnectionFailed,
+    ConnectionClosed,
+};
 
 pub const Client = struct {
     io: *IO.IO,
@@ -71,12 +76,32 @@ pub const Client = struct {
         return std.c.access(constants.DAEMON_SOCK.ptr, std.c.F_OK) == 0;
     }
 
+    pub fn ensure_running(io: *IO.IO) ClientErr!Client {
+        if (!daemon_running()) return error.ConnectionFailed;
+
+        var client = Client.init(io) catch return error.ConnectionFailed;
+        errdefer client.deinit();
+        client.connect(CONNECT_ATTEMPTS) catch return error.ConnectionFailed;
+        return client;
+    }
+
     pub fn notify(io: *IO.IO, comptime cmd: protocol.CMD, payload: []const u8) !void {
         if (!daemon_running()) return;
         var client = try Client.init(io);
         defer client.deinit();
-        client.connect(NOTIFY_ATTEMPTS) catch return;
+        client.connect(CONNECT_ATTEMPTS) catch return;
         try client.request(cmd, payload);
+    }
+
+    fn recv_full(self: *Client, dest: []u8) !void {
+        var off: usize = 0;
+        while (off < dest.len) {
+            var fut: IO.IO.Future = undefined;
+            try self.io.recv(&fut, self.socket, dest[off..]);
+            const n = try self.io.wait(&fut, usize);
+            if (n == 0) return error.ConnectionClosed;
+            off += n;
+        }
     }
 
     pub fn request(self: *Client, comptime cmd: protocol.CMD, payload: []const u8) !void {
@@ -90,8 +115,62 @@ pub const Client = struct {
         _ = try self.io.wait(&fut, usize);
     }
 
+    pub fn exchange(self: *Client, comptime cmd: protocol.CMD, req: []const u8, resp: []u8) !usize {
+        try self.request(cmd, req);
+
+        var hdr: [4]u8 = undefined;
+        try self.recv_full(&hdr);
+        const len = std.mem.bytesAsValue(u32, &hdr).*;
+        const take = @min(@as(usize, len), resp.len);
+        if (take > 0) try self.recv_full(resp[0..take]);
+        return take;
+    }
+
     pub fn ping(self: *Client) !void {
-        try self.request(.PING, "");
+        _ = try self.exchange(.PING, "", &.{});
+    }
+
+    fn action(self: *Client, comptime cmd: protocol.CMD, name: []const u8) !bool {
+        var name_buf: protocol.NODE_NAME = std.mem.zeroes(protocol.NODE_NAME);
+        const len = @min(name.len, name_buf.len);
+        @memcpy(name_buf[0..len], name[0..len]);
+        var resp: [1]u8 = undefined;
+        const n = try self.exchange(cmd, &name_buf, &resp);
+        return n == 1 and resp[0] != 0;
+    }
+
+    pub fn start_node(self: *Client, name: []const u8) !bool {
+        return self.action(.START_NODE, name);
+    }
+
+    pub fn stop_node(self: *Client, name: []const u8) !bool {
+        return self.action(.STOP_NODE, name);
+    }
+
+    pub fn restart_node(self: *Client, name: []const u8) !bool {
+        return self.action(.RESTART_NODE, name);
+    }
+
+    pub fn launch(self: *Client, nodes: []const protocol.Node) !void {
+        for (nodes) |*n| {
+            var resp: [1]u8 = undefined;
+            _ = try self.exchange(.SPAWN_NODE, std.mem.asBytes(n), &resp);
+        }
+    }
+
+    pub fn list_nodes(self: *Client, out: []protocol.Node) !usize {
+        const n = try self.exchange(.LIST_NODES, "", std.mem.sliceAsBytes(out));
+        return n / @sizeOf(protocol.Node);
+    }
+
+    pub fn list_topics(self: *Client, out: []protocol.SHM_CHAN) !usize {
+        const n = try self.exchange(.LIST_TOPICS, "", std.mem.sliceAsBytes(out));
+        return n / @sizeOf(protocol.SHM_CHAN);
+    }
+
+    pub fn list_net(self: *Client, out: []protocol.NET_CHAN) !usize {
+        const n = try self.exchange(.LIST_NET, "", std.mem.sliceAsBytes(out));
+        return n / @sizeOf(protocol.NET_CHAN);
     }
 
     pub fn register_shm(self: *Client, req: *const protocol.SHM_CHAN) !void {

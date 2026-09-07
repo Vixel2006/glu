@@ -3,9 +3,11 @@ const utils = @import("../utils.zig");
 const parser = @import("../parser.zig");
 const slowest_reader = @import("../../channel/shm.zig").slowest_reader;
 const Header = @import("../../channel/shm.zig").Header;
-const dispatch = @import("../dispatch.zig");
-const daemon_client = @import("../../daemon/client.zig");
+const Shm = @import("../../channel/shm.zig").Shm;
+const constants = @import("../../constants.zig");
 const protocol = @import("../../daemon/protocol.zig");
+const daemon_client = @import("../../daemon/client.zig");
+const IO = @import("../../io.zig").IO;
 
 /// Show detailed info about a topic (`glu topics info <topic>`).
 pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
@@ -18,37 +20,35 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
         return error.MissingArgument;
     };
 
-    // First check via daemon if topic exists
-    var client = try dispatch.get_client(init);
+    var io = try IO.init(32, 0);
+    defer io.deinit();
+    var client = try daemon_client.Client.ensure_running(&io);
     defer client.deinit();
 
-    var entry_buf: [128]protocol.WireShmTopic = undefined;
+    // Locate the topic and its geometry through the daemon, then attach
+    // directly to the shared segment for the live ring-buffer state.
+    var entry_buf: [constants.MAX_ENTRIES]protocol.SHM_CHAN = undefined;
     const count = client.list_topics(&entry_buf) catch |err| {
         try w.print("error: cannot list topics: {}\n", .{err});
         return;
     };
 
-    var found = false;
+    var geometry: ?protocol.SHM_CHAN = null;
     for (entry_buf[0..count]) |e| {
         if (std.mem.eql(u8, e.name[0..e.name_len], topic_name)) {
-            found = true;
+            geometry = e;
             break;
         }
     }
 
-    if (!found) {
+    if (geometry == null) {
         try w.print("error: topic '{s}' not found\n", .{topic_name});
         return;
     }
+    const g = geometry.?;
 
-    var t = discovery.Topic.open(topic_name) catch |err| {
-        const msg = switch (err) {
-            error.TopicNotFound => "not found",
-            error.InvalidTopic => "is not a valid glu topic",
-            error.MmapFailed => "mmap failed",
-            error.BadMagic => "is not a glu topic (bad magic)",
-        };
-        try w.print("error: topic '{s}' {s}\n", .{ topic_name, msg });
+    var t = Shm.open(topic_name, g.msg_size, g.capacity, @enumFromInt(g.tos)) catch |err| {
+        try w.print("error: cannot open topic '{s}': {s}\n", .{ topic_name, @errorName(err) });
         return;
     };
     defer t.close();
@@ -67,14 +67,14 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
     try w.print("Capacity:    {d} messages\n", .{hdr.capacity});
     try w.print("Data Size:   {d} bytes\n", .{data_size});
     try w.print("Header:      {d} bytes (v1)\n", .{@sizeOf(Header)});
-    try w.print("Total Size:  {d} bytes\n", .{t.file_size});
+    try w.print("Total Size:  {d} bytes\n", .{t.size});
     try w.print("Connections: {d}\n", .{hdr.conns});
     const write_pos = if (hdr.capacity > 0) hdr.write % hdr.capacity else 0;
     try w.print("Write Pos:   {d}\n", .{write_pos});
     try w.print("Queued:      {d} ({d:.1}% full)\n", .{ depth, pct });
     try w.print("Readers:\n", .{});
-    for (&hdr.readers, 0..) |entry, i| {
-        if (entry == 0) {
+    for (hdr.readers, 0..) |entry, i| {
+        if (entry >> 32 == 0) {
             try w.print("  [{d}] inactive\n", .{i});
         } else {
             const r: u32 = @truncate(entry);

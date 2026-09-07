@@ -134,7 +134,7 @@ pub fn connect(
         },
         .ip6 => return error.AddressFamilyNotSupported,
     };
-    try io.connect(future, socket, addr);
+    try io.connect(future, socket, .{ .inet = addr });
 }
 
 pub fn send(
