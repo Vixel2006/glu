@@ -2,10 +2,10 @@ const std = @import("std");
 const assert = std.debug.assert;
 const c = std.c;
 const Shm = @import("../channel/shm.zig").Shm;
+const is_alive = @import("../utils.zig").is_alive;
 const force_unlink = @import("../channel/shm.zig").force_unlink;
 const Header = @import("../channel/shm.zig").Header;
 const ToS = @import("../channel/shm.zig").ToS;
-const is_alive = @import("../registry.zig").is_alive;
 const slowest_reader = @import("../channel/shm.zig").slowest_reader;
 const sweep_dead_readers = @import("../channel/shm.zig").sweep_dead_readers;
 

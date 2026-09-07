@@ -553,7 +553,7 @@ pub export fn glu_udp_bind(
         setError("glu_udp_bind", e);
         return null;
     };
-    io.bind(socket, addr) catch |e| {
+    io.bind(socket, .{ .inet = addr }) catch |e| {
         _ = c.close(socket);
         dropIo(alloc, io);
         setError("glu_udp_bind", e);
@@ -737,5 +737,4 @@ comptime {
     _ = @import("api/peer.zig");
     _ = @import("channel/shm.zig");
     _ = @import("channel/network.zig");
-    _ = @import("registry.zig");
 }

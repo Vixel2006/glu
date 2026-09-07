@@ -4,13 +4,14 @@ const assert = std.debug.assert;
 const posix = std.posix;
 const linux = std.os.linux;
 
-const hash = @import("../hash.zig");
 const udp = @import("../transport/udp.zig");
 const IO = @import("../io.zig").IO;
+const ConnectAddress = @import("../io.zig").ConnectAddress;
 const time = @import("../time.zig");
 const ToS = @import("shm.zig").ToS;
 const constants = @import("../constants.zig");
-const discovery = @import("../discovery/mod.zig");
+const Client = @import("../daemon/client.zig").Client;
+const protocol = @import("../daemon/protocol.zig");
 
 /// Fixed-size header at the start of every datagram. A data frame is the
 /// header followed by the message payload
@@ -31,6 +32,34 @@ fn set_nonblocking(fd: i32) void {
     const flags = linux.fcntl(fd, linux.F.GETFL, 0);
     const nonblock = @as(u32, @bitCast(linux.O{ .NONBLOCK = true }));
     _ = linux.fcntl(fd, linux.F.SETFL, flags | nonblock);
+}
+
+fn notify_daemon(io: *IO, comptime cmd: protocol.CMD, payload: []const u8) void {
+    if (!Client.daemon_running()) return;
+    Client.notify(io, cmd, payload) catch |err| {
+        std.log.err("net daemon notify: {s}", .{@errorName(err)});
+    };
+}
+
+fn register_net_channel(io: *IO, name: []const u8, msg_size: u32, capacity: u32, port: u16, tos: ToS) void {
+    var req: protocol.NET_CHAN = std.mem.zeroes(protocol.NET_CHAN);
+    const name_len = @min(name.len, 64);
+    @memcpy(req.name[0..name_len], name[0..name_len]);
+    req.name_len = @intCast(name_len);
+    req.msg_size = msg_size;
+    req.capacity = capacity;
+    req.num_reg = 1;
+    req.port = port;
+    req.owner_pid = @intCast(std.os.linux.getpid());
+    req.tos = @intFromEnum(tos);
+    notify_daemon(io, .REG_NET, std.mem.asBytes(&req));
+}
+
+fn unregister_net_channel(io: *IO, name: []const u8) void {
+    var unreg: protocol.NET_NAME = std.mem.zeroes(protocol.NET_NAME);
+    const name_len = @min(name.len, 64);
+    @memcpy(unreg[0..name_len], name[0..name_len]);
+    notify_daemon(io, .UNREG_NET, std.mem.asBytes(&unreg));
 }
 
 pub const Session = struct {
@@ -63,7 +92,7 @@ pub const Session = struct {
         assert(capacity <= constants.NET_CAP_MAX);
         assert(name.len > 0 and name.len <= constants.MAX_NAME_LEN);
 
-        const port = @as(u16, @intCast(constants.PORT_BASE + hash.fvn1a(name, constants.PORT_SLOTS)));
+        const port = @as(u16, @intCast(constants.PORT_BASE + @as(u32, @intCast(std.hash.Fnv1a_64.hash(name) % constants.PORT_SLOTS))));
         var socket = try udp.bind(io, .{ .host = constants.MULTICAST_HOST, .port = port }, .{ .reuse_addr = true });
         errdefer udp.close(&socket);
 
@@ -73,10 +102,6 @@ pub const Session = struct {
         // NOTE: Remove the multicast loop in production so the sender doesn't recieve its messages back
         // we leave the multicast loop enabled in debug mode for unit testing
         if (comptime builtin.mode != .Debug) udp.set_multicast_loop(socket, false);
-
-        discovery.register_net_channel(name, @intCast(linux.getpid()), port, msg_size, capacity, @intFromEnum(tos)) catch |err| {
-            std.log.warn("failed to register net channel '{s}': {}", .{ name, err });
-        };
 
         var self: Session = .{
             .io = io,
@@ -90,12 +115,16 @@ pub const Session = struct {
         };
         @memcpy(self.name[0..name.len], name);
 
+        // Register the channel with the daemon for discovery/registry.
+        register_net_channel(io, self.name[0..self.name_len], msg_size, capacity, port, tos);
+
         return self;
     }
 
     pub fn close(self: *Session) !void {
+        // Unregister the channel in the daemon for discovery/registry.
+        unregister_net_channel(self.io, self.name[0..self.name_len]);
         udp.leave_multicast(self.socket, constants.MULTICAST_HOST);
-        discovery.unregister_net_channel(std.mem.sliceTo(&self.name, 0));
     }
 
     pub const deinit = close;
@@ -104,11 +133,11 @@ pub const Session = struct {
         defer self.seq += 1;
 
         const parsed = try std.Io.net.IpAddress.parseIp4(constants.MULTICAST_HOST, self.port);
-        const addr: posix.sockaddr.in = .{
+        const addr = ConnectAddress{ .inet = .{
             .addr = @bitCast(parsed.ip4.bytes),
             .port = @byteSwap(parsed.ip4.port),
             .family = std.c.AF.INET,
-        };
+        } };
 
         assert(data.len > 0);
         const n = @divFloor(data.len + FRAG_PAYLOAD - 1, FRAG_PAYLOAD);
@@ -211,7 +240,7 @@ test "open and close a network channel" {
     var net = try Session.open(&io, "test_channel", 1024, 8, .best_effort);
     defer net.close() catch {};
 
-    try std.testing.expectEqual(constants.PORT_BASE + hash.fvn1a("test_channel", constants.PORT_SLOTS), @as(u32, net.port));
+    try std.testing.expectEqual(constants.PORT_BASE + @as(u32, @intCast(std.hash.Fnv1a_64.hash("test_channel") % constants.PORT_SLOTS)), @as(u32, net.port));
     try std.testing.expectEqual(@as(u32, 1024), net.msg_size);
     try std.testing.expectEqual(@as(u32, 8), net.cap);
     try std.testing.expectEqual(@as(u32, "test_channel".len), net.name_len);
