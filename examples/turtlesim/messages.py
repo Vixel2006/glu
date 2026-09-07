@@ -1,5 +1,7 @@
 from dataclasses import dataclass
+
 import glupy
+
 
 @dataclass
 class Pose:
@@ -8,6 +10,7 @@ class Pose:
     theta: glupy.f32
     linear_velocity: glupy.f32
     angular_velocity: glupy.f32
+
 
 @dataclass
 class CmdVel:
