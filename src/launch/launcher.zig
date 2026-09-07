@@ -2,7 +2,6 @@ const std = @import("std");
 const assert = std.debug.assert;
 const NodeConfig = @import("toml.zig").NodeConfig;
 const MAX_ARGS = @import("../constants.zig").MAX_ARGS;
-const Registry = @import("../registry.zig");
 
 const LaunchErr = error{
     FileSystem,
@@ -51,14 +50,6 @@ pub fn launch(io: std.Io, cfgs: []const NodeConfig, children: []LaunchedNode) La
             return LaunchErr.FileSystem;
         };
 
-        Registry.register_argv(cfg.name, argv) catch |err| {
-            std.log.warn("failed to persist argv for node '{s}': {}", .{ cfg.name, err });
-        };
-        if (child.id) |pid| {
-            Registry.register_pid(cfg.name, @intCast(pid)) catch |err| {
-                std.log.warn("failed to register pid {} for node '{s}': {}", .{ pid, cfg.name, err });
-            };
-        }
         children[launched] = .{ .name = cfg.name, .child = child };
         launched += 1;
     }
@@ -75,11 +66,6 @@ pub fn launch_detached(io: std.Io, cfgs: []const NodeConfig, logs_dir: []const u
     cwd.createDirPath(io, logs_dir) catch return LaunchErr.FileSystem;
 
     for (cfgs) |*cfg| blk: {
-        if (!Registry.valid_name(cfg.name)) {
-            std.log.err("launch_detached: node name '{s}' is not a valid identifier", .{cfg.name});
-            break :blk;
-        }
-
         var argv_buf: [4 + MAX_ARGS][]const u8 = undefined;
         const argv = build_argv(cfg, argv_buf[0..]);
 
@@ -102,15 +88,7 @@ pub fn launch_detached(io: std.Io, cfgs: []const NodeConfig, logs_dir: []const u
             fw.interface.print("error spawning '{s}': {s}\n", .{ cfg.name, @errorName(err) }) catch {};
             break :blk;
         };
-
-        Registry.register_argv(cfg.name, argv) catch |err| {
-            std.log.warn("failed to persist argv for node '{s}': {}", .{ cfg.name, err });
-        };
-        if (child.id) |pid| {
-            Registry.register_pid(cfg.name, @intCast(pid)) catch |err| {
-                std.log.warn("failed to register pid {} for node '{s}': {}", .{ pid, cfg.name, err });
-            };
-        }
+        _ = child;
     }
 }
 

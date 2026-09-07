@@ -74,14 +74,21 @@ Async I/O — TCP, UDP, file access, and timers — runs on a single `io_uring` 
 ## Install the CLI
 
 ```bash
-# Clone the repository and build the binary
+# Clone the repository and build the binaries
 zig build
 
-# Symlink into your local bin path
+# Symlink the CLI and daemon into your local bin path
 ln -sf "$(pwd)/zig-out/bin/glu" ~/.local/bin/glu
+ln -sf "$(pwd)/zig-out/bin/glud" ~/.local/bin/glud
 
 # Verify execution
 glu --help
+```
+
+The daemon (`glud`) starts automatically when needed. You can also start it manually:
+
+```bash
+glud &
 ```
 
 ---

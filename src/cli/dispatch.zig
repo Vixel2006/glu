@@ -27,10 +27,10 @@ const Leaf = struct {
 
 const leaves = [_]Leaf{
     .{ .path = "status", .usage = "glu status", .summary = "Overview of nodes and topics", .run = &status.cmd_status },
-    .{ .path = "launch", .usage = "glu launch -f <file.toml> [-d]", .summary = "Launch nodes from a TOML config file", .run = &launch.cmd_launch },
+    .{ .path = "launch", .usage = "glu launch -f <file.toml>", .summary = "Launch nodes from a TOML config file", .run = &launch.cmd_launch },
     .{ .path = "nodes list", .usage = "glu nodes list", .summary = "List registered nodes", .run = &nodes_list.cmd_list, .alias = "ps" },
     .{ .path = "nodes start", .usage = "glu nodes start <node> [node...]", .summary = "Start named nodes from their manifest", .run = &nodes_action.cmd_start, .alias = "start" },
-    .{ .path = "nodes stop", .usage = "glu nodes stop <node> [node...]", .summary = "Stop named nodes", .run = &nodes_down.cmd_stop, .alias = "stop" },
+    .{ .path = "nodes stop", .usage = "glu nodes stop <node> [node...]", .summary = "Stop named nodes", .run = &nodes_action.cmd_stop, .alias = "stop" },
     .{ .path = "nodes restart", .usage = "glu nodes restart <node> [node...]", .summary = "Restart named nodes", .run = &nodes_action.cmd_restart, .alias = "restart" },
     .{ .path = "nodes logs", .usage = "glu nodes logs [--tail <n>] [--head <n>] [-f] <node>", .summary = "Print or follow a node's log", .run = &nodes_logs.cmd_logs, .alias = "logs" },
     .{ .path = "nodes down", .usage = "glu nodes down [node...]", .summary = "Stop all nodes, or the named ones", .run = &nodes_down.cmd_down, .alias = "down" },
