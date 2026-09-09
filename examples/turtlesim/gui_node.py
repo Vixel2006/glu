@@ -16,6 +16,7 @@ from messages import CmdVel, Pose
 class TurtlesimGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
+        self.sig = glupy.Signal()
         root.title("glu Turtlesim")
         root.geometry("540x600")
         root.configure(bg="#1e1e2e")
@@ -89,6 +90,10 @@ class TurtlesimGUI:
         self.send_cmd()
 
     def update_loop(self):
+        if not self.sig.running():
+            self.root.quit()
+            return
+
         pose = None
         while p := self.sub.peek_as(Pose):
             pose = p

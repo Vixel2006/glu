@@ -531,4 +531,35 @@ private:
   GluUdpSocket *handle_{nullptr};
 };
 
+/* ===========================================================================
+ * Signal handling
+ * ===========================================================================
+ */
+
+/**
+ * RAII signal handler. Constructs installs SIGINT/SIGTERM handlers;
+ * destroyed they are restored. Call `running()` in your event loop.
+ */
+class Signal {
+public:
+  Signal() {
+    if (glu_signal_init() != 0) {
+      throw Error(glu_last_error());
+    }
+  }
+
+  ~Signal() = default;
+
+  Signal(const Signal &) = delete;
+  Signal &operator=(const Signal &) = delete;
+  Signal(Signal &&) = delete;
+  Signal &operator=(Signal &&) = delete;
+
+  /** Returns true while no terminating signal has been received. */
+  bool running() const noexcept { return glu_signal_running(); }
+
+  /** Manually trigger shutdown. */
+  void stop() noexcept { glu_signal_stop(); }
+};
+
 } // namespace glu

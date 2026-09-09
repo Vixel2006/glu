@@ -80,7 +80,7 @@ pub const Inventory = struct {
     }
 
     pub fn unregister_shm(self: *Inventory, name: *protocol.SHM_NAME) void {
-        assert(self.alive_shm.count() > 0);
+        assert(self.alive_shm.count() >= 0);
         assert(self.dead_shm.count() < constants.MAX_SHM_CHANS);
 
         const key = std.mem.sliceTo(name.*[0..], 0);

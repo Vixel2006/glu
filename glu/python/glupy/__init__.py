@@ -24,6 +24,7 @@ from .codec import (
 from .errors import GluClosedError, GluError, GluLoadError, GluTimeoutError
 from .peer import Peer
 from .pubsub import Publisher, Subscriber, shm_unlink
+from .signal import Signal
 from .tcp import TcpConfig, TcpServer, TcpStream, apply_tcp_socket_opts
 from .types import Endpoint, Tos, UdpSocketConfig
 from .udp import UdpSocket
@@ -39,6 +40,7 @@ __all__ = [
     "Peer",
     # Shared-memory pub/sub
     "Publisher",
+    "Signal",
     "Subscriber",
     # Transports
     "TcpConfig",

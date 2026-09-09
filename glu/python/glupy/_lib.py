@@ -1,6 +1,7 @@
-import contextlib
+import atexit
 import ctypes
 import os
+import weakref
 from pathlib import Path
 from typing import Any, NoReturn, Optional, Tuple, Type, Union
 
@@ -8,12 +9,29 @@ from .errors import GluClosedError, GluError, GluLoadError
 from .types import GluEndpoint, GluTcpConfig, GluUdpSocketConfig
 
 _LIB: Optional[ctypes.CDLL] = None
+_open_handles: weakref.WeakSet["_Handle"] = weakref.WeakSet()
+
+
+def _cleanup_handles() -> None:
+    for handle in list(_open_handles):
+        try:  # noqa: SIM105  (contextlib may be unloaded during shutdown)
+            handle.close()
+        except Exception:
+            pass
+
+
+atexit.register(_cleanup_handles)
 
 
 class _Handle:
     _handle: Optional[int] = None
     _close_fn: Any = None
     _name: str = ""
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> "_Handle":
+        instance = super().__new__(cls)
+        _open_handles.add(instance)
+        return instance
 
     def _ensure_open(self) -> None:
         if not getattr(self, "_handle", None):
@@ -24,6 +42,7 @@ class _Handle:
             if self._close_fn:
                 self._close_fn(self._handle)
             self._handle = None
+            _open_handles.discard(self)
 
     def __enter__(self) -> Any:
         return self
@@ -32,8 +51,10 @@ class _Handle:
         self.close()
 
     def __del__(self) -> None:
-        with contextlib.suppress(Exception):
+        try:  # noqa: SIM105  (contextlib may be unloaded during shutdown)
             self.close()
+        except Exception:
+            pass
 
 
 def _parse_msg_spec(msg_size_or_type: Union[int, Type[Any]]) -> Tuple[int, Optional[Type[Any]]]:
@@ -127,6 +148,9 @@ def _configure_prototypes(lib: ctypes.CDLL) -> None:
         "glu_udp_receive": ([vp, cp, sz, psz], ctypes.c_int),
         "glu_udp_join_multicast": ([vp, cp, u16, cp], None),
         "glu_udp_close": ([vp], None),
+        "glu_signal_init": ([], ctypes.c_int),
+        "glu_signal_running": ([], ctypes.c_bool),
+        "glu_signal_stop": ([], None),
     }
     for name, (argtypes, restype) in funcs.items():
         fn = getattr(lib, name)

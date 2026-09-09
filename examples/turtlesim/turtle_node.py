@@ -14,6 +14,7 @@ from messages import CmdVel, Pose
 
 
 def main():
+    sig = glupy.Signal()
     sub = glupy.Subscriber("/turtle1/cmd_vel", CmdVel)
     pub = glupy.Publisher("/turtle1/pose", Pose)
 
@@ -22,7 +23,7 @@ def main():
     last = time.monotonic()
 
     print("🐢 Sim node running...")
-    while True:
+    while sig.running():
         now = time.monotonic()
         dt = now - last
         last = now

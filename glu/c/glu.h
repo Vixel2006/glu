@@ -232,6 +232,21 @@ void glu_udp_close(GluUdpSocket *sock);
 void glu_shm_unlink(const char *name);
 
 /* ===========================================================================
+ * Signal handling
+ * ===========================================================================
+ */
+
+/** Install SIGINT / SIGTERM handlers. Call once at startup.
+ *  Returns 0 on success. */
+int glu_signal_init(void);
+
+/** Returns true (non-zero) while no terminating signal has been received. */
+bool glu_signal_running(void);
+
+/** Manually trigger shutdown (sets the running flag to false). */
+void glu_signal_stop(void);
+
+/* ===========================================================================
  * Default configuration helpers (usable from both C and C++)
  * ===========================================================================
  */

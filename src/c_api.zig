@@ -7,6 +7,7 @@ const std_heap = std.heap.c_allocator;
 const IO = @import("io.zig").IO;
 const shm = @import("channel/shm.zig");
 const ToS = shm.ToS;
+const Glu = @import("glu.zig").Glu;
 const Publisher = @import("api/publisher.zig").Publisher;
 const Subscriber = @import("api/subscriber.zig").Subscriber;
 const Peer = @import("api/peer.zig").Peer;
@@ -166,6 +167,25 @@ fn newIo(alloc: std.mem.Allocator) !*IO {
 fn dropIo(alloc: std.mem.Allocator, io: *IO) void {
     io.deinit();
     alloc.destroy(io);
+}
+
+// ===========================================================================
+// Glu Signal Handler (src/glu.zig)
+// ===========================================================================
+
+pub export fn glu_signal_init() c_int {
+    _ = Glu.init();
+    clearError();
+    return 0;
+}
+
+pub export fn glu_signal_running() bool {
+    return Glu.running();
+}
+
+pub export fn glu_signal_stop() void {
+    Glu.stop();
+    clearError();
 }
 
 // ===========================================================================
