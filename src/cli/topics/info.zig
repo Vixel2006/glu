@@ -61,14 +61,14 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
     const pct = if (hdr.capacity > 0) @as(f64, @floatFromInt(depth)) / @as(f64, @floatFromInt(hdr.capacity)) * 100.0 else 0.0;
 
     try w.print("Topic:       {s}\n", .{name_slice});
-    try w.print("Owner:       {d}\n", .{hdr.owner_pid});
+    try w.print("Owner:       {d}\n", .{hdr.writer_pid});
     try w.print("TOS:         {s}\n", .{if (hdr.tos == 0) "reliable" else "best_effort"});
     try w.print("Msg Size:    {d} bytes\n", .{hdr.msg_size});
     try w.print("Capacity:    {d} messages\n", .{hdr.capacity});
     try w.print("Data Size:   {d} bytes\n", .{data_size});
     try w.print("Header:      {d} bytes (v1)\n", .{@sizeOf(Header)});
     try w.print("Total Size:  {d} bytes\n", .{t.size});
-    try w.print("Connections: {d}\n", .{hdr.conns});
+    try w.print("Connections: {d}\n", .{hdr.conns - 1});
     const write_pos = if (hdr.capacity > 0) hdr.write % hdr.capacity else 0;
     try w.print("Write Pos:   {d}\n", .{write_pos});
     try w.print("Queued:      {d} ({d:.1}% full)\n", .{ depth, pct });
