@@ -125,6 +125,7 @@ pub const Session = struct {
         // Unregister the channel in the daemon for discovery/registry.
         unregister_net_channel(self.io, self.name[0..self.name_len]);
         udp.leave_multicast(self.socket, constants.MULTICAST_HOST);
+        udp.close(&self.socket);
     }
 
     pub const deinit = close;

@@ -32,22 +32,18 @@ pub const Publisher = struct {
         const writer_pid = self.channel.header.writer_pid;
         if (writer_pid != my_pid) {
             if (writer_pid != 0 and is_alive(writer_pid)) {
-                // The segment belongs to a live publisher; don't destroy it.
+                // The segment belongs to a live publisher; don't link it to this publisher
                 self.deinit();
                 return error.SegmentOwned;
             }
-            // The refcount can't tell a crashed publisher from a live one,
-            // so base staleness on owner liveness instead. Unlink the
-            // orphaned segment and recreate it fresh.
-            force_unlink(name);
-            self.deinit();
-            return Publisher{ .channel = try Shm.open(name, msg_size, capacity, tos) };
+            self.channel.header.writer_pid = my_pid;
         }
 
         return self;
     }
 
     pub fn deinit(self: *Publisher) void {
+        self.channel.header.writer_pid = 0;
         self.channel.close();
     }
 

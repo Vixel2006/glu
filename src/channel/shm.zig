@@ -163,6 +163,7 @@ pub const Shm = struct {
 
         if (!created) {
             _ = @atomicRmw(u32, &hdr.conns, .Add, 1, .acq_rel);
+            errdefer _ = @atomicRmw(u32, &hdr.conns, .Sub, 1, .acq_rel);
             // Reject anything that doesn't match, instead of reading garbage as a ring buffer.
             if (!validate_header(hdr, .{ .msg_size = msg_size, .capacity = capacity }, file_size))
                 return ShmErr.InvalidSegment;
@@ -189,10 +190,10 @@ pub const Shm = struct {
 
     pub fn close(self: *Shm) void {
         assert(self.fd != -1);
-        _ = @atomicRmw(u32, &self.header.conns, .Sub, 1, .acq_rel);
+        const conns = @atomicRmw(u32, &self.header.conns, .Sub, 1, .acq_rel);
 
         var name_buf: [256]u8 = undefined;
-        const name_z: ?[:0]u8 = if (@as(u32, @intCast(std.os.linux.getpid())) == self.header.writer_pid) blk: {
+        const name_z: ?[:0]u8 = if (conns == 1) blk: {
             // The header lives in shared memory and could have been tampered
             // with since open; clamp the length before slicing `name`.
             const name_len = @min(self.header.name_len, constants.MAX_NAME_LEN);
@@ -200,14 +201,14 @@ pub const Shm = struct {
             break :blk shm_name(&name_buf, name_slice) orelse null;
         } else null;
 
+        if (name_z != null) unregister_shm_channel(self.header);
+
         _ = os.munmap(self.ptr, self.size);
         _ = os.close(self.fd);
         self.fd = -1;
 
         if (name_z) |nz| {
             _ = c.shm_unlink(nz.ptr);
-
-            unregister_shm_channel(self.header);
         }
     }
 
