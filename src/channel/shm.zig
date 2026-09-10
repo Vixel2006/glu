@@ -73,7 +73,7 @@ fn register_shm_channel(hdr: *Header) void {
     const name_len = @min(hdr.name_len, 64);
     @memcpy(req.name[0..name_len], hdr.name[0..name_len]);
     req.name_len = @intCast(name_len);
-    req.writer_pid = @intCast(hdr.owner_pid);
+    req.writer_pid = @intCast(hdr.writer_pid);
     req.num_readers = 0;
     for (hdr.readers) |entry| {
         if (entry >> 32 != 0) req.num_readers += 1;
@@ -103,7 +103,7 @@ pub const Header = extern struct {
     name_len: u32,
     name: [64]u8,
     /// PID of the process that created this segment (0 = unknown/foreign).
-    owner_pid: u32,
+    writer_pid: u32,
     _pad2: u32,
     /// Per-subscriber entries: high 32 bits = owning subscriber PID
     /// (0 = unowned/inactive), low 32 bits = read cursor.
@@ -174,7 +174,7 @@ pub const Shm = struct {
                 .msg_size = msg_size,
                 .capacity = capacity,
                 .tos = @intFromEnum(tos),
-                .owner_pid = @as(u32, @intCast(std.os.linux.getpid())),
+                .writer_pid = 0,
                 .name_len = name_len,
             });
             @memcpy(hdr.name[0..name_len], name[0..name_len]);
@@ -189,10 +189,10 @@ pub const Shm = struct {
 
     pub fn close(self: *Shm) void {
         assert(self.fd != -1);
-        const prev = @atomicRmw(u32, &self.header.conns, .Sub, 1, .acq_rel);
+        _ = @atomicRmw(u32, &self.header.conns, .Sub, 1, .acq_rel);
 
         var name_buf: [256]u8 = undefined;
-        const name_z: ?[:0]u8 = if (prev == 1) blk: {
+        const name_z: ?[:0]u8 = if (@as(u32, @intCast(std.os.linux.getpid())) == self.header.writer_pid) blk: {
             // The header lives in shared memory and could have been tampered
             // with since open; clamp the length before slicing `name`.
             const name_len = @min(self.header.name_len, constants.MAX_NAME_LEN);
@@ -200,15 +200,15 @@ pub const Shm = struct {
             break :blk shm_name(&name_buf, name_slice) orelse null;
         } else null;
 
-        // Unregister the channel in the daemon for discovery/registry. This must
-        // run before the header is unmapped.
-        unregister_shm_channel(self.header);
-
         _ = os.munmap(self.ptr, self.size);
         _ = os.close(self.fd);
         self.fd = -1;
 
-        if (name_z) |nz| _ = c.shm_unlink(nz.ptr);
+        if (name_z) |nz| {
+            _ = c.shm_unlink(nz.ptr);
+
+            unregister_shm_channel(self.header);
+        }
     }
 
     pub const deinit = close;

@@ -69,7 +69,7 @@ pub const NET_CHAN = struct {
     capacity: u32,
     num_reg: u32,
     port: u16,
-    owner_pid: u32,
+    writer_pid: u32,
     tos: u32,
 };
 

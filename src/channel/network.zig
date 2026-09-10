@@ -50,7 +50,7 @@ fn register_net_channel(io: *IO, name: []const u8, msg_size: u32, capacity: u32,
     req.capacity = capacity;
     req.num_reg = 1;
     req.port = port;
-    req.owner_pid = @intCast(std.os.linux.getpid());
+    req.writer_pid = @intCast(std.os.linux.getpid());
     req.tos = @intFromEnum(tos);
     notify_daemon(io, .REG_NET, std.mem.asBytes(&req));
 }

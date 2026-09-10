@@ -20,7 +20,7 @@ pub const Subscriber = struct {
         var chan = try Shm.open(name, msg_size, capacity, .reliable);
 
         const pid: u32 = @intCast(std.os.linux.getpid());
-        _ = @cmpxchgStrong(u32, &chan.header.owner_pid, pid, 0, .acq_rel, .acquire);
+        // _ = @cmpxchgStrong(u32, &chan.header.writer_pid, pid, 0, .acq_rel, .acquire);
 
         const current_write = @atomicLoad(u32, &chan.header.write, .acquire);
 

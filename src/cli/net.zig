@@ -38,7 +38,7 @@ pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
         try w.print("{s:<24} {d:>6} {d:>8} {d:>8} {d:>6} {s:<11}\n", .{
             e.name[0..e.name_len],
             e.port,
-            e.owner_pid,
+            e.writer_pid,
             e.msg_size,
             e.capacity,
             if (e.tos == 0) "reliable" else "best_effort",
@@ -81,7 +81,7 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
     try w.print("Max Slots:   {d} fragments\n", .{constants.NET_CAP_MAX});
 
     if (matched) |e| {
-        try w.print("Owner PID:   {d}\n", .{e.owner_pid});
+        try w.print("Owner PID:   {d}\n", .{e.writer_pid});
         try w.print("Msg Size:    {d} bytes\n", .{e.msg_size});
         try w.print("Capacity:    {d} frames\n", .{e.capacity});
         try w.print("TOS:         {s}\n", .{if (e.tos == 0) "reliable" else "best_effort"});
