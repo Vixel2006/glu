@@ -268,7 +268,7 @@ test "daemon handles REG_NET and UNREG_NET" {
     reg.capacity = 4;
     reg.num_reg = 1;
     reg.port = 49152;
-    reg.owner_pid = 7;
+    reg.writer_pid = 7;
     reg.tos = 1;
 
     _ = try send_request(&io, &server, &cmd_buffer(.REG_NET, reg), null);
@@ -276,7 +276,7 @@ test "daemon handles REG_NET and UNREG_NET" {
     const entry = server.inventory.alive_net.get(name) orelse return error.NotRegistered;
     try std.testing.expectEqual(@as(u32, 512), entry.msg_size);
     try std.testing.expectEqual(@as(u16, 49152), entry.port);
-    try std.testing.expectEqual(@as(u32, 7), entry.owner_pid);
+    try std.testing.expectEqual(@as(u32, 7), entry.writer_pid);
     try std.testing.expectEqual(@as(u32, 1), entry.tos);
 
     var unreg: protocol.NET_NAME = std.mem.zeroes(protocol.NET_NAME);

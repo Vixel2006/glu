@@ -1,6 +1,6 @@
 # GLU Architecture & Internals
 
-If you have ever looked at a DDS (Data Distribution Service) specification, you've probably faced hundreds of pages detailing dynamic discovery protocols, XML schemas, and complex Quality of Service (QoS) negotiation. 
+If you have ever looked at a DDS (Data Distribution Service) specification, you've probably faced hundreds of pages detailing dynamic discovery protocols, XML schemas, and complex Quality of Service (QoS) negotiation.
 
 `glu` rejects that complexity. It is designed to be simple, fast, and deterministic. This document explains exactly how it works under the hood.
 
@@ -18,7 +18,7 @@ The shared memory layout looks like this:
 |  - magic (u32)        - write cursor (u32)            |
 |  - connections (u32)  - msg_size / capacity (u32)     |
 |  - tos (u32)          - name length & name (68B)      |
-|  - owner_pid (u32)    - reader entries (8 x u64)      |
+|  - writer_pid (u32)    - reader entries (8 x u64)      |
 |    (PID + cursor packed per subscriber)               |
 +-------------------------------------------------------+
 |                      Slot 0                           |
@@ -29,15 +29,17 @@ The shared memory layout looks like this:
 ```
 
 ### The `Header` Struct (168 Bytes)
+
 At the very beginning (offset 0) of the shared memory file sits a strictly laid-out `Header` structure:
-*   `magic`: `0x474C5500` (ASCII for `GLU\0`). Used to verify that the segment is a valid `glu` channel.
-*   `write`: The publisher's write cursor (monotonically increasing counter).
-*   `conns`: The active connection count. The last process to close the segment unlinks the file from `/dev/shm/`.
-*   `msg_size` & `capacity`: Setup options defined at topic creation.
-*   `tos`: Type of Service (0 = `.reliable`, 1 = `.best_effort`).
-*   `name`: The topic path name (up to 64 bytes). Pushed to align the reader entry array.
-*   `owner_pid`: The PID of the process that created the segment (used to scope stale-segment cleanup).
-*   `readers`: An array of 8 entries, each packing the owning subscriber's PID (high 32 bits) and read cursor (low 32 bits). A zero entry is an unclaimed slot; a subscriber claims one with a single atomic compare-and-swap.
+
+- `magic`: `0x474C5500` (ASCII for `GLU\0`). Used to verify that the segment is a valid `glu` channel.
+- `write`: The publisher's write cursor (monotonically increasing counter).
+- `conns`: The active connection count. The last process to close the segment unlinks the file from `/dev/shm/`.
+- `msg_size` & `capacity`: Setup options defined at topic creation.
+- `tos`: Type of Service (0 = `.reliable`, 1 = `.best_effort`).
+- `name`: The topic path name (up to 64 bytes). Pushed to align the reader entry array.
+- `writer_pid`: The PID of the process that created the segment (used to scope stale-segment cleanup).
+- `readers`: An array of 8 entries, each packing the owning subscriber's PID (high 32 bits) and read cursor (low 32 bits). A zero entry is an unclaimed slot; a subscriber claims one with a single atomic compare-and-swap.
 
 ---
 
@@ -46,6 +48,7 @@ At the very beginning (offset 0) of the shared memory file sits a strictly laid-
 `glu` avoids using kernel mutexes, semaphores, or condition variables. Inter-process coordination is handled purely via CPU atomic instructions with acquire/release semantics.
 
 ### Publishing a Message (Zero-Copy)
+
 1.  **Check Slots**: The publisher checks if writing the next message would overwrite unread data of any active subscriber (see "Slowest-Reader Backpressure").
 2.  **Resolve Slot**: The publisher determines the target memory slot using `Slot = write % capacity`.
 3.  **Retrieve Pointer**: The publisher returns the direct address of the slot to the user code. The user code populates it.
@@ -56,6 +59,7 @@ At the very beginning (offset 0) of the shared memory file sits a strictly laid-
     This ensures that the data write is fully completed and visible to other CPU cores before the cursor increments.
 
 ### Subscribing to a Message (Zero-Copy)
+
 1.  **Read Cursors**: The subscriber reads its own read cursor `r = read[id]` and the publisher's write cursor `w = write` using acquire semantics:
     ```zig
     const entry = @atomicLoad(u64, &self.channel.header.readers[self.id], .acquire);
@@ -79,25 +83,33 @@ What happens if a node publishing camera frames runs at 60Hz, but a heavy neural
 `glu` guarantees data integrity based on the `ToS` policy:
 
 ### Reliable Mode (`.reliable`)
+
 Before writing to a slot, the publisher checks if the write cursor is catching up to the slowest active reader:
+
 ```zig
 write_cursor - slowestReader(read_cursors) >= capacity
 ```
+
 If this condition is met, writing would overwrite unread data. The publisher enters a spin loop hint to yield CPU execution:
+
 ```zig
 while (write_cursor - slowest_reader >= capacity) {
     std.atomic.spinLoopHint();
 }
 ```
+
 This guarantees no data loss at the expense of slowing down the publisher.
 
 ### Best Effort Mode (`.best_effort`)
+
 The publisher does not check reader positions. It immediately overwrites old slots. This is optimal for high-frequency, loss-tolerant sensor data (like IMU readings or odometry).
 
 ### Dead Subscriber Mitigation
+
 To prevent a crashed or terminated subscriber from deadlocking the publisher forever:
-*   When a subscriber calls `deinit()`, it clears its reader entry to zero, removing it from the slowest-reader calculation entirely.
-*   On a `reliable` topic, the publisher's backpressure loop calls `sweep_dead_readers()` before spinning. Each reader entry packs its owning PID in the high 32 bits; `sweep_dead_readers` clears any entry whose PID is no longer alive (checked via `access` on `/proc/<pid>/status`). The clear uses a compare-and-swap against the observed value, so a slot reclaimed by a new subscriber in the meantime is never clobbered.
+
+- When a subscriber calls `deinit()`, it clears its reader entry to zero, removing it from the slowest-reader calculation entirely.
+- On a `reliable` topic, the publisher's backpressure loop calls `sweep_dead_readers()` before spinning. Each reader entry packs its owning PID in the high 32 bits; `sweep_dead_readers` clears any entry whose PID is no longer alive (checked via `access` on `/proc/<pid>/status`). The clear uses a compare-and-swap against the observed value, so a slot reclaimed by a new subscriber in the meantime is never clobbered.
 
 ---
 
@@ -123,10 +135,10 @@ Each `Fiber` carries a `Fiber.Context` capturing the minimum register set needed
 
 An event loop instance lives in thread-local storage (`tls_loop`): one loop per thread, created lazily with `asyncio.get_event_loop()` and observable via `asyncio.current()`. It keeps:
 
-*   an **FCFS run-queue** (`Queue(Fiber)`) of `READY` fibers,
-*   a **current fiber** pointer (null while the loop itself runs),
-*   its own saved context — the thread's execution state while fibers run,
-*   the allocator and default stack size (1 MiB) used when creating tasks.
+- an **FCFS run-queue** (`Queue(Fiber)`) of `READY` fibers,
+- a **current fiber** pointer (null while the loop itself runs),
+- its own saved context — the thread's execution state while fibers run,
+- the allocator and default stack size (1 MiB) used when creating tasks.
 
 `create_task` allocates a fresh stack and a `Fiber`, seeds the context to jump into a shared `fiber_boot` thunk, and enqueues the fiber as `READY`. Stacks and fiber structs are freed by the loop when the fiber is reaped.
 
