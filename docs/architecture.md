@@ -113,13 +113,32 @@ To prevent a crashed or terminated subscriber from deadlocking the publisher for
 
 ---
 
-## 4. File-Based Node Discovery
+## 4. Node Discovery & Orchestration
 
-Instead of heavy multicast discovery protocols that take seconds to resolve and pollute the local network, `glu` uses a super-fast, file-based node registry located under `/tmp/glu/nodes/`.
+Instead of heavy multicast discovery protocols that take seconds to resolve and pollute the local network, `glu` keeps a live inventory in the small `glud` companion daemon, exposed over a local Unix socket (`/tmp/glu/glud.sock`).
 
-1.  **Register**: When a node is created, it writes its PID to a file named `/tmp/glu/nodes/<node_name>.pid`.
-2.  **Verify Status**: To check if a node is running, `glu` reads the PID and performs a fast libc `access` check on `/proc/<pid>/status`. This check takes sub-microseconds and requires no network round-trips.
-3.  **Unregister**: When a node shuts down cleanly, it deletes its `.pid` file. If it crashes, the file remains, but the next health check identifies that the PID is inactive and ignores it.
+### The `glud` Daemon
+
+`glud` owns the process and channel inventory of a running system. It listens
+on `/tmp/glu/glud.sock` and is addressed by `glu launch`, `glu nodes ...`,
+`glu topics ...`, `glu net ...`, and `glu status`. Its `Inventory` tracks:
+
+- **Nodes** (alive/dead): every node `glu launch` spawns is `fork`/`exec`'d by
+  the daemon, its stdout/stderr redirected to `/tmp/glu/logs/<name>.log`, and
+  its PID plus `CLOCK.BOOTTIME` start stamp recorded. `SIGTERM` moves a node
+  to the dead set (so `glu nodes restart` can relaunch it).
+- **Shared-memory channels**: created channels self-register by sending a
+  `REG_SHM` request to the daemon when they open (best-effort; a channel works
+  standalone when the daemon isn't running).
+- **Network channels**: multicast/unicast sessions self-register the same way
+  with `REG_NET`.
+
+### Liveness Checks
+
+Node liveness comes from the daemon's PID tracking. For the dead-subscriber
+sweep (§3), `glu` performs a fast libc `access` check on `/proc/<pid>/status`.
+This takes sub-microseconds and requires no network round-trips — liveness is
+always decided locally, never by a network handshake.
 
 ---
 
