@@ -1,6 +1,6 @@
 const std = @import("std");
 const assert = std.debug.assert;
-const NodeConfig = @import("toml.zig").NodeConfig;
+const NodeConfig = @import("config.zig").NodeConfig;
 const MAX_ARGS = @import("../constants.zig").MAX_ARGS;
 
 const LaunchErr = error{
@@ -134,10 +134,7 @@ test "launch with extra arguments" {
     var path_buf: [256]u8 = undefined;
     const path = try std.fmt.bufPrint(&path_buf, ".zig-cache/tmp/{s}/args.zig", .{&dir.sub_path});
 
-    var cfg = NodeConfig{ .name = "args_test", .path = path };
-    cfg.extra_cfg[0] = "--fps";
-    cfg.extra_cfg[1] = "30";
-    cfg.extra_cfg_len = 2;
+    const cfg = NodeConfig{ .name = "args_test", .path = path, .extra_cfg = &.{ "--fps", "30" }, .extra_cfg_len = 2 };
     const cfgs = [_]NodeConfig{cfg};
 
     var children: [1]LaunchedNode = undefined;
@@ -171,12 +168,12 @@ test "launch_detached: creates log file with process output" {
     var logs_buf: [256]u8 = undefined;
     const logs_dir = try std.fmt.bufPrint(&logs_buf, ".zig-cache/tmp/{s}/logs_output", .{&dir.sub_path});
 
-    var cfgs = [_]NodeConfig{.{ .name = "echo_node", .bin = "/bin/echo" }};
-    const launch_cfgs = [_]NodeConfig{cfg: {
-        cfgs[0].extra_cfg[0] = "hello from detached";
-        cfgs[0].extra_cfg_len = 1;
-        break :cfg cfgs[0];
-    }};
+    const launch_cfgs = [_]NodeConfig{.{
+    .name = "echo_node",
+    .bin = "/bin/echo",
+    .extra_cfg = &.{"hello from detached"},
+    .extra_cfg_len = 1,
+}};
 
     try launch_detached(io, &launch_cfgs, logs_dir);
 
