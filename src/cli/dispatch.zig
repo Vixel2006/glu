@@ -27,7 +27,7 @@ const Leaf = struct {
 
 const leaves = [_]Leaf{
     .{ .path = "status", .usage = "glu status", .summary = "Overview of nodes and topics", .run = &status.cmd_status },
-    .{ .path = "launch", .usage = "glu launch -f <file.toml>", .summary = "Launch nodes from a TOML config file", .run = &launch.cmd_launch },
+    .{ .path = "launch", .usage = "glu launch -f <file.json>", .summary = "Launch nodes from a json config file", .run = &launch.cmd_launch },
     .{ .path = "nodes list", .usage = "glu nodes list", .summary = "List registered nodes", .run = &nodes_list.cmd_list, .alias = "ps" },
     .{ .path = "nodes start", .usage = "glu nodes start <node> [node...]", .summary = "Start named nodes from their manifest", .run = &nodes_action.cmd_start, .alias = "start" },
     .{ .path = "nodes stop", .usage = "glu nodes stop <node> [node...]", .summary = "Stop named nodes", .run = &nodes_action.cmd_stop, .alias = "stop" },
