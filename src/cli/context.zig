@@ -4,7 +4,7 @@ const posix = std.posix;
 pub const Format = enum { text, json };
 
 pub const Ctx = struct {
-    init: std.process.Init,
+    proc_init: std.process.Init,
     out: *std.Io.Writer,
     err: *std.Io.Writer,
     format: Format = .text,
@@ -12,9 +12,9 @@ pub const Ctx = struct {
     is_tty: bool = false,
     term_width: u16 = 80,
 
-    pub fn init(p: std.process.Init, out: *std.Io.Writer, err: *std.Io.Writer) Ctx {
+    pub fn init_ctx(p: std.process.Init, out: *std.Io.Writer, err: *std.Io.Writer) Ctx {
         return .{
-            .init = p,
+            .proc_init = p,
             .out = out,
             .err = err,
             .is_tty = isatty(1),
