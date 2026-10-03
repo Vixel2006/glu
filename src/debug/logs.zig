@@ -1,13 +1,6 @@
 const std = @import("std");
 const constants = @import("../constants.zig");
 
-/// Clean up the logs directory by deleting it entirely.
-pub fn cleanup_logs(io: std.Io) void {
-    const cwd = std.Io.Dir.cwd();
-    cwd.deleteTree(io, constants.LOGS_DIR) catch |err| {
-        std.log.warn("failed to clean up logs dir '{s}': {}", .{ constants.LOGS_DIR, err });
-    };
-}
 
 /// Count the byte offset after the first `n` lines in `buf`.
 ///

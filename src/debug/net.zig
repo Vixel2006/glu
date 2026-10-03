@@ -10,18 +10,12 @@ pub const SniffEvent = struct {
     frag: u32,
     total: u32,
     payload_len: usize,
-    channel_name: []const u8,
     dropped: u32,
 };
 
 pub const NetSniffer = struct {
     sockfd: posix.socket_t,
     port: u16,
-    has_prev: bool = false,
-    last_seq: u32 = 0,
-    total_frames: u64 = 0,
-    total_bytes: u64 = 0,
-    total_drops: u64 = 0,
 
     pub fn init(channel_name: []const u8) !NetSniffer {
         const port = @as(u16, @intCast(constants.PORT_BASE + @as(u32, @intCast(std.hash.Fnv1a_64.hash(channel_name) % constants.PORT_SLOTS))));
@@ -84,25 +78,14 @@ pub const NetSniffer = struct {
         const frame: *align(1) const Frame = @ptrCast(buf.ptr);
         if (frame.magic != constants.NET_MAGIC) return null;
 
-        var dropped: u32 = 0;
-        if (self.has_prev) {
-            if (frame.seq > self.last_seq + 1) {
-                dropped = frame.seq - (self.last_seq + 1);
-            }
-        }
-        self.has_prev = true;
-        self.last_seq = frame.seq;
-        self.total_frames += 1;
-        self.total_bytes += un;
-        self.total_drops += dropped;
+        const dropped: u32 = 0;
 
-        const name_slice = std.mem.sliceTo(&frame.name, 0);
+        const plen = if (un > HEADER_SIZE) un - HEADER_SIZE else 0;
         return SniffEvent{
             .seq = frame.seq,
             .frag = frame.frag,
             .total = frame.total,
-            .payload_len = un - HEADER_SIZE,
-            .channel_name = name_slice,
+            .payload_len = plen,
             .dropped = dropped,
         };
     }

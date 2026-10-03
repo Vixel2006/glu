@@ -21,20 +21,19 @@ pub fn cmd_status(init: std.process.Init, args: *parser.Args) !void {
     const nodes = node_buf[0..try client.list_nodes(&node_buf)];
 
     try w.print("nodes ({d}):\n", .{nodes.len});
-    try w.print("{s:<20} {s:>6} {s:<10} {s:<6} {s:>6}\n", .{ "Node", "PID", "Uptime", "Status", "Topics" });
-    try w.print("{s:<20} {s:>6} {s:<10} {s:<6} {s:>6}\n", .{ "--------------------", "------", "----------", "------", "------" });
+    try w.print("{s:<20} {s:>6} {s:<10} {s:<6}\n", .{ "Node", "PID", "Uptime", "Status" });
+    try w.print("{s:<20} {s:>6} {s:<10} {s:<6}\n", .{ "--------------------", "------", "----------", "------" });
     for (nodes) |n| {
         var pid_buf: [16]u8 = undefined;
         var up_buf: [32]u8 = undefined;
         const alive = n.pid != null;
         const pid = if (n.pid) |p| std.fmt.bufPrint(&pid_buf, "{d}", .{p}) catch unreachable else "-";
         const uptime = utils.format_uptime(&up_buf, if (alive) utils.uptime_secs(&n) else 0);
-        try w.print("{s:<20} {s:>6} {s:<10} {s:<6} {d:>6}\n", .{
+        try w.print("{s:<20} {s:>6} {s:<10} {s:<6}\n", .{
             n.name_slice(),
             pid,
             uptime,
             if (alive) "alive" else "dead",
-            0,
         });
     }
 

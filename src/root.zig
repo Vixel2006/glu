@@ -32,7 +32,6 @@ comptime {
     _ = @import("cli/parser.zig");
     _ = @import("cli/dispatch.zig");
     _ = @import("launch/config.zig");
-    _ = @import("launch/launcher.zig");
     _ = @import("fiber/fiber.zig");
     _ = @import("fiber/asyncio.zig");
     _ = @import("daemon/client.zig");

@@ -1,23 +1,11 @@
-/// Directory where per-node registry files (`.pid`, `.argv`) are stored.
-pub const REGISTRY_DIR = "/tmp/glu/nodes";
 
-/// Directory where active network channel registrations are stored.
-pub const NET_REGISTRY_DIR = "/tmp/glu/net";
 
-/// Permissions applied to the registry directory itself.
-pub const REGISTRY_MODE: u32 = 0o700;
 
-/// Permissions applied to individual registry files.
-pub const FILE_MODE: u32 = 0o600;
 
 /// Directory where node stdout/stderr logs are written.
 pub const LOGS_DIR = "/tmp/glu/logs";
 
-/// Maximum argv entries a persisted node manifest may contain.
-pub const MAX_ARGV = 32;
 
-/// Maximum bytes of a persisted spawn vector.
-pub const MAX_ARGV_LEN = 4096;
 
 /// Maximum size of a single message in bytes.
 pub const MAX_MSG_SIZE: u32 = 1 << 16;
