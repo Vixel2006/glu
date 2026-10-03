@@ -8,6 +8,11 @@ const HEADER_SIZE = @import("../channel/network.zig").HEADER_SIZE;
 const protocol = @import("../daemon/protocol.zig");
 const daemon_client = @import("../daemon/client.zig");
 const IO = @import("../io.zig").IO;
+const daemon_link = @import("daemon_link.zig");
+
+fn port_for_name(name: []const u8) u16 {
+    return daemon_link.port_for_name(name);
+}
 
 /// List active network channels (`glu net list`).
 pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
@@ -21,10 +26,7 @@ pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
     defer client.deinit();
 
     var entry_buf: [constants.MAX_ENTRIES]protocol.NET_CHAN = undefined;
-    const count = client.list_net(&entry_buf) catch |err| {
-        try w.print("error: cannot read network channels: {}\n", .{err});
-        return;
-    };
+    const count = try client.list_net(&entry_buf);
 
     if (count == 0) {
         try w.writeAll("no active network channels\n");
@@ -57,7 +59,7 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
         return error.MissingArgument;
     };
 
-    const port = @as(u16, @intCast(constants.PORT_BASE + @as(u32, @intCast(std.hash.Fnv1a_64.hash(name) % constants.PORT_SLOTS))));
+    const port = port_for_name(name);
 
     var io = try IO.init(32, 0);
     defer io.deinit();
@@ -65,7 +67,7 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
     defer client.deinit();
 
     var entry_buf: [constants.MAX_ENTRIES]protocol.NET_CHAN = undefined;
-    const count = client.list_net(&entry_buf) catch 0;
+    const count = try client.list_net(&entry_buf);
     var matched: ?protocol.NET_CHAN = null;
     for (entry_buf[0..count]) |e| {
         if (std.mem.eql(u8, e.name[0..e.name_len], name)) {

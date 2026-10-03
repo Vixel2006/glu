@@ -1,7 +1,6 @@
 const std = @import("std");
 const constants = @import("../constants.zig");
 
-
 /// Count the byte offset after the first `n` lines in `buf`.
 ///
 /// Used to extract the head of a log file.

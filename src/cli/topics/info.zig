@@ -28,14 +28,11 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
     // Locate the topic and its geometry through the daemon, then attach
     // directly to the shared segment for the live ring-buffer state.
     var entry_buf: [constants.MAX_ENTRIES]protocol.SHM_CHAN = undefined;
-    const count = client.list_topics(&entry_buf) catch |err| {
-        try w.print("error: cannot list topics: {}\n", .{err});
-        return;
-    };
+    const count = try client.list_topics(&entry_buf);
 
     var geometry: ?protocol.SHM_CHAN = null;
     for (entry_buf[0..count]) |e| {
-        if (std.mem.eql(u8, e.name[0..e.name_len], topic_name)) {
+        if (std.mem.eql(u8, e.name[0..@min(e.name_len, e.name.len)], topic_name)) {
             geometry = e;
             break;
         }

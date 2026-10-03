@@ -18,7 +18,7 @@ pub const NetSniffer = struct {
     port: u16,
 
     pub fn init(channel_name: []const u8) !NetSniffer {
-        const port = @as(u16, @intCast(constants.PORT_BASE + @as(u32, @intCast(std.hash.Fnv1a_64.hash(channel_name) % constants.PORT_SLOTS))));
+        const port = @import("../channel/network.zig").port_for_name(channel_name);
 
         const fd = c.socket(c.AF.INET, c.SOCK.DGRAM, 0);
         if (fd < 0) return error.SocketCreationFailed;

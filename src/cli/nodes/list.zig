@@ -34,11 +34,12 @@ pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
     defer client.deinit();
 
     var nodes: [constants.MAX_ENTRIES]protocol.Node = undefined;
-    const count = client.list_nodes(&nodes) catch |err| {
-        w.print("error: cannot reach daemon: {}\n", .{err}) catch {};
-        return;
-    };
+    const count = try client.list_nodes(&nodes);
 
+    if (count == 0) {
+        try w.writeAll("no nodes running\n");
+        return;
+    }
     try w.print("{s:<20} {s:>7} {s:<10} {s:<16} {s:<32} {s:<12}\n", .{ "Name", "PID", "Uptime", "Status", "Binary", "Path" });
     for (nodes[0..count]) |n| try print_node(w, &n);
 }

@@ -50,8 +50,8 @@ pub fn cmd_logs(init: std.process.Init, args: *parser.Args) !void {
 
 /// Print the initial `--head`/`--tail` window, if any.
 fn print_logs(init: std.process.Init, node: []const u8, tail: ?u64, head: ?u64) !void {
-    var ew = utils.err_writer(init);
-    const w = &ew.interface;
+    var fw = utils.writer(init);
+    const w = &fw.interface;
 
     var buf: [4096]u8 = undefined;
     if (head) |n| {

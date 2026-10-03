@@ -21,38 +21,46 @@ pub fn cmd_status(init: std.process.Init, args: *parser.Args) !void {
     const nodes = node_buf[0..try client.list_nodes(&node_buf)];
 
     try w.print("nodes ({d}):\n", .{nodes.len});
-    try w.print("{s:<20} {s:>6} {s:<10} {s:<6}\n", .{ "Node", "PID", "Uptime", "Status" });
-    try w.print("{s:<20} {s:>6} {s:<10} {s:<6}\n", .{ "--------------------", "------", "----------", "------" });
-    for (nodes) |n| {
-        var pid_buf: [16]u8 = undefined;
-        var up_buf: [32]u8 = undefined;
-        const alive = n.pid != null;
-        const pid = if (n.pid) |p| std.fmt.bufPrint(&pid_buf, "{d}", .{p}) catch unreachable else "-";
-        const uptime = utils.format_uptime(&up_buf, if (alive) utils.uptime_secs(&n) else 0);
-        try w.print("{s:<20} {s:>6} {s:<10} {s:<6}\n", .{
-            n.name_slice(),
-            pid,
-            uptime,
-            if (alive) "alive" else "dead",
-        });
+    if (nodes.len == 0) {
+        try w.writeAll("no nodes running\n");
+    } else {
+        try w.print("{s:<20} {s:>6} {s:<10} {s:<6}\n", .{ "Node", "PID", "Uptime", "Status" });
+        try w.print("{s:<20} {s:>6} {s:<10} {s:<6}\n", .{ "--------------------", "------", "----------", "------" });
+        for (nodes) |n| {
+            var pid_buf: [16]u8 = undefined;
+            var up_buf: [32]u8 = undefined;
+            const alive = n.pid != null;
+            const pid = if (n.pid) |p| std.fmt.bufPrint(&pid_buf, "{d}", .{p}) catch unreachable else "-";
+            const uptime = utils.format_uptime(&up_buf, if (alive) utils.uptime_secs(&n) else 0);
+            try w.print("{s:<20} {s:>6} {s:<10} {s:<6}\n", .{
+                n.name_slice(),
+                pid,
+                uptime,
+                if (alive) "alive" else "dead",
+            });
+        }
     }
 
     var topic_buf: [constants.MAX_ENTRIES]protocol.SHM_CHAN = undefined;
-    const topics = topic_buf[0..(client.list_topics(&topic_buf) catch 0)];
+    const topics = topic_buf[0..try client.list_topics(&topic_buf)];
 
     try w.writeByte('\n');
     try w.print("topics ({d}):\n", .{topics.len});
-    try w.print("{s:<24} {s:<16} {s:<11} {s:>8} {s:>8}\n", .{ "Topic", "Owner", "TOS", "Size", "Cap" });
-    try w.print("{s:<24} {s:<16} {s:<11} {s:>8} {s:>8}\n", .{ "------------------------", "----------------", "-----------", "--------", "--------" });
-    for (topics) |t| {
-        var owner_buf: [64]u8 = undefined;
-        try w.print("{s:<24} {s:<16} {s:<11} {d:>8} {d:>8}\n", .{
-            t.name[0..t.name_len],
-            owner_name(&owner_buf, nodes, t.writer_pid),
-            if (t.tos == 0) "reliable" else "best_effort",
-            t.msg_size,
-            t.capacity,
-        });
+    if (topics.len == 0) {
+        try w.writeAll("no active topics\n");
+    } else {
+        try w.print("{s:<24} {s:<16} {s:<11} {s:>8} {s:>8}\n", .{ "Topic", "Owner", "TOS", "Size", "Cap" });
+        try w.print("{s:<24} {s:<16} {s:<11} {s:>8} {s:>8}\n", .{ "------------------------", "----------------", "-----------", "--------", "--------" });
+        for (topics) |t| {
+            var owner_buf: [64]u8 = undefined;
+            try w.print("{s:<24} {s:<16} {s:<11} {d:>8} {d:>8}\n", .{
+                t.name[0..t.name_len],
+                owner_name(&owner_buf, nodes, t.writer_pid),
+                if (t.tos == 0) "reliable" else "best_effort",
+                t.msg_size,
+                t.capacity,
+            });
+        }
     }
 }
 

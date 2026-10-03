@@ -62,6 +62,14 @@ fn unregister_net_channel(io: *IO, name: []const u8) void {
     notify_daemon(io, .UNREG_NET, std.mem.asBytes(&unreg));
 }
 
+/// Derive multicast port from channel name (single source of truth).
+pub fn port_for_name(name: []const u8) u16 {
+    const h = std.hash.Fnv1a_64.hash(name);
+    const base: u32 = constants.PORT_BASE;
+    const slots: u32 = constants.PORT_SLOTS;
+    return @intCast(base + @as(u32, @intCast(h % slots)));
+}
+
 pub const Session = struct {
     io: *IO,
     socket: udp.Socket,

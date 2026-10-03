@@ -1,11 +1,5 @@
-
-
-
-
 /// Directory where node stdout/stderr logs are written.
 pub const LOGS_DIR = "/tmp/glu/logs";
-
-
 
 /// Maximum size of a single message in bytes.
 pub const MAX_MSG_SIZE: u32 = 1 << 16;
