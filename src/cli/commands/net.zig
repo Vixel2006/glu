@@ -1,20 +1,19 @@
 const std = @import("std");
-const utils = @import("utils.zig");
-const parser = @import("parser.zig");
-const debug = @import("../debug/mod.zig");
-const constants = @import("../constants.zig");
-const FRAG_PAYLOAD = @import("../channel/network.zig").FRAG_PAYLOAD;
-const HEADER_SIZE = @import("../channel/network.zig").HEADER_SIZE;
-const protocol = @import("../daemon/protocol.zig");
-const daemon_client = @import("../daemon/client.zig");
-const IO = @import("../io.zig").IO;
-const daemon_link = @import("daemon_link.zig");
+const utils = @import("../utils.zig");
+const parser = @import("../parser.zig");
+const debug = @import("../../debug/mod.zig");
+const constants = @import("../../constants.zig");
+const FRAG_PAYLOAD = @import("../../channel/network.zig").FRAG_PAYLOAD;
+const HEADER_SIZE = @import("../../channel/network.zig").HEADER_SIZE;
+const protocol = @import("../../daemon/protocol.zig");
+const daemon_client = @import("../../daemon/client.zig");
+const IO = @import("../../io.zig").IO;
+const daemon_link = @import("../daemon_link.zig");
 
 fn port_for_name(name: []const u8) u16 {
     return daemon_link.port_for_name(name);
 }
 
-/// List active network channels (`glu net list`).
 pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
     _ = args;
     var fw = utils.writer(init);
@@ -48,7 +47,6 @@ pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
     }
 }
 
-/// Show detailed info about a network channel (`glu net info <channel>`).
 pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
     var fw = utils.writer(init);
     const w = &fw.interface;
@@ -92,7 +90,6 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
     }
 }
 
-/// Sniff and monitor live traffic on a network channel (`glu net sniff <channel> [-v]`).
 pub fn cmd_sniff(init: std.process.Init, args: *parser.Args) !void {
     var verbose = false;
     var channel_name: ?[]const u8 = null;
@@ -126,18 +123,15 @@ pub fn cmd_sniff(init: std.process.Init, args: *parser.Args) !void {
     var buf: [constants.NET_PAYLOAD_MAX]u8 = undefined;
     while (true) {
         const event = (try sniffer.poll(&buf, 500)) orelse continue;
-
         if (event.dropped > 0) {
             try w.print("[DROP] {d} frame(s) lost before seq {d}\n", .{ event.dropped, event.seq });
         }
-
         try w.print("seq={d:<6} frag={d}/{d} len={d}B\n", .{
             event.seq,
             event.frag,
             event.total,
             event.payload_len,
         });
-
         if (verbose and event.payload_len > 0) {
             const preview_len = @min(event.payload_len, 32);
             const offset: usize = HEADER_SIZE;

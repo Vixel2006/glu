@@ -1,12 +1,11 @@
 const std = @import("std");
-const utils = @import("utils.zig");
-const parser = @import("parser.zig");
-const constants = @import("../constants.zig");
-const protocol = @import("../daemon/protocol.zig");
-const daemon_client = @import("../daemon/client.zig");
-const IO = @import("../io.zig").IO;
+const utils = @import("../utils.zig");
+const parser = @import("../parser.zig");
+const constants = @import("../../constants.zig");
+const protocol = @import("../../daemon/protocol.zig");
+const daemon_client = @import("../../daemon/client.zig");
+const IO = @import("../../io.zig").IO;
 
-/// Unified node + topic overview (`glu status`).
 pub fn cmd_status(init: std.process.Init, args: *parser.Args) !void {
     _ = args;
     var fw = utils.writer(init);
@@ -64,7 +63,6 @@ pub fn cmd_status(init: std.process.Init, args: *parser.Args) !void {
     }
 }
 
-/// The node owning a topic, or its raw PID when unregistered.
 fn owner_name(buf: []u8, nodes: []protocol.Node, pid: std.os.linux.pid_t) []const u8 {
     if (pid == 0) return "-";
     for (nodes) |n| {

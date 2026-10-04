@@ -18,10 +18,7 @@ pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
     defer client.deinit();
 
     var entry_buf: [constants.MAX_ENTRIES]protocol.SHM_CHAN = undefined;
-    const count = client.list_topics(&entry_buf) catch {
-        try w.writeAll("error: cannot reach daemon\n");
-        return;
-    };
+    const count = try client.list_topics(&entry_buf);
 
     if (count == 0) {
         try w.writeAll("no active topics\n");

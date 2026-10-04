@@ -1,15 +1,52 @@
 const std = @import("std");
 const utils = @import("../utils.zig");
 const parser = @import("../parser.zig");
-const slowest_reader = @import("../../channel/shm.zig").slowest_reader;
-const Header = @import("../../channel/shm.zig").Header;
-const Shm = @import("../../channel/shm.zig").Shm;
 const constants = @import("../../constants.zig");
 const protocol = @import("../../daemon/protocol.zig");
 const daemon_client = @import("../../daemon/client.zig");
 const IO = @import("../../io.zig").IO;
+const slowest_reader = @import("../../channel/shm.zig").slowest_reader;
+const Header = @import("../../channel/shm.zig").Header;
+const Shm = @import("../../channel/shm.zig").Shm;
 
-/// Show detailed info about a topic (`glu topics info <topic>`).
+pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
+    _ = args;
+    var fw = utils.writer(init);
+    const w = &fw.interface;
+
+    var io = try IO.init(32, 0);
+    defer io.deinit();
+    var client = try daemon_client.Client.ensure_running(&io);
+    defer client.deinit();
+
+    var entry_buf: [constants.MAX_ENTRIES]protocol.SHM_CHAN = undefined;
+    const count = try client.list_topics(&entry_buf);
+
+    if (count == 0) {
+        try w.writeAll("no active topics\n");
+        return;
+    }
+
+    try w.print("{s:<24} {s:>8} {s:>8} {s:>6} {s:>8}\n", .{ "Topic", "Size", "Cap", "TOS", "Owner" });
+    try w.print("{s:<24} {s:>8} {s:>8} {s:>6} {s:>8}\n", .{ "------------------------", "--------", "--------", "------", "--------" });
+
+    for (entry_buf[0..count]) |e| {
+        var owner_buf: [64]u8 = undefined;
+        try w.print("{s:<24} {d:>8} {d:>8} {s:>6} {s:>8}\n", .{
+            e.name[0..@min(e.name_len, e.name.len)],
+            e.msg_size,
+            e.capacity,
+            if (e.tos == 0) "rel" else "be",
+            owner_str(&owner_buf, e.writer_pid),
+        });
+    }
+}
+
+fn owner_str(buf: []u8, pid: std.os.linux.pid_t) []const u8 {
+    if (pid == 0) return "-";
+    return std.fmt.bufPrint(buf, "{d}", .{pid}) catch "-";
+}
+
 pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
     var fw = utils.writer(init);
     const w = &fw.interface;
@@ -25,8 +62,6 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
     var client = try daemon_client.Client.ensure_running(&io);
     defer client.deinit();
 
-    // Locate the topic and its geometry through the daemon, then attach
-    // directly to the shared segment for the live ring-buffer state.
     var entry_buf: [constants.MAX_ENTRIES]protocol.SHM_CHAN = undefined;
     const count = try client.list_topics(&entry_buf);
 
