@@ -19,6 +19,9 @@ pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
     var client = try daemon_client.Client.ensure_running(&io);
     defer client.deinit();
 
+    var node_buf: [constants.MAX_ENTRIES]protocol.Node = undefined;
+    const nodes = node_buf[0..try client.list_nodes(&node_buf)];
+
     var entry_buf: [constants.MAX_ENTRIES]protocol.SHM_CHAN = undefined;
     const count = try client.list_topics(&entry_buf);
 
@@ -37,13 +40,23 @@ pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
             e.msg_size,
             e.capacity,
             if (e.tos == 0) "rel" else "be",
-            owner_str(&owner_buf, e.writer_pid),
+            owner_str(&owner_buf, nodes, e.writer_pid),
         });
     }
 }
 
-fn owner_str(buf: []u8, pid: std.os.linux.pid_t) []const u8 {
+fn owner_str(buf: []u8, nodes: []protocol.Node, pid: std.os.linux.pid_t) []const u8 {
     if (pid == 0) return "-";
+    for (nodes) |n| {
+        if (n.pid) |p| {
+            if (p == pid) {
+                const name = n.name_slice();
+                const len = @min(name.len, buf.len);
+                @memcpy(buf[0..len], name[0..len]);
+                return buf[0..len];
+            }
+        }
+    }
     return std.fmt.bufPrint(buf, "{d}", .{pid}) catch "-";
 }
 
@@ -61,6 +74,9 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
     defer io.deinit();
     var client = try daemon_client.Client.ensure_running(&io);
     defer client.deinit();
+
+    var node_buf: [constants.MAX_ENTRIES]protocol.Node = undefined;
+    const nodes = node_buf[0..try client.list_nodes(&node_buf)];
 
     var entry_buf: [constants.MAX_ENTRIES]protocol.SHM_CHAN = undefined;
     const count = try client.list_topics(&entry_buf);
@@ -93,7 +109,9 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
     const pct = if (hdr.capacity > 0) @as(f64, @floatFromInt(depth)) / @as(f64, @floatFromInt(hdr.capacity)) * 100.0 else 0.0;
 
     try w.print("Topic:       {s}\n", .{name_slice});
-    try w.print("Owner:       {d}\n", .{hdr.writer_pid});
+    var owner_buf: [64]u8 = undefined;
+    const owner = owner_str(&owner_buf, nodes, @intCast(hdr.writer_pid));
+    try w.print("Owner:       {s}\n", .{owner});
     try w.print("TOS:         {s}\n", .{if (hdr.tos == 0) "reliable" else "best_effort"});
     try w.print("Msg Size:    {d} bytes\n", .{hdr.msg_size});
     try w.print("Capacity:    {d} messages\n", .{hdr.capacity});

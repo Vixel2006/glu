@@ -5,9 +5,6 @@ const os = @import("std").os.linux;
 
 const is_alive = @import("../utils.zig").is_alive;
 const constants = @import("../constants.zig");
-const Client = @import("../daemon/client.zig").Client;
-const protocol = @import("../daemon/protocol.zig");
-const IO = @import("../io.zig").IO;
 
 pub const ShmErr = error{ OutOfMemory, ShmOpenFailed, MmapFailed, InvalidSegment };
 
@@ -53,44 +50,6 @@ pub const ToS = enum(u32) {
     reliable = 0,
     best_effort = 1,
 };
-
-/// Best-effort daemon notification from a process that has no event loop of
-/// its own yet (the Shm is spin-up from raw syscalls), so we spin up a
-/// throwaway one for the register/unregister exchange. When the daemon is not
-/// running this is a no-op and the channel still works standalone.
-fn notify_daemon(comptime cmd: protocol.CMD, payload: []const u8) void {
-    if (!Client.daemon_running()) return;
-    var io = IO.init(32, 0) catch return;
-    defer io.deinit();
-    Client.notify(&io, cmd, payload) catch |err| {
-        std.log.err("shm daemon notify: {s}", .{@errorName(err)});
-    };
-}
-
-fn register_shm_channel(hdr: *Header) void {
-    if (hdr.name_len == 0) return;
-    var req: protocol.SHM_CHAN = std.mem.zeroes(protocol.SHM_CHAN);
-    const name_len = @min(hdr.name_len, 64);
-    @memcpy(req.name[0..name_len], hdr.name[0..name_len]);
-    req.name_len = @intCast(name_len);
-    req.writer_pid = @intCast(hdr.writer_pid);
-    req.num_readers = 0;
-    for (hdr.readers) |entry| {
-        if (entry >> 32 != 0) req.num_readers += 1;
-    }
-    req.msg_size = hdr.msg_size;
-    req.capacity = hdr.capacity;
-    req.tos = hdr.tos;
-    notify_daemon(.REG_SHM, std.mem.asBytes(&req));
-}
-
-fn unregister_shm_channel(hdr: *Header) void {
-    if (hdr.name_len == 0) return;
-    var unreg: protocol.SHM_NAME = std.mem.zeroes(protocol.SHM_NAME);
-    const name_len = @min(hdr.name_len, 64);
-    @memcpy(unreg[0..name_len], hdr.name[0..name_len]);
-    notify_daemon(.UNREG_SHM, std.mem.asBytes(&unreg));
-}
 
 pub const Header = extern struct {
     magic: u32 = constants.GLU_MAGIC,
@@ -181,10 +140,6 @@ pub const Shm = struct {
             @memcpy(hdr.name[0..name_len], name[0..name_len]);
         }
 
-        // Register the channel with the daemon for discovery/registry, so the
-        // fleet knows this shared-memory channel exists with its geometry.
-        register_shm_channel(hdr);
-
         return .{ .fd = fd, .ptr = ptr, .header = hdr, .size = size, .cap = capacity, .msg_size = msg_size, .tos = tos };
     }
 
@@ -200,8 +155,6 @@ pub const Shm = struct {
             const name_slice = self.header.name[0..name_len];
             break :blk shm_name(&name_buf, name_slice) orelse null;
         } else null;
-
-        if (name_z != null) unregister_shm_channel(self.header);
 
         _ = os.munmap(self.ptr, self.size);
         _ = os.close(self.fd);

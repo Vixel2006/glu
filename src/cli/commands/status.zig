@@ -68,7 +68,10 @@ fn owner_name(buf: []u8, nodes: []protocol.Node, pid: std.os.linux.pid_t) []cons
     for (nodes) |n| {
         if (n.pid) |p| {
             if (p == pid) {
-                return n.name_slice();
+                const name = n.name_slice();
+                const len = @min(name.len, buf.len);
+                @memcpy(buf[0..len], name[0..len]);
+                return buf[0..len];
             }
         }
     }

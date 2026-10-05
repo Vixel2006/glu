@@ -1,11 +1,16 @@
 const std = @import("std");
 const assert = std.debug.assert;
 const c = std.c;
+
 const Shm = @import("../channel/shm.zig").Shm;
-const is_alive = @import("../utils.zig").is_alive;
-const force_unlink = @import("../channel/shm.zig").force_unlink;
 const Header = @import("../channel/shm.zig").Header;
 const ToS = @import("../channel/shm.zig").ToS;
+const protocol = @import("../daemon/protocol.zig");
+const Client = @import("../daemon/client.zig").Client;
+const IO = @import("../io.zig").IO;
+
+const is_alive = @import("../utils.zig").is_alive;
+const force_unlink = @import("../channel/shm.zig").force_unlink;
 const slowest_reader = @import("../channel/shm.zig").slowest_reader;
 const sweep_dead_readers = @import("../channel/shm.zig").sweep_dead_readers;
 
@@ -16,6 +21,44 @@ const PubErr = error{
     InvalidSegment,
     SegmentOwned,
 };
+
+/// Best-effort daemon notification from a process that has no event loop of
+/// its own yet (the Shm is spin-up from raw syscalls), so we spin up a
+/// throwaway one for the register/unregister exchange. When the daemon is not
+/// running this is a no-op and the channel still works standalone.
+fn notify_daemon(comptime cmd: protocol.CMD, payload: []const u8) void {
+    if (!Client.daemon_running()) return;
+    var io = IO.init(32, 0) catch return;
+    defer io.deinit();
+    Client.notify(&io, cmd, payload) catch |err| {
+        std.log.err("shm daemon notify: {s}", .{@errorName(err)});
+    };
+}
+
+fn register_shm_channel(hdr: *Header) void {
+    if (hdr.name_len == 0) return;
+    var req: protocol.SHM_CHAN = std.mem.zeroes(protocol.SHM_CHAN);
+    const name_len = @min(hdr.name_len, 64);
+    @memcpy(req.name[0..name_len], hdr.name[0..name_len]);
+    req.name_len = @intCast(name_len);
+    req.writer_pid = @intCast(hdr.writer_pid);
+    req.num_readers = 0;
+    for (hdr.readers) |entry| {
+        if (entry >> 32 != 0) req.num_readers += 1;
+    }
+    req.msg_size = hdr.msg_size;
+    req.capacity = hdr.capacity;
+    req.tos = hdr.tos;
+    notify_daemon(.REG_SHM, std.mem.asBytes(&req));
+}
+
+fn unregister_shm_channel(hdr: *Header) void {
+    if (hdr.name_len == 0) return;
+    var unreg: protocol.SHM_NAME = std.mem.zeroes(protocol.SHM_NAME);
+    const name_len = @min(hdr.name_len, 64);
+    @memcpy(unreg[0..name_len], hdr.name[0..name_len]);
+    notify_daemon(.UNREG_SHM, std.mem.asBytes(&unreg));
+}
 
 pub const Publisher = struct {
     channel: Shm,
@@ -38,11 +81,13 @@ pub const Publisher = struct {
             }
             self.channel.header.writer_pid = my_pid;
         }
+        register_shm_channel(self.channel.header);
 
         return self;
     }
 
     pub fn deinit(self: *Publisher) void {
+        unregister_shm_channel(self.channel.header);
         self.channel.header.writer_pid = 0;
         self.channel.close();
     }

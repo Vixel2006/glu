@@ -27,6 +27,10 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
 
     // Locate the topic and its geometry through the daemon, then attach
     // directly to the shared segment for the live ring-buffer state.
+    var node_buf: [constants.MAX_ENTRIES]protocol.Node = undefined;
+    var nodes_list: []protocol.Node = &[_]protocol.Node{};
+    nodes_list = node_buf[0..client.list_nodes(&node_buf) catch 0];
+
     var entry_buf: [constants.MAX_ENTRIES]protocol.SHM_CHAN = undefined;
     const count = try client.list_topics(&entry_buf);
 
@@ -58,7 +62,29 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
     const pct = if (hdr.capacity > 0) @as(f64, @floatFromInt(depth)) / @as(f64, @floatFromInt(hdr.capacity)) * 100.0 else 0.0;
 
     try w.print("Topic:       {s}\n", .{name_slice});
-    try w.print("Owner:       {d}\n", .{hdr.writer_pid});
+    var owner_buf: [64]u8 = undefined;
+    if (hdr.writer_pid == 0) {
+        try w.print("Owner:       -\n", .{});
+    } else {
+        var found = false;
+        const wp = @as(std.os.linux.pid_t, @intCast(hdr.writer_pid));
+        for (nodes_list) |n| {
+            if (n.pid) |p| {
+                if (p == wp) {
+                    const name = n.name_slice();
+                    const len = @min(name.len, owner_buf.len);
+                    @memcpy(owner_buf[0..len], name[0..len]);
+                    try w.print("Owner:       {s}\n", .{owner_buf[0..len]});
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found) {
+            const s = std.fmt.bufPrint(&owner_buf, "{d}", .{wp}) catch "-";
+            try w.print("Owner:       {s}\n", .{s});
+        }
+    }
     try w.print("TOS:         {s}\n", .{if (hdr.tos == 0) "reliable" else "best_effort"});
     try w.print("Msg Size:    {d} bytes\n", .{hdr.msg_size});
     try w.print("Capacity:    {d} messages\n", .{hdr.capacity});

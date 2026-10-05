@@ -17,6 +17,9 @@ pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
     var client = try daemon_client.Client.ensure_running(&io);
     defer client.deinit();
 
+    var node_buf: [constants.MAX_ENTRIES]protocol.Node = undefined;
+    const nodes = node_buf[0..try client.list_nodes(&node_buf)];
+
     var entry_buf: [constants.MAX_ENTRIES]protocol.SHM_CHAN = undefined;
     const count = try client.list_topics(&entry_buf);
 
@@ -30,12 +33,7 @@ pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
 
     var owner_name_buf: [64]u8 = undefined;
     for (entry_buf[0..count]) |e| {
-        const owner = if (e.writer_pid == 0)
-            "-"
-        else if (e.writer_pid > 0)
-            std.fmt.bufPrint(&owner_name_buf, "{d}", .{e.writer_pid}) catch "-"
-        else
-            "-";
+        const owner = owner_name(&owner_name_buf, nodes, e.writer_pid);
         const tos = if (e.tos == 0) "reliable" else "best_effort";
         try w.print("{s:<24} {d:>8} {d:>8} {s:>6} {s:>8}\n", .{
             e.name[0..@min(e.name_len, e.name.len)],
@@ -45,4 +43,20 @@ pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
             owner,
         });
     }
+}
+
+/// The node owning a topic, or its raw PID when unregistered.
+fn owner_name(buf: []u8, nodes: []protocol.Node, pid: std.os.linux.pid_t) []const u8 {
+    if (pid == 0) return "-";
+    for (nodes) |n| {
+        if (n.pid) |p| {
+            if (p == pid) {
+                const name = n.name_slice();
+                const len = @min(name.len, buf.len);
+                @memcpy(buf[0..len], name[0..len]);
+                return buf[0..len];
+            }
+        }
+    }
+    return std.fmt.bufPrint(buf, "{d}", .{pid}) catch "-";
 }

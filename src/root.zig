@@ -1,7 +1,4 @@
 pub const IO = @import("io.zig").IO;
-pub const Channel = @import("channel/channel.zig").Channel;
-pub const Protocol = @import("channel/channel.zig").Protocol;
-pub const channel = @import("channel/channel.zig");
 pub const Shm = @import("channel/shm.zig").Shm;
 pub const shm = @import("channel/shm.zig");
 pub const GLU_MAGIC = @import("constants.zig").GLU_MAGIC;
@@ -21,7 +18,6 @@ comptime {
     _ = @import("io.zig");
     _ = @import("channel/shm.zig");
     _ = @import("channel/network.zig");
-    _ = @import("channel/channel.zig");
     _ = @import("api/publisher.zig");
     _ = @import("api/subscriber.zig");
     _ = @import("api/peer.zig");
