@@ -10,6 +10,7 @@ const nodes_down = @import("nodes/down.zig");
 const topics_list = @import("topics/list.zig");
 const topics_info = @import("topics/info.zig");
 const net_cmd = @import("net.zig");
+const web_cmd = @import("web.zig");
 const constants = @import("../constants.zig");
 
 const RunFn = *const fn (init: std.process.Init, args: *parser.Args) anyerror!void;
@@ -39,6 +40,7 @@ const leaves = [_]Leaf{
     .{ .path = "net list", .usage = "glu net list", .summary = "List active network channels", .run = &net_cmd.cmd_list },
     .{ .path = "net info", .usage = "glu net info <channel>", .summary = "Show detailed info about a network channel", .run = &net_cmd.cmd_info },
     .{ .path = "net sniff", .usage = "glu net sniff <channel> [-v]", .summary = "Sniff live traffic on a network channel", .run = &net_cmd.cmd_sniff, .alias = "sniff" },
+    .{ .path = "web", .usage = "glu web [--bind <addr>] [--port <n>] [--open|-o]", .summary = "Local web dashboard (embedded HTTP server)", .run = &web_cmd.cmd_web, .alias = "dashboard" },
 };
 
 const Group = struct {

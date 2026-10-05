@@ -1,0 +1,1050 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>glu dashboard</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      :root {
+        --bg: #0a0a0a;
+        --bg-elevated: #111;
+        --bg-hover: #161616;
+        --border: #222;
+        --border-strong: #333;
+        --fg: #e0e0e0;
+        --fg-muted: #888;
+        --fg-subtle: #666;
+        --accent: #4ade80;
+        --accent-dim: #22c55e;
+        --warn: #fbbf24;
+        --warn-dim: #f59e0b;
+        --danger: #f87171;
+        --danger-dim: #ef4444;
+        --mono:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        --radius: 6px;
+        --radius-sm: 4px;
+        --transition: 150ms ease;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #fafafa;
+          --bg-elevated: #fff;
+          --bg-hover: #f5f5f5;
+          --border: #e5e5e5;
+          --border-strong: #d4d4d4;
+          --fg: #171717;
+          --fg-muted: #525252;
+          --fg-subtle: #737373;
+          --accent: #16a34a;
+          --accent-dim: #15803d;
+          --warn: #ca8a04;
+          --warn-dim: #a16207;
+          --danger: #dc2626;
+          --danger-dim: #b91c1c;
+        }
+      }
+
+      body {
+        font:
+          13px/1.5 system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          sans-serif;
+        background: var(--bg);
+        color: var(--fg);
+        min-height: 100vh;
+        padding: 1rem;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        gap: 1rem;
+      }
+
+      /* Header */
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem 0;
+        border-bottom: 1px solid var(--border);
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      .brand-mark {
+        width: 20px;
+        height: 20px;
+        background: linear-gradient(135deg, var(--accent), var(--warn));
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font: 600 11px/1 var(--mono);
+        color: #000;
+      }
+      .brand-text {
+        font: 500 12px/1 var(--mono);
+        color: var(--fg-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .conn {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font: 500 11px/1 var(--mono);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--fg-subtle);
+      }
+      .conn-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--danger);
+        box-shadow: 0 0 8px var(--danger);
+        transition:
+          background var(--transition),
+          box-shadow var(--transition);
+      }
+      .conn.ok .conn-dot {
+        background: var(--accent);
+        box-shadow: 0 0 8px var(--accent);
+      }
+
+      /* Main grid */
+      .main {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 1rem;
+        min-height: 0;
+      }
+      @media (min-width: 768px) {
+        .main {
+          grid-template-columns: 280px 1fr;
+        }
+      }
+      @media (min-width: 1100px) {
+        .main {
+          grid-template-columns: 280px 1fr 360px;
+        }
+      }
+      @media (min-width: 1400px) {
+        .main {
+          grid-template-columns: 280px 1fr 420px;
+        }
+      }
+
+      /* Panels */
+      .panel {
+        background: var(--bg-elevated);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.625rem 0.875rem;
+        border-bottom: 1px solid var(--border);
+        background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.1));
+      }
+      .panel-title {
+        font: 500 10px/1 var(--mono);
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--fg-subtle);
+      }
+      .panel-count {
+        font: 500 12px/1 var(--mono);
+        color: var(--fg-muted);
+      }
+      .panel-body {
+        flex: 1;
+        overflow: auto;
+        padding: 0.5rem;
+        min-height: 0;
+      }
+
+      /* Tables */
+      .table-wrap {
+        overflow: auto;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+      thead th {
+        font: 500 10px/1 var(--mono);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--fg-subtle);
+        text-align: left;
+        padding: 0.5rem 0.625rem;
+        border-bottom: 1px solid var(--border);
+        background: var(--bg);
+        position: sticky;
+        top: 0;
+        z-index: 1;
+      }
+      tbody td {
+        padding: 0.4375rem 0.625rem;
+        border-bottom: 1px solid var(--border);
+        vertical-align: middle;
+      }
+      tbody tr {
+        transition: background var(--transition);
+      }
+      tbody tr:hover {
+        background: var(--bg-hover);
+      }
+      tbody tr.selected {
+        background: rgba(34, 197, 94, 0.08);
+      }
+      tbody tr.selected td {
+        border-color: var(--border-strong);
+      }
+      tbody tr:last-child td {
+        border-bottom: none;
+      }
+
+      .cell-name {
+        font: 500 12px/1 var(--mono);
+        max-width: 220px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .cell-mono {
+        font: 12px/1 var(--mono);
+        color: var(--fg-muted);
+      }
+      .cell-right {
+        text-align: right;
+      }
+      .cell-center {
+        text-align: center;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.125rem 0.5rem;
+        border-radius: 999px;
+        font: 500 10px/1 var(--mono);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      .badge-reliable {
+        background: rgba(34, 197, 94, 0.15);
+        color: var(--accent);
+        border: 1px solid rgba(34, 197, 94, 0.3);
+      }
+      .badge-best_effort {
+        background: rgba(251, 191, 36, 0.15);
+        color: var(--warn);
+        border: 1px solid rgba(251, 191, 36, 0.3);
+      }
+
+      .progress {
+        height: 6px;
+        background: var(--border);
+        border-radius: 3px;
+        overflow: hidden;
+        width: 100px;
+      }
+      .progress-fill {
+        height: 100%;
+        border-radius: 3px;
+        background: linear-gradient(
+          90deg,
+          var(--accent),
+          var(--warn),
+          var(--danger)
+        );
+        transition: width 300ms ease;
+      }
+
+      .empty {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        min-height: 120px;
+        color: var(--fg-subtle);
+        font-size: 12px;
+      }
+
+      /* Topic Detail Panel */
+      .detail {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+      }
+      .detail-section {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 0.75rem;
+      }
+      .detail-section-title {
+        font: 500 10px/1 var(--mono);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--fg-subtle);
+        margin-bottom: 0.625rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid var(--border);
+      }
+      .detail-grid {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 0.375rem 1rem;
+        font-size: 12px;
+      }
+      .detail-label {
+        color: var(--fg-muted);
+      }
+      .detail-value {
+        font: 12px/1 var(--mono);
+        color: var(--fg);
+      }
+      .detail-value.pid {
+        color: var(--accent);
+      }
+      .detail-value.cursor {
+        color: var(--warn);
+      }
+      .detail-value.behind {
+        color: var(--danger);
+      }
+
+      .subscriber {
+        display: grid;
+        grid-template-columns: 32px 1fr 56px 80px 1fr;
+        gap: 0.75rem;
+        align-items: center;
+        padding: 0.5rem 0.625rem;
+        background: var(--bg-elevated);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        margin-bottom: 0.375rem;
+        font-size: 11px;
+        transition:
+          border-color var(--transition),
+          background var(--transition);
+      }
+      .subscriber:hover {
+        border-color: var(--border-strong);
+        background: var(--bg-hover);
+      }
+      .subscriber.inactive {
+        opacity: 0.45;
+      }
+      .sub-index {
+        color: var(--fg-subtle);
+        font: 11px/1 var(--mono);
+      }
+      .sub-name {
+        font-weight: 500;
+        color: var(--fg);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .sub-pid {
+        color: var(--fg-muted);
+        font: 11px/1 var(--mono);
+      }
+      .sub-cursor {
+        color: var(--warn);
+        font: 11px/1 var(--mono);
+        text-align: right;
+      }
+      .sub-behind {
+        color: var(--danger);
+        font: 11px/1 var(--mono);
+        text-align: right;
+      }
+      .sub-bar {
+        height: 3px;
+        background: var(--border);
+        border-radius: 2px;
+        overflow: hidden;
+        grid-column: 1 / -1;
+        margin-top: 0.375rem;
+      }
+      .sub-bar-fill {
+        height: 100%;
+        background: var(--accent);
+        border-radius: 2px;
+        transition: width 300ms ease;
+      }
+
+      .queue-bar {
+        height: 6px;
+        background: var(--border);
+        border-radius: 3px;
+        overflow: hidden;
+        margin-top: 0.5rem;
+      }
+      .queue-fill {
+        height: 100%;
+        border-radius: 3px;
+        background: linear-gradient(
+          90deg,
+          var(--accent),
+          var(--warn),
+          var(--danger)
+        );
+        transition: width 300ms ease;
+      }
+
+      .no-selection {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        min-height: 200px;
+        color: var(--fg-subtle);
+        font-size: 12px;
+        text-align: center;
+        gap: 0.5rem;
+      }
+      .no-selection-icon {
+        font-size: 24px;
+        opacity: 0.3;
+      }
+
+      /* Logs Panel */
+      .panel-tabs {
+        display: flex;
+        gap: 0.125rem;
+      }
+      .tab {
+        padding: 0.25rem 0.5rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: transparent;
+        color: var(--fg-subtle);
+        font: 500 10px/1 var(--mono);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        cursor: pointer;
+        transition:
+          color var(--transition),
+          border-color var(--transition),
+          background var(--transition);
+      }
+      .tab:hover {
+        color: var(--fg);
+        border-color: var(--border-strong);
+      }
+      .tab.active {
+        color: var(--fg);
+        background: var(--bg);
+        border-color: var(--border-strong);
+      }
+      .logs-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.5rem 0.875rem;
+        border-bottom: 1px solid var(--border);
+        flex-wrap: wrap;
+      }
+      .logs-target {
+        font: 500 11px/1 var(--mono);
+        color: var(--fg);
+      }
+      .logs-target.empty {
+        color: var(--fg-subtle);
+      }
+      .logs-count {
+        font: 11px/1 var(--mono);
+        color: var(--fg-subtle);
+        margin-left: auto;
+      }
+      .logs-body {
+        flex: 1;
+        overflow: auto;
+        padding: 0.5rem 0.75rem;
+        font: 11px/1.6 var(--mono);
+        white-space: pre-wrap;
+        word-break: break-word;
+        color: var(--fg-muted);
+        background: var(--bg);
+        min-height: 0;
+      }
+      .log-line {
+        display: block;
+      }
+      .log-line:hover {
+        background: var(--bg-hover);
+      }
+      .log-error {
+        color: var(--danger);
+      }
+      .log-warn {
+        color: var(--warn);
+      }
+      .log-empty {
+        color: var(--fg-subtle);
+      }
+
+      /* Scrollbar */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 4px;
+        border: 2px solid transparent;
+        background-clip: padding-box;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: var(--border-strong);
+      }
+      ::-webkit-scrollbar-corner {
+        background: transparent;
+      }
+
+      /* Focus visible */
+      tbody tr:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: -2px;
+        border-radius: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="header">
+      <div class="brand">
+        <div class="brand-mark">GLU</div>
+        <span class="brand-text">dashboard</span>
+      </div>
+      <div class="conn" id="conn">
+        <span class="conn-dot"></span><span id="conn-text">connecting…</span>
+      </div>
+    </header>
+
+    <main class="main">
+      <!-- Nodes Panel -->
+      <section class="panel" aria-label="Nodes">
+        <div class="panel-header">
+          <span class="panel-title">Nodes</span>
+          <span class="panel-count mono" id="nodes-count">0</span>
+        </div>
+        <div class="panel-body table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Node</th>
+                <th class="cell-right">PID</th>
+                <th>Uptime</th>
+                <th class="cell-center">State</th>
+              </tr>
+            </thead>
+            <tbody id="nodes-tbody"></tbody>
+          </table>
+          <div class="empty" id="nodes-empty">No nodes</div>
+        </div>
+      </section>
+
+      <!-- Topics Panel -->
+      <section class="panel" aria-label="Topics" style="grid-row: 1 / -1">
+        <div class="panel-header">
+          <span class="panel-title">Topics</span>
+          <span class="panel-count mono" id="topics-count">0</span>
+        </div>
+        <div class="panel-body table-wrap" style="flex: 1; min-height: 0">
+          <table>
+            <thead>
+              <tr>
+                <th>Topic</th>
+                <th class="cell-center">TOS</th>
+                <th class="cell-right">Msg</th>
+                <th class="cell-right">Cap</th>
+                <th class="cell-right">Queued</th>
+                <th class="cell-right">%</th>
+                <th class="cell-right">Writer</th>
+                <th>Owner</th>
+                <th class="cell-right">Subs</th>
+              </tr>
+            </thead>
+            <tbody id="topics-tbody"></tbody>
+          </table>
+          <div class="empty" id="topics-empty">No topics</div>
+        </div>
+      </section>
+
+      <!-- Topic Detail Panel -->
+      <section class="panel" aria-label="Topic Details">
+        <div class="panel-header">
+          <span class="panel-title">Topic Details</span>
+          <span
+            class="panel-count mono"
+            id="detail-topic-name"
+            style="
+              font-family: var(--mono);
+              text-transform: none;
+              letter-spacing: normal;
+              font-size: 11px;
+            "
+            >—</span
+          >
+        </div>
+        <div
+          class="panel-body detail"
+          id="topic-detail"
+          style="flex: 1; min-height: 0"
+        >
+          <div class="no-selection">
+            <span class="no-selection-icon">▸</span>
+            <span>Select a topic to view details</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Network Panel -->
+      <section class="panel" aria-label="Network">
+        <div class="panel-header">
+          <span class="panel-title">Network</span>
+          <span class="panel-count mono" id="net-count">0</span>
+        </div>
+        <div class="panel-body table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Channel</th>
+                <th class="cell-right">Port</th>
+                <th class="cell-right">Writer</th>
+                <th class="cell-center">TOS</th>
+                <th class="cell-right">Msg</th>
+                <th class="cell-right">Cap</th>
+                <th class="cell-right">Regs</th>
+              </tr>
+            </thead>
+            <tbody id="net-tbody"></tbody>
+          </table>
+          <div class="empty" id="net-empty">No network channels</div>
+        </div>
+      </section>
+    </main>
+
+    <section
+      class="panel"
+      aria-label="Logs"
+      style="min-height: 260px; max-height: 40vh"
+    >
+      <div class="panel-header">
+        <span class="panel-title">Logs</span>
+        <div class="panel-tabs" role="tablist">
+          <button
+            class="tab active"
+            data-log-mode="tail"
+            role="tab"
+            aria-selected="true"
+          >
+            Tail
+          </button>
+          <button
+            class="tab"
+            data-log-mode="head"
+            role="tab"
+            aria-selected="false"
+          >
+            Head
+          </button>
+          <button
+            class="tab"
+            data-log-mode="follow"
+            role="tab"
+            aria-selected="false"
+          >
+            Follow
+          </button>
+        </div>
+      </div>
+      <div class="logs-toolbar">
+        <span class="logs-target empty" id="logs-target"
+          >Select a node to view its logs</span
+        >
+        <span class="logs-count" id="logs-count"></span>
+      </div>
+      <div class="logs-body" id="logs-body">
+        <span class="log-empty">No node selected</span>
+      </div>
+    </section>
+
+    <script>
+      const nodesTbody = document.getElementById("nodes-tbody");
+      const nodesEmpty = document.getElementById("nodes-empty");
+      const nodesCount = document.getElementById("nodes-count");
+      const topicsTbody = document.getElementById("topics-tbody");
+      const topicsEmpty = document.getElementById("topics-empty");
+      const topicsCount = document.getElementById("topics-count");
+      const netTbody = document.getElementById("net-tbody");
+      const netEmpty = document.getElementById("net-empty");
+      const netCount = document.getElementById("net-count");
+      const conn = document.getElementById("conn");
+      const connText = document.getElementById("conn-text");
+      const detailTopicName = document.getElementById("detail-topic-name");
+      const topicDetail = document.getElementById("topic-detail");
+      const logsBody = document.getElementById("logs-body");
+      const logsTarget = document.getElementById("logs-target");
+      const logsCount = document.getElementById("logs-count");
+      const logTabs = document.querySelectorAll("[data-log-mode]");
+
+      let selectedTopic = null;
+      let topicsData = [];
+      let selectedNode = null;
+      let logMode = "tail";
+      let logNode = null;
+
+      function setConn(ok) {
+        conn.classList.toggle("ok", ok);
+        connText.textContent = ok ? "connected" : "disconnected";
+      }
+      function fmt(v) {
+        return v === null || v === undefined ? "—" : Number(v).toLocaleString();
+      }
+      function tosLabel(t) {
+        return t === 0 ? "reliable" : t === 1 ? "best_effort" : String(t);
+      }
+      function tosClass(t) {
+        return t === 0 ? "badge-reliable" : t === 1 ? "badge-best_effort" : "";
+      }
+      function escapeHtml(str) {
+        return String(str)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function renderNodes(nodes) {
+        nodesTbody.innerHTML = "";
+        if (!nodes?.length) {
+          nodesEmpty.hidden = false;
+          nodesCount.textContent = "0";
+          if (selectedNode) selectNode(null);
+          return;
+        }
+        nodesEmpty.hidden = true;
+        nodesCount.textContent = nodes.length;
+        for (const n of nodes) {
+          const tr = document.createElement("tr");
+          tr.tabIndex = 0;
+          tr.dataset.nodeName = n.name;
+          tr.innerHTML = `
+          <td class="cell-name">${escapeHtml(n.name ?? "—")}</td>
+          <td class="cell-mono cell-right">${n.pid ?? "-"}</td>
+          <td class="cell-mono">${n.uptime_s !== undefined ? n.uptime_s + "s" : "—"}</td>
+          <td class="cell-center"><span class="mono state ${n.alive ? "alive" : "dead"}">${n.alive ? "alive" : "dead"}</span></td>
+        `;
+          const onSelect = () => selectNode(n.name);
+          tr.addEventListener("click", onSelect);
+          tr.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onSelect();
+            }
+          });
+          nodesTbody.appendChild(tr);
+        }
+        if (selectedNode) {
+          if (nodes.some((n) => n.name === selectedNode)) {
+            applyNodeSelection();
+          } else {
+            selectNode(null);
+          }
+        }
+      }
+
+      function selectNode(name) {
+        selectedNode = name;
+        applyNodeSelection();
+        loadLogs();
+      }
+
+      function applyNodeSelection() {
+        document.querySelectorAll("#nodes-tbody tr").forEach((tr) => {
+          tr.classList.toggle("selected", tr.dataset.nodeName === selectedNode);
+        });
+        if (selectedNode) {
+          logsTarget.textContent = selectedNode;
+          logsTarget.classList.remove("empty");
+        } else {
+          logsTarget.textContent = "Select a node to view its logs";
+          logsTarget.classList.add("empty");
+          logsCount.textContent = "";
+          logsBody.innerHTML =
+            '<span class="log-empty">No node selected</span>';
+        }
+      }
+
+      logTabs.forEach((tab) =>
+        tab.addEventListener("click", () => {
+          logMode = tab.dataset.logMode;
+          logTabs.forEach((t) => {
+            const active = t === tab;
+            t.classList.toggle("active", active);
+            t.setAttribute("aria-selected", active ? "true" : "false");
+          });
+          loadLogs();
+        }),
+      );
+
+      function logLevelClass(line) {
+        const l = line.toLowerCase();
+        if (/\b(error|fatal|panic|fail(ed|ure)?)\b/.test(l)) return "log-error";
+        if (/\b(warn(ing)?)\b/.test(l)) return "log-warn";
+        return "";
+      }
+
+      async function loadLogs() {
+        if (!selectedNode) return;
+        const node = selectedNode;
+        const params = new URLSearchParams({ node, tail: "200" });
+        if (logMode === "head") {
+          params.set("head", "200");
+          params.delete("tail");
+        }
+        try {
+          const r = await fetch("/api/logs?" + params.toString(), {
+            cache: "no-store",
+          });
+          const j = await r.json();
+          if (selectedNode !== node) return; // selection changed mid-flight
+          logNode = node;
+          if (j.status !== "ok") {
+            logsBody.innerHTML = `<span class="log-empty">${escapeHtml(j.error || "no log available")}</span>`;
+            logsCount.textContent = "";
+            return;
+          }
+          const content = j.content || "";
+          const lines = content.length
+            ? content.replace(/\n$/, "").split("\n")
+            : [];
+          if (lines.length === 0) {
+            logsBody.innerHTML = '<span class="log-empty">Log is empty</span>';
+          } else {
+            logsBody.innerHTML = lines
+              .map(
+                (l) =>
+                  `<span class="log-line ${logLevelClass(l)}">${escapeHtml(l)}</span>`,
+              )
+              .join("");
+          }
+          logsCount.textContent =
+            lines.length + (lines.length === 1 ? " line" : " lines");
+          if (logMode === "follow") logsBody.scrollTop = logsBody.scrollHeight;
+        } catch (e) {
+          if (selectedNode !== node) return;
+          logsBody.innerHTML = `<span class="log-error">${escapeHtml(String(e))}</span>`;
+          logsCount.textContent = "";
+        }
+      }
+
+      function renderTopics(topics) {
+        topicsData = topics || [];
+        topicsTbody.innerHTML = "";
+        if (!topicsData.length) {
+          topicsEmpty.hidden = false;
+          topicsCount.textContent = "0";
+          clearSelection();
+          return;
+        }
+        topicsEmpty.hidden = true;
+        topicsCount.textContent = topicsData.length;
+        for (const t of topicsData) {
+          const pctFull = t.pct_full ?? 0;
+          const tr = document.createElement("tr");
+          tr.dataset.topicName = t.name;
+          tr.tabIndex = 0;
+          tr.innerHTML = `
+          <td class="cell-name" title="${escapeHtml(t.name)}">${escapeHtml(t.name)}</td>
+          <td class="cell-center"><span class="badge ${tosClass(t.tos)}">${tosLabel(t.tos)}</span></td>
+          <td class="cell-mono cell-right">${fmt(t.msg_size)}B</td>
+          <td class="cell-mono cell-right">${fmt(t.capacity)}</td>
+          <td class="cell-mono cell-right">${fmt(t.queued)}</td>
+          <td class="cell-mono cell-right"><div class="progress"><div class="progress-fill" style="width:${Math.min(pctFull, 100)}%"></div></div></td>
+          <td class="cell-mono cell-right pid">${t.writer_pid ?? "-"}</td>
+          <td class="cell-mono">${escapeHtml(t.owner ?? "-")}</td>
+          <td class="cell-mono cell-right">${t.readers?.length || 0} / ${t.num_readers}</td>
+        `;
+          tr.addEventListener("click", () => selectTopic(t));
+          tr.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              selectTopic(t);
+            }
+          });
+          topicsTbody.appendChild(tr);
+        }
+        if (
+          selectedTopic &&
+          topicsData.some((t) => t.name === selectedTopic.name)
+        ) {
+          selectTopic(selectedTopic);
+        } else {
+          clearSelection();
+        }
+      }
+
+      function selectTopic(t) {
+        selectedTopic = t;
+        document.querySelectorAll("#topics-tbody tr").forEach((tr) => {
+          tr.classList.toggle("selected", tr.dataset.topicName === t.name);
+        });
+        detailTopicName.textContent = t.name;
+        renderTopicDetail(t);
+      }
+
+      function clearSelection() {
+        selectedTopic = null;
+        document
+          .querySelectorAll("#topics-tbody tr")
+          .forEach((tr) => tr.classList.remove("selected"));
+        detailTopicName.textContent = "—";
+        topicDetail.innerHTML = `
+        <div class="no-selection">
+          <span class="no-selection-icon">▸</span>
+          <span>Select a topic to view details</span>
+        </div>
+      `;
+      }
+
+      function renderTopicDetail(t) {
+        const pctFull = t.pct_full ?? 0;
+        const queueWidth = Math.min(pctFull, 100);
+
+        let readersHtml = "";
+        if (t.readers && t.readers.length > 0) {
+          for (const r of t.readers) {
+            const behindPct =
+              t.capacity > 0 ? (r.behind / t.capacity) * 100 : 0;
+            const barWidth = Math.min(behindPct, 100);
+            readersHtml += `
+            <div class="subscriber active">
+              <span class="sub-index">[${r.index}]</span>
+              <span class="sub-name" title="${escapeHtml(r.name)}">${escapeHtml(r.name)}</span>
+              <span class="sub-pid">${r.pid}</span>
+              <span class="sub-cursor">${fmt(r.cursor)}</span>
+              <span class="sub-behind">${fmt(r.behind)} behind</span>
+              <div class="sub-bar"><div class="sub-bar-fill" style="width:${barWidth}%"></div></div>
+            </div>
+          `;
+          }
+        } else {
+          readersHtml =
+            '<div style="color: var(--fg-subtle); padding: 0.5rem; font-size: 11px; text-align: center;">No active subscribers</div>';
+        }
+
+        topicDetail.innerHTML = `
+        <section class="detail-section" aria-label="Publisher">
+          <h3 class="detail-section-title">Publisher</h3>
+          <div class="detail-grid">
+            <span class="detail-label">PID</span>
+            <span class="detail-value pid">${t.writer_pid}</span>
+            <span class="detail-label">Owner</span>
+            <span class="detail-value">${escapeHtml(t.owner)}</span>
+            <span class="detail-label">Write Cursor</span>
+            <span class="detail-value cursor">${fmt(t.write_cursor)}</span>
+            <span class="detail-label">Queued</span>
+            <span class="detail-value">${fmt(t.queued)} msgs (${pctFull.toFixed(1)}%)</span>
+          </div>
+          <div class="queue-bar"><div class="queue-fill" style="width:${queueWidth}%"></div></div>
+        </section>
+        <section class="detail-section" aria-label="Subscribers">
+          <h3 class="detail-section-title">Subscribers (${t.readers?.length || 0} active / ${t.num_readers} total)</h3>
+          ${readersHtml}
+        </section>
+        <section class="detail-section" aria-label="Topic Info">
+          <h3 class="detail-section-title">Topic Info</h3>
+          <div class="detail-grid">
+            <span class="detail-label">TOS</span>
+            <span class="detail-value"><span class="badge ${tosClass(t.tos)}">${tosLabel(t.tos)}</span></span>
+            <span class="detail-label">Msg Size</span>
+            <span class="detail-value">${fmt(t.msg_size)}B</span>
+            <span class="detail-label">Capacity</span>
+            <span class="detail-value">${fmt(t.capacity)}</span>
+            <span class="detail-label">Total Readers</span>
+            <span class="detail-value">${t.num_readers}</span>
+          </div>
+        </section>
+      `;
+      }
+
+      function renderNet(nets) {
+        netTbody.innerHTML = "";
+        if (!nets?.length) {
+          netEmpty.hidden = false;
+          netCount.textContent = "0";
+          return;
+        }
+        netEmpty.hidden = true;
+        netCount.textContent = nets.length;
+        for (const n of nets) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+          <td class="cell-name">${escapeHtml(n.name ?? "—")}</td>
+          <td class="cell-mono cell-right">${n.port ?? "-"}</td>
+          <td class="cell-mono cell-right">${n.writer_pid ?? "-"}</td>
+          <td class="cell-center"><span class="badge ${tosClass(n.tos)}">${tosLabel(n.tos)}</span></td>
+          <td class="cell-mono cell-right">${fmt(n.msg_size)}</td>
+          <td class="cell-mono cell-right">${fmt(n.capacity)}</td>
+          <td class="cell-mono cell-right">${fmt(n.num_reg)}</td>
+        `;
+          netTbody.appendChild(tr);
+        }
+      }
+
+      async function poll() {
+        try {
+          const [statusRes, topicsRes] = await Promise.all([
+            fetch("/api/status", { cache: "no-store" }),
+            fetch("/api/topics", { cache: "no-store" }),
+          ]);
+          if (!statusRes.ok) throw new Error("HTTP " + statusRes.status);
+          if (!topicsRes.ok) throw new Error("Topics HTTP " + topicsRes.status);
+          const [statusData, topicsData] = await Promise.all([
+            statusRes.json(),
+            topicsRes.json(),
+          ]);
+          renderNodes(statusData.nodes);
+          renderTopics(topicsData.topics);
+          renderNet(statusData.net || []);
+          setConn(statusData.status === "ok");
+          if (selectedNode && selectedNode === logNode) loadLogs();
+        } catch (e) {
+          renderNodes([]);
+          renderTopics([]);
+          renderNet([]);
+          setConn(false);
+        }
+      }
+
+      poll();
+      setInterval(poll, 1000);
+    </script>
+  </body>
+</html>
