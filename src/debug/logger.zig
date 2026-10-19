@@ -23,7 +23,7 @@ pub const Logger = struct {
 
         var path_buf: [512:0]u8 = undefined;
         const path = std.fmt.bufPrint(
-            path_buf[0..511],
+            path_buf[0 .. 512 - 1],
             "{s}/{s}.log",
             .{ constants.LOGS_DIR, node },
         ) catch return error.NameTooLong;

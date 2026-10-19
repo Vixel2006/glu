@@ -22,6 +22,7 @@ comptime {
     _ = @import("api/subscriber.zig");
     _ = @import("api/peer.zig");
     _ = @import("debug/mod.zig");
+    _ = @import("debug/logger.zig");
     _ = @import("transport/net.zig");
     _ = @import("transport/tcp.zig");
     _ = @import("transport/udp.zig");
