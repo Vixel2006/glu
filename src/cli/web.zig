@@ -12,6 +12,9 @@ const c = std.c;
 const linux = std.os.linux;
 
 const ui = @embedFile("webui/index.html");
+const ui_css = @embedFile("webui/style.css");
+const ui_js = @embedFile("webui/app.js");
+const logo_svg = @embedFile("webui/glu.svg");
 
 pub const WebOptions = struct {
     bind: []const u8 = "127.0.0.1",
@@ -535,6 +538,24 @@ pub fn run_web_server(allocator: std.mem.Allocator, init: std.process.Init, opts
 
         if (std.mem.eql(u8, req.target, "/") or std.mem.startsWith(u8, req.target, "/index.html")) {
             writeResponse(client_fd, "200 OK", "text/html; charset=utf-8", ui) catch {};
+            _ = linux.close(client_fd);
+            continue;
+        }
+
+        if (std.mem.eql(u8, req.target, "/style.css")) {
+            writeResponse(client_fd, "200 OK", "text/css; charset=utf-8", ui_css) catch {};
+            _ = linux.close(client_fd);
+            continue;
+        }
+
+        if (std.mem.eql(u8, req.target, "/app.js")) {
+            writeResponse(client_fd, "200 OK", "application/javascript; charset=utf-8", ui_js) catch {};
+            _ = linux.close(client_fd);
+            continue;
+        }
+
+        if (std.mem.eql(u8, req.target, "/glu.svg")) {
+            writeResponse(client_fd, "200 OK", "image/svg+xml; charset=utf-8", logo_svg) catch {};
             _ = linux.close(client_fd);
             continue;
         }
