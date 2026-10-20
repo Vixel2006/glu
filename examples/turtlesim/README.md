@@ -10,6 +10,7 @@ A full Python GUI `turtlesim` example demonstrating **glu**'s shared-memory zero
 * **Zero-Copy Publishing**: The physics simulation node (`turtle_node.py`) updates pose using `pub.reserve_as(Pose)` directly in `/dev/shm` at 60 Hz.
 * **QoS / ToS Selection**: `/turtle1/pose` uses `Tos.RELIABLE` while `/turtle1/cmd_vel` uses `Tos.BEST_EFFORT` (latest-command-wins semantics).
 * **Keyboard Teleop**: Control the turtle live in the GUI using Arrow keys / WASD, or run the standalone terminal teleop script `teleop_node.py`.
+* **Node Logging**: Both nodes log lifecycle events, changed `cmd_vel` commands, and crash traces to the standard per-node log files (`/tmp/glu/logs/turtle_sim.log`, `/tmp/glu/logs/turtle_gui.log`), readable with `glu nodes logs`.
 
 ---
 
@@ -50,6 +51,22 @@ python3 examples/turtlesim/gui_node.py
 ```bash
 python3 examples/turtlesim/teleop_node.py
 ```
+
+---
+
+## Node Logging
+
+Both nodes use `glupy.Logger`, so their events land in the same per-node log
+files the glu daemon and CLI work with:
+
+```bash
+glu nodes logs turtle_sim -f            # when launched via `glu launch`
+tail -f /tmp/glu/logs/turtle_gui.log    # or straight from disk
+```
+
+Each node logs startup and shutdown, every *changed* velocity command
+(auto-repeat key holds are deduplicated), GUI pen-trail clears, and uncaught
+exceptions (as `Fatal`) before exiting.
 
 ---
 

@@ -17,9 +17,11 @@
 #ifndef GLU_GLU_H
 #define GLU_GLU_H
 
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #ifdef __cplusplus
@@ -108,6 +110,48 @@ int glu_peer_send(GluPeer *peer, const uint8_t *data, size_t len);
  * *out_len. Returns 0 on success, -1 on failure.
  */
 int glu_peer_recv(GluPeer *peer, uint8_t *out, size_t cap, size_t *out_len);
+
+/* ===========================================================================
+ * Logger — per-node append-only log file
+ * ===========================================================================
+ */
+
+typedef enum GluLogLevel {
+  GLU_LOG_ERROR = 0,
+  GLU_LOG_FATAL = 1,
+  GLU_LOG_INFO = 2,
+  GLU_LOG_WARNING = 3
+} GluLogLevel;
+
+typedef struct GluLogger GluLogger;
+
+/**
+ * Create a logger appending to `<log dir>/<node>.log` — the same files the
+ * `glu nodes logs` CLI command reads. Returns NULL on failure.
+ */
+GluLogger *glu_logger_new(const char *node);
+void glu_logger_free(GluLogger *logger);
+
+/**
+ * Append one line `[node] [timestamp] [LEVEL] msg\n`. The combined line must
+ * fit the logger's internal 1024-byte buffer; longer messages fail with
+ * -1. Returns 0 on success, -1 on failure.
+ */
+int glu_logger_log(GluLogger *logger, GluLogLevel level, const char *msg);
+
+/** printf-style convenience wrapper around glu_logger_log(). Returns 0/-1. */
+static inline int glu_logger_logf(GluLogger *logger, GluLogLevel level,
+                                  const char *fmt, ...) {
+  char buf[1024];
+  va_list ap;
+  va_start(ap, fmt);
+  int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  if (n < 0) {
+    return -1;
+  }
+  return glu_logger_log(logger, level, buf);
+}
 
 /* ===========================================================================
  * TCP transport

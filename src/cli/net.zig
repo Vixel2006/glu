@@ -1,7 +1,7 @@
 const std = @import("std");
 const utils = @import("utils.zig");
 const parser = @import("parser.zig");
-const debug = @import("../debug/mod.zig");
+const NetSniffer = @import("../debug/net.zig").NetSniffer;
 const constants = @import("../constants.zig");
 const FRAG_PAYLOAD = @import("../channel/network.zig").FRAG_PAYLOAD;
 const HEADER_SIZE = @import("../channel/network.zig").HEADER_SIZE;
@@ -111,7 +111,7 @@ pub fn cmd_sniff(init: std.process.Init, args: *parser.Args) !void {
         return error.MissingArgument;
     };
 
-    var sniffer = debug.NetSniffer.init(name) catch |err| {
+    var sniffer = NetSniffer.init(name) catch |err| {
         var ew = utils.err_writer(init);
         ew.interface.print("error: failed to bind sniffer on channel '{s}': {}\n", .{ name, err }) catch {};
         return err;

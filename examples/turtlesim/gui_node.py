@@ -23,8 +23,11 @@ class TurtlesimGUI:
 
         self.sub = glupy.Subscriber("/turtle1/pose", Pose)
         self.pub = glupy.Publisher("/turtle1/cmd_vel", CmdVel)
+        self.log = glupy.Logger("turtle_gui")
+        self.log.info("starting: /turtle1/pose -> canvas, keys -> /turtle1/cmd_vel")
         self.keys = set()
         self.last_pose = None
+        self.last_cmd = None
 
         header = tk.Frame(root, bg="#181825", padx=12, pady=8)
         header.pack(fill=tk.X)
@@ -75,12 +78,17 @@ class TurtlesimGUI:
         )
         if "space" in self.keys:
             lin = ang = 0.0
+        # Key auto-repeat republishes the same command; only log changes.
+        if (lin, ang) != self.last_cmd:
+            self.last_cmd = (lin, ang)
+            self.log.info(f"cmd_vel: linear={lin:.2f} angular={ang:.2f}")
         self.pub.publish(CmdVel(linear=lin, angular=ang))
 
     def on_press(self, event):
         k = event.keysym.lower()
         if k == "c":
             self.canvas.delete("trail")
+            self.log.info("pen trail cleared")
             return
         self.keys.add(k)
         self.send_cmd()
@@ -91,6 +99,7 @@ class TurtlesimGUI:
 
     def update_loop(self):
         if not self.sig.running():
+            self.log.info("shutdown signal received")
             self.root.quit()
             return
 
@@ -155,7 +164,14 @@ class TurtlesimGUI:
 def main():
     root = tk.Tk()
     app = TurtlesimGUI(root)
-    root.mainloop()
+    try:
+        root.mainloop()
+    except BaseException as exc:
+        app.log.fatal(f"crashed: {exc!r}")
+        raise
+    finally:
+        app.log.info("stopped")
+        app.log.close()
 
 
 if __name__ == "__main__":
