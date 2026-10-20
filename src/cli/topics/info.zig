@@ -29,7 +29,7 @@ pub fn cmd_info(init: std.process.Init, args: *parser.Args) !void {
     // directly to the shared segment for the live ring-buffer state.
     var node_buf: [constants.MAX_ENTRIES]protocol.Node = undefined;
     var nodes_list: []protocol.Node = &[_]protocol.Node{};
-    nodes_list = node_buf[0..client.list_nodes(&node_buf) catch 0];
+    nodes_list = node_buf[0 .. client.list_nodes(&node_buf) catch 0];
 
     var entry_buf: [constants.MAX_ENTRIES]protocol.SHM_CHAN = undefined;
     const count = try client.list_topics(&entry_buf);
