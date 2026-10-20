@@ -9,6 +9,7 @@ Python bindings for **GLU** — ultra-fast, zero-copy, lock-free robotics middle
 - **Zero-copy reservations** — pack directly into shared memory via context managers.
 - **Multicast peer sessions** — reliable or best-effort datagrams.
 - **TCP & UDP transports** — high-performance sockets powered by GLU's `io_uring` backend.
+- **Node file logging** — `Logger` writes to the same per-node log files the `glu nodes logs` CLI command reads.
 - **Pythonic API** — context managers everywhere, timeouts, iterators, a proper exception hierarchy, and full type hints (`py.typed`).
 
 ## Installation
@@ -111,6 +112,19 @@ with glupy.UdpSocket(port=8888) as sock:
     sock.send_to("127.0.0.1", 8889, b"Ping")
     data, sender = sock.recv_from()
     print(f"{len(data)} bytes from {sender.host}:{sender.port}")
+```
+
+### Logging
+
+```python
+with glupy.Logger("my-node") as log:
+    log.info("started")
+    log.warning("disk almost full")
+    log.error("something broke")
+    log.log(glupy.LogLevel.FATAL, "unrecoverable")
+
+# tail -f /tmp/glu/logs/my-node.log
+# [my-node] [2026-10-20 12:00:00] [Info] started
 ```
 
 ## Error handling

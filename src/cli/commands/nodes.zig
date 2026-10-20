@@ -5,7 +5,7 @@ const constants = @import("../../constants.zig");
 const protocol = @import("../../daemon/protocol.zig");
 const daemon_client = @import("../../daemon/client.zig");
 const IO = @import("../../io.zig").IO;
-const debug = @import("../../debug/mod.zig");
+const logs = @import("../../debug/logs.zig");
 
 pub fn cmd_list(init: std.process.Init, args: *parser.Args) !void {
     _ = args;
@@ -154,16 +154,16 @@ fn print_logs(init: std.process.Init, node: []const u8, tail: ?u64, head: ?u64) 
 
     var buf: [4096]u8 = undefined;
     if (head) |n| {
-        const len = try debug.read_log_head(constants.LOGS_DIR, node, n, &buf);
+        const len = try logs.read_log_head(constants.LOGS_DIR, node, n, &buf);
         if (len > 0) try w.print("{s}\n", .{buf[0..len]});
     } else if (tail) |n| {
-        const len = try debug.read_log_tail(constants.LOGS_DIR, node, n, &buf);
+        const len = try logs.read_log_tail(constants.LOGS_DIR, node, n, &buf);
         if (len > 0) try w.print("{s}\n", .{buf[0..len]});
     }
 }
 
 fn follow_logs(init: std.process.Init, node: []const u8) !void {
-    var follower = try debug.LogFollower.init(constants.LOGS_DIR, node);
+    var follower = try logs.LogFollower.init(constants.LOGS_DIR, node);
     defer follower.deinit();
 
     var ew = utils.err_writer(init);

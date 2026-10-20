@@ -266,6 +266,80 @@ private:
 };
 
 /* ===========================================================================
+ * Logger — per-node append-only log file
+ * ===========================================================================
+ */
+
+/**
+ * Severity levels for the node logger.
+ */
+enum class LogLevel : int {
+  Error = GLU_LOG_ERROR,
+  Fatal = GLU_LOG_FATAL,
+  Info = GLU_LOG_INFO,
+  Warning = GLU_LOG_WARNING,
+};
+
+/**
+ * RAII wrapper around GluLogger. Appends `[node] [timestamp] [LEVEL] msg`
+ * lines to `<log dir>/<node>.log` — the same files the `glu nodes logs` CLI
+ * command reads.
+ */
+class Logger {
+public:
+  explicit Logger(std::string_view node) {
+    handle_ = glu_logger_new(std::string(node).c_str());
+    if (!handle_) {
+      throw Error(glu_last_error());
+    }
+  }
+
+  ~Logger() { close(); }
+
+  Logger(const Logger &) = delete;
+  Logger &operator=(const Logger &) = delete;
+
+  Logger(Logger &&other) noexcept
+      : handle_(std::exchange(other.handle_, nullptr)) {}
+
+  Logger &operator=(Logger &&other) noexcept {
+    if (this != &other) {
+      close();
+      handle_ = std::exchange(other.handle_, nullptr);
+    }
+    return *this;
+  }
+
+  void close() noexcept {
+    if (handle_) {
+      glu_logger_free(handle_);
+      handle_ = nullptr;
+    }
+  }
+
+  /**
+   * Append one log line. The combined line must fit the logger's internal
+   * 1024-byte buffer; longer messages throw.
+   */
+  void log(LogLevel level, std::string_view msg) {
+    if (glu_logger_log(handle_, static_cast<GluLogLevel>(level),
+                       std::string(msg).c_str()) != 0) {
+      throw Error(glu_last_error());
+    }
+  }
+
+  void error(std::string_view msg) { log(LogLevel::Error, msg); }
+  void fatal(std::string_view msg) { log(LogLevel::Fatal, msg); }
+  void info(std::string_view msg) { log(LogLevel::Info, msg); }
+  void warning(std::string_view msg) { log(LogLevel::Warning, msg); }
+
+  GluLogger *raw_handle() const noexcept { return handle_; }
+
+private:
+  GluLogger *handle_{nullptr};
+};
+
+/* ===========================================================================
  * TCP transport
  * ===========================================================================
  */

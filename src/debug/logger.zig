@@ -4,7 +4,7 @@ const time = @import("../time.zig");
 
 const IO = @import("../io.zig");
 
-const LogLevel = enum(u8) {
+pub const LogLevel = enum(u8) {
     Error,
     Fatal,
     Info,
@@ -12,13 +12,12 @@ const LogLevel = enum(u8) {
 };
 
 pub const Logger = struct {
-    allocator: std.mem.Allocator,
     io: *IO.IO,
     node: []const u8,
     fd: std.posix.fd_t,
     fut: IO.IO.Future = undefined,
 
-    pub fn init(allocator: std.mem.Allocator, io: *IO.IO, node: []const u8) !Logger {
+    pub fn init(io: *IO.IO, node: []const u8) !Logger {
         _ = std.os.linux.mkdir(constants.LOGS_DIR, 0o755);
 
         var path_buf: [512:0]u8 = undefined;
@@ -40,7 +39,7 @@ pub const Logger = struct {
 
         const fd = try io.wait(&fut, std.posix.fd_t);
 
-        return .{ .allocator = allocator, .io = io, .node = node, .fd = fd };
+        return .{ .io = io, .node = node, .fd = fd };
     }
 
     pub fn deinit(self: *Logger) void {

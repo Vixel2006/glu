@@ -4,6 +4,14 @@ All notable changes to `glupy` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `Logger` / `LogLevel`: per-node file logging via the `glu_logger_*` C API.
+  Appends `[node] [timestamp] [LEVEL] msg` lines to the same log files the
+  daemon and the `glu nodes logs` CLI command read.
+
 ## [0.2.0]
 
 ### Fixed

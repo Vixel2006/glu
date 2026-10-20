@@ -12,6 +12,7 @@ const Publisher = @import("api/publisher.zig").Publisher;
 const Subscriber = @import("api/subscriber.zig").Subscriber;
 const Peer = @import("api/peer.zig").Peer;
 const Session = @import("channel/network.zig").Session;
+const Logger = @import("debug/logger.zig").Logger;
 const tcp = @import("transport/tcp.zig");
 const udp = @import("transport/udp.zig");
 const net = @import("transport/net.zig");
@@ -381,6 +382,80 @@ pub export fn glu_peer_recv(p: ?*GluPeer, out: ?*u8, cap: usize, out_len: ?*usiz
         return -1;
     };
     out_len.?.* = n;
+    clearError();
+    return 0;
+}
+
+// ===========================================================================
+// Logger (src/debug/logger.zig) — appends to the per-node log files under
+// /tmp/glu/logs, the same ones read by the `glu nodes logs` command.
+// ===========================================================================
+
+// Mirrors the declaration order of the (file-private) LogLevel enum in
+// src/debug/logger.zig.
+pub const GluLogLevel = enum(c_int) {
+    Error = 0,
+    Fatal = 1,
+    Info = 2,
+    Warning = 3,
+};
+
+pub const GluLoggerBox = struct { io: *IO, logger: Logger };
+pub const GluLogger = GluLoggerBox;
+
+pub export fn glu_logger_new(node: [*:0]const u8) ?*GluLogger {
+    const alloc = std_heap;
+    const io = newIo(alloc) catch return null;
+    errdefer dropIo(alloc, io);
+
+    // The logger borrows the node name, so it must outlive the caller's string.
+    const node_name = alloc.dupe(u8, std.mem.span(node)) catch {
+        setErrorMsg("glu_logger_new: out of memory");
+        return null;
+    };
+    errdefer alloc.free(node_name);
+
+    var logger = Logger.init(io, node_name) catch |e| {
+        setError("glu_logger_new", e);
+        return null;
+    };
+
+    const wrap = alloc.create(GluLoggerBox) catch {
+        logger.deinit();
+        setErrorMsg("glu_logger_new: out of memory");
+        return null;
+    };
+    wrap.* = .{ .io = io, .logger = logger };
+    clearError();
+    return @ptrCast(wrap);
+}
+
+pub export fn glu_logger_free(l: ?*GluLogger) void {
+    if (l) |handle| {
+        const wrap = @as(*GluLoggerBox, handle);
+        const alloc = std_heap;
+        wrap.logger.deinit();
+        alloc.free(wrap.logger.node);
+        dropIo(alloc, wrap.io);
+        alloc.destroy(wrap);
+    }
+    clearError();
+}
+
+pub export fn glu_logger_log(l: ?*GluLogger, level: GluLogLevel, msg: [*:0]const u8) c_int {
+    if (l == null) {
+        setErrorMsg("glu_logger_log: null logger");
+        return -1;
+    }
+    const wrap = @as(*GluLoggerBox, l.?);
+    // LogLevel is private to logger.zig; recover its type from log()'s
+    // signature so the logger file itself stays untouched.
+    const LogLevel = @typeInfo(@TypeOf(Logger.log)).@"fn".params[1].type.?;
+    const lvl: LogLevel = @enumFromInt(@intFromEnum(level));
+    wrap.logger.log(lvl, "{s}", .{std.mem.span(msg)}) catch |e| {
+        setError("glu_logger_log", e);
+        return -1;
+    };
     clearError();
     return 0;
 }

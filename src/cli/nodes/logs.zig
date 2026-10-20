@@ -1,7 +1,7 @@
 const std = @import("std");
 const utils = @import("../utils.zig");
 const parser = @import("../parser.zig");
-const debug = @import("../../debug/mod.zig");
+const logs = @import("../../debug/logs.zig");
 const constants = @import("../../constants.zig");
 
 /// Print logs for a node (`glu nodes logs [--tail <n>] [--head <n>] [-f] <node>`).
@@ -55,17 +55,17 @@ fn print_logs(init: std.process.Init, node: []const u8, tail: ?u64, head: ?u64) 
 
     var buf: [4096]u8 = undefined;
     if (head) |n| {
-        const len = try debug.read_log_head(constants.LOGS_DIR, node, n, &buf);
+        const len = try logs.read_log_head(constants.LOGS_DIR, node, n, &buf);
         if (len > 0) try w.print("{s}\n", .{buf[0..len]});
     } else if (tail) |n| {
-        const len = try debug.read_log_tail(constants.LOGS_DIR, node, n, &buf);
+        const len = try logs.read_log_tail(constants.LOGS_DIR, node, n, &buf);
         if (len > 0) try w.print("{s}\n", .{buf[0..len]});
     }
 }
 
 /// Stream newly-appended log lines until interrupted (Ctrl-C).
 fn follow_logs(init: std.process.Init, node: []const u8) !void {
-    var follower = try debug.LogFollower.init(constants.LOGS_DIR, node);
+    var follower = try logs.LogFollower.init(constants.LOGS_DIR, node);
     defer follower.deinit();
 
     var ew = utils.err_writer(init);

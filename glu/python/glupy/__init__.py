@@ -22,6 +22,7 @@ from .codec import (
     u64,
 )
 from .errors import GluClosedError, GluError, GluLoadError, GluTimeoutError
+from .logger import Logger, LogLevel
 from .peer import Peer
 from .pubsub import Publisher, Subscriber, shm_unlink
 from .signal import Signal
@@ -36,6 +37,9 @@ __all__ = [
     "GluError",
     "GluLoadError",
     "GluTimeoutError",
+    "LogLevel",
+    # Node file logging
+    "Logger",
     # Multicast peer sessions
     "Peer",
     # Shared-memory pub/sub
